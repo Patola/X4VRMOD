@@ -20,6 +20,20 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
+## v1.0.0-rc3 — 2026-11-11 — Third release candidate: the help explains VR's own list of extensions
+
+The third release candidate for 1.0. Packages call it `1.0.0~rc3` (Arch: `1.0.0rc3`), which
+installs over rc1 and rc2 as an upgrade and sorts before 1.0.0.
+
+Take the package named for your system: Arch, Ubuntu 24.04, Ubuntu 26.04, Debian 13 or Fedora,
+or the zip for anything else.
+
+* **The help says that VR keeps its own list of enabled extensions**, in every language. It's
+  copied from your flat game's the first time you play in VR; after that, turning an extension on
+  or off in one doesn't change the other, so in VR you use X4's extensions menu as usual. Deleting
+  `content-x4vrmod.xml`, beside X4's `content.xml`, copies your flat list into VR again at the
+  next VR session.
+
 ## v1.0.0-rc2 — 2026-11-09 — Second release candidate: the headset shows X4 loading, and the launcher warns about frame generators and overlays
 
 The second release candidate for 1.0, for what the first one's testing found: on an RTX 5090

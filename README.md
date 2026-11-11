@@ -11,7 +11,7 @@ Three components: a **Vulkan layer** (stereo, cameras, VR submission), an
 **[docs/frame-analysis.md](docs/frame-analysis.md)**; the traps X4 sets for
 modders in **[docs/x4-quirks.md](docs/x4-quirks.md)**.
 
-> **Status: v1.0.0-rc2 — the second release candidate for 1.0, playable in VR** ([release notes](docs/releases.md)).
+> **Status: v1.0.0-rc3 — the third release candidate for 1.0, playable in VR** ([release notes](docs/releases.md)).
 > X4 runs in VR with in-engine stereo (per-eye lighting), head-look and lean
 > in the cockpit, head-look on foot, the UI on a canvas at the angle X4
 > intended, every menu reachable and lined up with the cursor, and the
