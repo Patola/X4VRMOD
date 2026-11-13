@@ -436,6 +436,38 @@ std::vector<std::string> implicit_layer_dirs(const std::string &home) {
 
 } // namespace
 
+std::string implicit_layers_text(const std::string &home) {
+    std::string out;
+    for (const std::string &dir : implicit_layer_dirs(home)) {
+        DIR *d = opendir(dir.c_str());
+        if (!d)
+            continue;
+        std::vector<std::string> files;
+        while (const dirent *e = readdir(d)) {
+            const std::string n = e->d_name;
+            if (n.size() > 5 && n.compare(n.size() - 5, 5, ".json") == 0)
+                files.push_back(n);
+        }
+        closedir(d);
+        std::sort(files.begin(), files.end());
+        out += dir + ":" + (files.empty() ? " (empty)" : "") + "\n";
+        for (const std::string &f : files) {
+            const std::string t = read_text_file(dir + "/" + f, 1 << 20);
+            std::string names, libs;
+            for (const std::string &v : json_strings(t, "name"))
+                names += (names.empty() ? "" : " ") + v;
+            for (const std::string &v : json_strings(t, "library_path"))
+                libs += (libs.empty() ? "" : " ") + v;
+            const std::string on = json_first_key_after(t, "enable_environment");
+            const std::string off = json_first_key_after(t, "disable_environment");
+            out += "  " + f + ": " + (names.empty() ? "no name" : names) + ", library " +
+                   (libs.empty() ? "none" : libs) + ", on with " + (on.empty() ? "nothing (always)" : on) +
+                   ", off with " + (off.empty() ? "nothing" : off) + "\n";
+        }
+    }
+    return out.empty() ? "No implicit layer folder exists.\n" : out;
+}
+
 std::vector<UnwantedLayer> unwanted_layers(const std::string &home,
                                            const std::vector<std::string> &launch_options) {
     std::vector<UnwantedLayer> out;

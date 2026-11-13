@@ -5013,13 +5013,39 @@ def main(path):
     lp_copies = [int(x) for x in re.findall(r"vr copy \(periodic\): swapchain=\d+ "
                                             r"blits=\d+ released=(\d+)", text)]
     # Each shape the runtime refused before one was taken (loading_shapes): the
-    # one taken differs from the last refused in one thing. WiVRn refuses the
-    # three one-layer shapes, because the layer doubles the image its client
-    # makes on X4's device (take 426), and takes the fourth.
+    # one taken differs from the last refused in one thing. WiVRn refused the
+    # three one-layer shapes while the layer doubled the image its client makes
+    # on X4's device (take 426), and took the fourth.
     lp_refused = re.findall(r"loading panel: the runtime refused (\d+x\d+ x\d+, "
                             r"format \d+) — xrCreateSwapchain -> (\S+)", text)
     lp_image = re.search(r"loading panel: up — .*?, format (\d+), in a (\d+x\d+ x\d+) "
                          r"image \(try (\d+) of (\d+)\)", text)
+    # The images the runtime made, left as it asked instead of doubled
+    # (runtime_image in the layer). Doubled, WiVRn refused the panel's (take
+    # 426) and SteamVR on an RTX 5090 stopped at its first frame (rc3). The
+    # older line said "made by the runtime for a swapchain", without mips.
+    rt_imgs = re.findall(r"mv: (\d+x\d+) (?:mips=(\d+) )?fmt=(\d+) usage=0x[0-9a-f]+, made by "
+                         r"the runtime", text)
+    if rt_imgs:
+        shapes = sorted({f"{s} format {f}" + (f" with {m} mip levels" if m and m != "1" else "")
+                         for s, m, f in rt_imgs})
+        print(f"loading  {len(rt_imgs)} image(s) the runtime made kept single-layer: "
+              f"{', '.join(shapes)}")
+    # With X4VR_MV_INVENTORY=1 the layer names every image made on X4's device:
+    # whether the panel's own appear there, and doubled, says whether the runtime
+    # makes them through the multiview hook at all (WiVRn does; SteamVR, which
+    # froze an RTX 5090 at the panel's first frame in rc3, is the question).
+    if lp_up and re.search(r"img #\d+: \d+x\d+x\d+ layers=", text):
+        pw, ph = lp_up.group(2), lp_up.group(3)
+        mine = re.findall(rf"img #(\d+): {pw}x{ph}x1 layers=(\d+) mips=\d+ samples=\d+ "
+                          rf"fmt=(\d+) usage=0x[0-9a-f]+( DOUBLED)?", text)
+        if mine:
+            dbl = sum(1 for m in mine if m[3])
+            print(f"loading  the panel's {pw}x{ph} images made on X4's device: {len(mine)}, "
+                  f"{dbl} of them doubled (#{', #'.join(m[0] for m in mine)})")
+        else:
+            print(f"loading  no {pw}x{ph} image made on X4's device: the runtime made the "
+                  f"panel's elsewhere, so the multiview hook never saw them")
     for shape, res in lp_refused:
         print(f"loading  the runtime refused {shape} ({res})")
     if lp_refused and lp_image:
@@ -5045,6 +5071,31 @@ def main(path):
         print("loading  not needed: X4 drew before the headset showed anything")
     elif "loading panel: off" in text:
         print("loading  off by request (X4VR_LOADING_PANEL=0)")
+
+    # --- the calls into the runtime at the start of a session ---------------
+    #
+    # The layer logs each call of the XR thread's first 30 frames and of X4's
+    # first 4 copies and presents as it is made and as it returns. A call with
+    # no return is where a run that stopped dead stopped: v1.0.0-rc3 froze an
+    # RTX 5090 under SteamVR at X4's first frame with the loading panel up, and
+    # its log said nothing after (2026-11-11, -13).
+    who_re = r"(XR thread, frame \d+|X4's copy \d+|X4's present \d+)"
+    pending, traced = {}, 0
+    for line in text.splitlines():
+        m = re.search(rf"trace: {who_re}: calling (.+)$", line)
+        if m:
+            pending[m.group(1)] = m.group(2).strip()
+            traced += 1
+            continue
+        m = re.search(rf"trace: {who_re}: .* returned", line)
+        if m:
+            pending.pop(m.group(1), None)
+    if traced:
+        if pending:
+            for who, what in pending.items():
+                fails.append(f"a call into the runtime never returned: {what} ({who})")
+        else:
+            print(f"trace    the session's first {traced} traced call(s) all returned")
 
     # --- frame generators and overlays loaded into X4 ----------------------
     #

@@ -4437,6 +4437,18 @@ bool mv_exceeds_x4_pool(DeviceData *d, VkDevice device, VkImage doubled,
     return true;
 }
 
+// An image the OpenXR runtime makes on X4's device, on a thread the layer is
+// calling it from (x4vr::xr::InRuntime: the XR thread throughout, X4's present
+// thread inside the copy, X4's own thread while the session comes up). It must be
+// made exactly as asked: the runtime sizes, copies and shares it as it asked for
+// it. Doubled, WiVRn's client refused the loading panel's ("size mismatch,
+// exported 1966080 but requires 3932160", take 426), and SteamVR on an RTX 5090
+// stopped at the panel's first frame (v1.0.0-rc3, 2026-11-11). SteamVR makes five
+// for the panel (take 428): the swapchain's three, in xrCreateSwapchain, and two
+// with mipmaps of its own, in the panel's first frames. The layer's own images never come
+// through here: it makes them below its hooks.
+bool runtime_image() { return x4vr::xr::in_runtime(); }
+
 bool mv_double_candidate(const VkImageCreateInfo *ci) {
     if (!g_mv || !g_multiview_supported)
         return false;
@@ -4461,6 +4473,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImage(
         d = &g_devices.at(dispatch_key(device));
     }
     bool dbl = g_active && mv_double_candidate(ci);
+    if (dbl && runtime_image()) {
+        dbl = false;
+        X4VR_LOG("mv: %ux%u mips=%u fmt=%u usage=0x%x, made by the runtime — kept "
+                 "single-layer, as it asked",
+                 ci->extent.width, ci->extent.height, ci->mipLevels, (uint32_t)ci->format,
+                 (uint32_t)ci->usage);
+    }
     VkImageCreateInfo mod = *ci;
     if (dbl)
         mod.arrayLayers = 2;
@@ -13665,6 +13684,16 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdPipelineBarrier(
                           twin_ib.empty() ? use : twin_ib.data());
 }
 
+// The calls into the runtime at the start of a session, each logged as it is made
+// and as it returns, so a run that stops dead names the call that never came
+// back. v1.0.0-rc3 froze on an RTX 5090 under SteamVR with the loading panel up,
+// and its log ended at X4's first frame with nothing after it, not even the XR
+// thread's own summary (2026-11-11 and -13). The XR thread's first 30 frames and
+// X4's first 4 copies and presents: about 150 lines.
+constexpr uint64_t kTraceFrames = 30;
+constexpr uint32_t kTraceCopies = 4;
+std::atomic<uint32_t> g_trace_copies{0}, g_trace_presents{0};
+
 // Task #38, defined with the rest of the VR section further down. Declared
 // here because the present hook is what drives them and it comes first in the
 // file; both compile to no-ops when the layer is built without OpenXR headers.
@@ -14119,6 +14148,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         // synchronisation vkQueueSubmit does. Taken HERE, after the release
         // above rather than around it.
         VrQueueLock qlock;
+        const uint32_t tp = g_active ? g_trace_presents.fetch_add(1, std::memory_order_relaxed)
+                                     : kTraceCopies;
+        if (tp < kTraceCopies)
+            X4VR_LOG("trace: X4's present %u: calling vkQueuePresentKHR", tp + 1);
         if (composited != VK_NULL_HANDLE) {
             // Our submit already waits on X4's semaphores, so the present now
             // waits only on ours -- waiting on both would deadlock, since a
@@ -14130,6 +14163,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         } else {
             r = d->QueuePresentKHR(queue, pi);
         }
+        if (tp < kTraceCopies)
+            X4VR_LOG("trace: X4's present %u: vkQueuePresentKHR returned %d", tp + 1, (int)r);
     }
 
     // Read it back after the present has been chained down, so the wait costs
@@ -14956,6 +14991,8 @@ static bool loading_panel_frame(const XrView *views) {
 bool vr_begin_blit(VkSwapchainKHR x4sc) {
     if (!g_vr || g_vrs.sc_failed.load(std::memory_order_relaxed))
         return false;
+    // X4's present thread, talking to the runtime: what it makes here is its own.
+    const x4vr::xr::InRuntime in_runtime;
     // Not `session_ok`. That only says xrCreateSession returned, and X4
     // presents its first frame long before the runtime is ready to take
     // pixels — acquiring then blocks, on X4's present thread, and takes the
@@ -15050,8 +15087,16 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
     // frame is a far smaller defect than a stalled game.
     uint32_t idx = 0;
     bool owed = false;
+    const uint32_t tc = g_trace_copies.load(std::memory_order_relaxed);
+    if (tc < kTraceCopies)
+        X4VR_LOG("trace: X4's copy %u: calling xrAcquireSwapchainImage and "
+                 "xrWaitSwapchainImage (2 ms)",
+                 tc + 1);
     const bool ready = x4vr::xr::swapchain_acquire_timeout(
         g_vrs.sc, &idx, (XrDuration)2000000, &owed);
+    if (tc < kTraceCopies)
+        X4VR_LOG("trace: X4's copy %u: the acquire returned %s", tc + 1,
+                 ready ? "an image" : owed ? "an image not ready in time" : "none");
     if (!ready) {
         g_vrs.acquire_fail.fetch_add(1, std::memory_order_relaxed);
         // Acquired but not ready: hand it straight back. Keeping it would leak
@@ -15124,8 +15169,14 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
 // The other half. Separate from vr_begin_blit because the release must not
 // happen until composite() has submitted the copy.
 void vr_finish_blit() {
+    const x4vr::xr::InRuntime in_runtime; // as in vr_begin_blit
     std::lock_guard<std::mutex> lock(g_vrs.sc_mu);
+    const uint32_t tc = g_trace_copies.fetch_add(1, std::memory_order_relaxed);
+    if (tc < kTraceCopies)
+        X4VR_LOG("trace: X4's copy %u: calling xrReleaseSwapchainImage", tc + 1);
     x4vr::xr::swapchain_release(g_vrs.sc);
+    if (tc < kTraceCopies)
+        X4VR_LOG("trace: X4's copy %u: xrReleaseSwapchainImage returned", tc + 1);
     g_vrs.released.fetch_add(1, std::memory_order_relaxed);
     // The menu warp: the image just released carries the turn only if the
     // composite recorded it. Otherwise it was copied still, and declaring the
@@ -15233,6 +15284,10 @@ static void ipd_from_headset(float meas) {
 }
 
 void vr_thread() {
+    // This thread only talks to the runtime: whatever is made on it is the
+    // runtime's (SteamVR made the panel's mipmapped copies in its first frames, take 428).
+    const x4vr::xr::InRuntime in_runtime;
+    uint64_t trace_frame = 0;
     double last = 0.0;
     auto now = [] {
         timespec ts{};
@@ -15249,7 +15304,16 @@ void vr_thread() {
             continue;
         }
         bool should_render = false;
-        if (!x4vr::xr::frame_begin(g_vrs.session, &should_render)) {
+        const uint64_t tf = trace_frame++;
+        const bool tr = tf < kTraceFrames;
+        if (tr)
+            X4VR_LOG("trace: XR thread, frame %llu: calling xrWaitFrame and xrBeginFrame",
+                     (unsigned long long)tf + 1);
+        const bool begun = x4vr::xr::frame_begin(g_vrs.session, &should_render);
+        if (tr)
+            X4VR_LOG("trace: XR thread, frame %llu: xrWaitFrame and xrBeginFrame returned%s",
+                     (unsigned long long)tf + 1, begun ? "" : " a failure");
+        if (!begun) {
             struct timespec nap = {0, 2 * 1000 * 1000};
             nanosleep(&nap, nullptr);
             continue;
@@ -16313,7 +16377,14 @@ void vr_thread() {
         // The rule, stated once and applied everywhere: **nothing may hold
         // g_vr_queue_mu across a call into the runtime.** xrWaitFrame was
         // already exempted for a different reason; it is the same rule.
+        if (tr)
+            X4VR_LOG("trace: XR thread, frame %llu: calling xrEndFrame with %u layer(s)%s",
+                     (unsigned long long)tf + 1, layer_count,
+                     show_panel ? ", the loading panel" : "");
         x4vr::xr::frame_end(g_vrs.session, layers, layer_count);
+        if (tr)
+            X4VR_LOG("trace: XR thread, frame %llu: xrEndFrame returned",
+                     (unsigned long long)tf + 1);
         if (layer_count)
             g_vrs.submitted.fetch_add(1, std::memory_order_relaxed);
         // A release between reading the warp above and the runtime taking the

@@ -385,6 +385,12 @@ struct SessionLog {
 std::vector<SessionLog> session_logs(const std::string &home);
 // A log, keeping `head` and `tail` bytes of one that's longer than both.
 std::string log_excerpt(const std::string &path, size_t head, size_t tail);
+// SteamVR's own logs from its last two days, which a bug report carries.
+std::vector<std::string> steamvr_logs(const std::string &home);
+// Every Vulkan layer that loads without being asked for, where the loader looks:
+// its name, library and the variables that turn it on and off. For bug reports,
+// since the checklist's overlays line only knows the tools it names.
+std::string implicit_layers_text(const std::string &home);
 
 struct ReportOptions {
     std::string home;

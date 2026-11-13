@@ -698,9 +698,29 @@ struct Session {
     bool ok() const { return session != XR_NULL_HANDLE; }
 };
 
+// Whether this thread is calling into the runtime: a Vulkan object made on it now
+// is the runtime's, not the application's. A Vulkan layer that changes what it is
+// asked to make (the X4VR layer doubles one-layer colour attachments for
+// multiview) asks this, so that the runtime's images get made exactly as asked.
+// Per thread, because the application goes on making its own on its own threads
+// meanwhile: X4 made seven render targets in the millisecond SteamVR made the
+// loading panel's images (take 428).
+inline int &runtime_depth() {
+    static thread_local int depth = 0;
+    return depth;
+}
+inline bool in_runtime() { return runtime_depth() > 0; }
+struct InRuntime {
+    InRuntime() { ++runtime_depth(); }
+    ~InRuntime() { --runtime_depth(); }
+    InRuntime(const InRuntime &) = delete;
+    InRuntime &operator=(const InRuntime &) = delete;
+};
+
 inline XrResult session_create(Session &s, Runtime &rt, VkInstance vk,
                                VkPhysicalDevice phys, VkDevice dev,
                                uint32_t queue_family, uint32_t queue_index) {
+    const InRuntime in_runtime;
     s.rt = &rt;
     XrGraphicsBindingVulkan2KHR bind{};
     bind.type = XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR;
@@ -941,6 +961,8 @@ inline VkFormat choose_format(Session &s, const VkFormat *want, uint32_t nwant,
 inline XrResult swapchain_create(Swapchain &sc, Session &s, VkFormat fmt,
                                  uint32_t w, uint32_t h, uint32_t array_layers,
                                  uint32_t samples) {
+    // Through the enumeration too: a runtime may make the images only when asked for them.
+    const InRuntime in_runtime;
     sc.s = &s;
     XrSwapchainCreateInfo ci{};
     ci.type = XR_TYPE_SWAPCHAIN_CREATE_INFO;

@@ -985,6 +985,29 @@ static void test_report() {
     check(ls.size() == 2 && ls[0].path == debug && ls[0].debug && !ls[1].debug,
           "sessions: newest first, debug ones marked, nothing else listed");
 
+    // SteamVR's logs: its own from the last two days, scrubbed; not the settings
+    // window's, not an old one, not anything else in the folder.
+    const std::string vrlogs = home + "/.local/share/Steam/logs";
+    put(vrlogs + "/vrserver.txt", "Loaded driver from " + home + "/.local/share/Steam for " +
+                                      names.user + " 76561198056945619\n");
+    put(vrlogs + "/vrclient_Main().txt", "client of X4\n");
+    put(vrlogs + "/driver_vrlink.txt", "the headset's driver\n");
+    put(vrlogs + "/vrwebhelper_main.txt", "the settings window\n");
+    put(vrlogs + "/vrcompositor.previous.txt", "last week\n");
+    put(vrlogs + "/content_log.txt", "not SteamVR's\n");
+    {
+        struct timespec old[2] = {{time(nullptr) - 10 * 24 * 3600, 0},
+                                  {time(nullptr) - 10 * 24 * 3600, 0}};
+        utimensat(AT_FDCWD, (vrlogs + "/vrcompositor.previous.txt").c_str(), old, 0);
+    }
+    put(home + "/.local/share/vulkan/implicit_layer.d/VkLayer_LSFGVK_frame_generation.json",
+        "{\"layer\": {\"name\": \"VK_LAYER_LSFGVK_frame_generation\", \"library_path\": \"" + home +
+            "/lib/liblsfg-vk-layer.so\", \"disable_environment\": {\"DISABLE_LSFGVK\": \"1\"}}}\n");
+    const std::vector<std::string> vl = steamvr_logs(home);
+    check(vl.size() == 3, "SteamVR's logs: the server's, a client's and a driver's, from these two "
+                          "days, not the settings window's, an old one or another program's (" +
+                              std::to_string(vl.size()) + ")");
+
     ReportOptions o;
     o.home = home;
     o.log = debug;
@@ -994,7 +1017,24 @@ static void test_report() {
     auto file = [&r](const char *n) { return read_text_file(r.dir + "/" + n); };
     check(file("session.log").find("opened ~/.config/EgoSoft/X4/<profile>/config.xml") !=
               std::string::npos, "the log is there, scrubbed");
-    for (const char *f : {"session.log", "summary.txt", "what-happened.txt", "launch-output.txt"}) {
+    check(file("steamvr/vrserver.txt").find("from ~/.local/share/Steam for <user> <steamid>") !=
+              std::string::npos || names.user.size() < 3,
+          "SteamVR's server log is in it, scrubbed");
+    check(!file("steamvr/vrclient_Main().txt").empty() && !file("steamvr/driver_vrlink.txt").empty(),
+          "...and the client's and the driver's");
+    check(!is_file(r.dir + "/steamvr/vrwebhelper_main.txt") &&
+              !is_file(r.dir + "/steamvr/vrcompositor.previous.txt") &&
+              !is_file(r.dir + "/steamvr/content_log.txt"),
+          "...and nothing else from Steam's logs");
+    check(file("summary.txt").find("SteamVR's logs: 3 from the last two days, in steamvr/") !=
+              std::string::npos, "the summary counts them");
+    check(file("vulkan-layers.txt").find("VkLayer_LSFGVK_frame_generation.json: "
+                                         "VK_LAYER_LSFGVK_frame_generation, library "
+                                         "~/lib/liblsfg-vk-layer.so, on with nothing (always), "
+                                         "off with DISABLE_LSFGVK") != std::string::npos,
+          "the implicit layers are listed, with what turns each on and off, scrubbed");
+    for (const char *f : {"session.log", "summary.txt", "what-happened.txt", "launch-output.txt",
+                          "steamvr/vrserver.txt", "vulkan-layers.txt"}) {
         const std::string t = file(f);
         check(!t.empty(), std::string(f) + " is in it");
         check(t.find(home) == std::string::npos && t.find("96679891") == std::string::npos &&
@@ -1010,8 +1050,9 @@ static void test_report() {
     check(r.archive.size() > 7 && r.archive.compare(r.archive.size() - 7, 7, ".tar.gz") == 0,
           "...in a format GitHub takes");
     const ChildResult l = run_child({"tar", "tzf", r.archive}, 20000);
-    check(l.out.find("session.log") != std::string::npos && l.out.find("summary.txt") != std::string::npos,
-          "...holding the files");
+    check(l.out.find("session.log") != std::string::npos && l.out.find("summary.txt") != std::string::npos &&
+              l.out.find("steamvr/vrserver.txt") != std::string::npos,
+          "...holding the files, SteamVR's too");
     check(r.issue_url.find("template=bug_report.yml") != std::string::npos, "the issue uses the form");
     check(r.issue_url.find("title=It%20broke") != std::string::npos, "...titled from the note's first line");
     check(r.issue_url.find("Second") == r.issue_url.find("what=") + 5 + r.issue_url.substr(r.issue_url.find("what=") + 5).find("Second"),

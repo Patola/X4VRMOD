@@ -129,14 +129,15 @@ inline std::vector<uint8_t> loading_pad(const std::vector<uint8_t> &px, uint32_t
 // picture's own shape comes first, so a runtime that refuses it says so in
 // every run. A step that changes nothing is left out.
 //
-// WiVRn refuses every one-layer shape (takes 425, 426), and the cause is this
+// WiVRn refused every one-layer shape (takes 425, 426), and the cause was this
 // layer: WiVRn's client makes the image again on X4's device, through the
-// multiview hook, which doubles every one-layer colour attachment there
-// (mv_double_candidate). The doubled image needs twice the memory WiVRn
-// exported, and its client says so on X4's stderr: "size mismatch, exported
-// 1966080 but requires 3932160". Two layers pass the hook as they are, which
-// is why the eye swapchain was always taken, and the fourth shape is (take
-// 426). SteamVR takes the first.
+// multiview hook, which doubled every one-layer colour attachment there. The
+// doubled image needed twice the memory WiVRn exported, and its client said so
+// on X4's stderr: "size mismatch, exported 1966080 but requires 3932160". Two
+// layers pass the hook as they are, which is why the eye swapchain was always
+// taken, and the fourth shape was (take 426). The hook now leaves the runtime's
+// images as asked (runtime_image), so the first shape should be taken
+// everywhere; the other steps stay as a net, and a refusal is still logged.
 struct LoadingShape {
     VkFormat fmt;
     uint32_t w, h, layers;

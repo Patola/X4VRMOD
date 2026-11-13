@@ -167,6 +167,43 @@ std::string log_excerpt(const std::string &path, size_t head, size_t tail) {
     return out;
 }
 
+// SteamVR's own logs, from its last two days: what the runtime saw, which ours
+// can't say. An RTX 5090 froze under SteamVR with the loading panel up, and only
+// SteamVR's side could say why (2026-11-13). Its server, compositor, monitor and
+// start-up logs, each program's client log (vrclient_<program>.txt) and the
+// headset drivers' (driver_<name>.txt), each with the copy SteamVR keeps of the
+// session before (.previous.txt). Not the settings window's (vrwebhelper_*).
+static constexpr size_t kVrLogHead = 256u * 1024, kVrLogTail = 2u * 1024 * 1024;
+static constexpr time_t kVrLogAge = 2 * 24 * 3600;
+
+std::vector<std::string> steamvr_logs(const std::string &home) {
+    std::vector<std::string> out, seen;
+    const time_t now = time(nullptr);
+    for (const std::string &c : {home + "/.steam/root", home + "/.steam/steam",
+                                 home + "/.local/share/Steam"}) {
+        const std::string root = real_path(c);
+        const std::string dir = root + "/logs";
+        if (root.empty() || !is_dir(dir) ||
+            std::find(seen.begin(), seen.end(), dir) != seen.end())
+            continue;
+        seen.push_back(dir);
+        std::error_code ec;
+        for (const auto &e : fs::directory_iterator(dir, ec)) {
+            const std::string n = e.path().filename().string();
+            const bool steamvr = (n.rfind("vr", 0) == 0 && n.rfind("vrwebhelper", 0) != 0) ||
+                                 n.rfind("driver_", 0) == 0;
+            struct stat st;
+            if (!steamvr || e.path().extension() != ".txt" ||
+                stat(e.path().c_str(), &st) != 0 || !S_ISREG(st.st_mode) ||
+                now - st.st_mtime > kVrLogAge)
+                continue;
+            out.push_back(e.path().string());
+        }
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 // ------------------------------------------------------------------ the report
 std::string checks_text(const std::vector<Check> &checks) {
     std::string out;
@@ -279,7 +316,12 @@ ReportResult make_report(const ReportOptions &o) {
     summary += system_lines();
     summary += "Settings: eye " + std::to_string(eye.eye) + ", upscaler " + eye.upscaler + "\n";
     summary += std::string("Log: ") + (found_log ? (debug ? "debug session" : "normal session")
-                                                 : "none") + "\n\n";
+                                                 : "none") + "\n";
+    const std::vector<std::string> vr_logs = steamvr_logs(home);
+    summary += "SteamVR's logs: " +
+               (vr_logs.empty() ? std::string("none from the last two days")
+                                : std::to_string(vr_logs.size()) + " from the last two days, in steamvr/") +
+               "\n\n";
     summary += "The checklist now, not during the session (VR may simply be off):\n";
     summary += checks_text(rows);
     r.summary = scrub_text(summary, names);
@@ -297,6 +339,16 @@ ReportResult make_report(const ReportOptions &o) {
     const std::string prof = profile_path(home);
     if (is_file(prof))
         ok = write_file(r.dir + "/profile.toml", scrub_text(read_text_file(prof), names)) && ok;
+    // The layers that load into every Vulkan program, as the loader would find them:
+    // the checklist missed an lsfg-vk build it didn't know (2026-11-11).
+    ok = write_file(r.dir + "/vulkan-layers.txt", scrub_text(implicit_layers_text(home), names)) && ok;
+    if (!vr_logs.empty()) {
+        std::error_code vec;
+        fs::create_directories(r.dir + "/steamvr", vec);
+        for (const std::string &p : vr_logs)
+            ok = write_file(r.dir + "/steamvr/" + base_name(p),
+                            scrub_text(log_excerpt(p, kVrLogHead, kVrLogTail), names)) && ok;
+    }
     // A crash's backtrace, if systemd kept one for this X4 lately.
     bool have = false;
     const Install in = choose_install(home, o.game, &have);

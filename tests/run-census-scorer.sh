@@ -2212,11 +2212,40 @@ else
     ok "loading: refused, then up -> no FAIL"
 fi
 absent "loading: nothing refused -> no refusal listed" /tmp/census-lp-ok.log "loading  the runtime refused"
+lprt='[  999939.500] layer   mv: 738x520 fmt=43 usage=0x95, made by the runtime for a swapchain — kept single-layer, as it asked'
+lprt2='[  999939.600] layer   mv: 738x520 mips=10 fmt=43 usage=0x17, made by the runtime — kept single-layer, as it asked'
+plant /tmp/census-lp-rt.log "$lprt" "$lprt" "$lprt" "$lpup" "$lpdown" "$(printf "$lpcopy" 900)"
+want "loading: the runtime's images kept as asked -> counted (take 427's line)" /tmp/census-lp-rt.log loading "3 image(s) the runtime made kept single-layer: 738x520 format 43"
+plant /tmp/census-lp-rt2.log "$lprt" "$lprt2" "$lpup" "$lpdown" "$(printf "$lpcopy" 900)"
+want "loading: ...with SteamVR's mipmapped copies" /tmp/census-lp-rt2.log loading "2 image(s) the runtime made kept single-layer: 738x520 format 43, 738x520 format 43 with 10 mip levels"
+absent "loading: none kept -> no count" /tmp/census-lp-ok.log "loading  [0-9]+ image\\(s\\) the runtime"
+lpimg='[  999939.600] layer   img #%s: 738x520x1 layers=1 mips=1 samples=1 fmt=43 usage=0x16%s'
+lpother='[  999939.000] layer   img #7: 4000x4000x1 layers=2 mips=1 samples=1 fmt=50 usage=0x16'
+plant /tmp/census-lp-inv.log "$lpother" "$(printf "$lpimg" 90 '')" "$(printf "$lpimg" 91 ' DOUBLED')" "$lpup" "$lpdown"
+want "loading: inventory, the panel's images -> counted with the doubled" /tmp/census-lp-inv.log loading "the panel's 738x520 images made on X4's device: 2, 1 of them doubled (#90, #91)"
+plant /tmp/census-lp-inv0.log "$lpother" "$lpup" "$lpdown"
+want "loading: inventory, none of the panel's -> said" /tmp/census-lp-inv0.log loading "no 738x520 image made on X4's device"
+absent "loading: no inventory -> nothing about the panel's images" /tmp/census-lp-ok.log "loading  (no 738x520|the panel's 738x520)"
 plant /tmp/census-lp-allref.log "$lpref" '[  999940.000] layer   loading panel: NOT shown — the runtime refused every shape tried (4), the last with xrCreateSwapchain -> XR_ERROR_RUNTIME_FAILURE; the headset is empty until X4 draws, as before'
 want "loading: every shape refused -> FAIL with why" /tmp/census-lp-allref.log "FAIL|  - " "the loading panel wasn't shown: the runtime refused every shape tried (4)"
 plant /tmp/census-lp-fast.log '[  999940.000] layer   loading panel: not needed — X4 drew before the headset showed anything'
 want "loading: not needed -> said" /tmp/census-lp-fast.log loading "not needed"
 absent "loading: an older build, nothing -> silent" "$BASE" loading
+
+# The first runtime calls of a session, traced: complete, or one that never came back.
+tr1='[  999941.000] layer   trace: XR thread, frame 1: calling xrWaitFrame and xrBeginFrame'
+tr2='[  999941.001] layer   trace: XR thread, frame 1: xrWaitFrame and xrBeginFrame returned'
+tr3='[  999941.002] layer   trace: XR thread, frame 1: calling xrEndFrame with 1 layer(s), the loading panel'
+tr4='[  999941.003] layer   trace: XR thread, frame 1: xrEndFrame returned'
+tr5='[  999941.004] layer   trace: X4'"'"'s copy 1: calling xrAcquireSwapchainImage and xrWaitSwapchainImage (2 ms)'
+tr6='[  999941.005] layer   trace: X4'"'"'s copy 1: the acquire returned an image'
+tr7='[  999941.006] layer   trace: X4'"'"'s copy 1: calling xrReleaseSwapchainImage'
+plant /tmp/census-trace-ok.log "$tr1" "$tr2" "$tr3" "$tr4" "$tr5" "$tr6"
+want "trace: every call returned -> said" /tmp/census-trace-ok.log trace "the session's first 3 traced call(s) all returned"
+plant /tmp/census-trace-hung.log "$tr1" "$tr2" "$tr3" "$tr5" "$tr6" "$tr7"
+want "trace: xrEndFrame never returned -> FAIL names it" /tmp/census-trace-hung.log "FAIL|  - " "a call into the runtime never returned: xrEndFrame with 1 layer(s), the loading panel (XR thread, frame 1)"
+want "trace: ...and the release on X4's thread" /tmp/census-trace-hung.log "FAIL|  - " "a call into the runtime never returned: xrReleaseSwapchainImage (X4's copy 1)"
+absent "trace: none -> silent" "$BASE" trace
 
 # Frame generators and overlays the layer found loaded into X4: said first, no FAIL.
 plant /tmp/census-others.log '[  999940.000] layer   others: loaded into X4 — lsfg-vk (a frame generator) from liblsfg-vk.so. They work on the flat picture X4 draws, not on what the headset shows; the launcher'"'"'s checklist says to turn them off for X4'
