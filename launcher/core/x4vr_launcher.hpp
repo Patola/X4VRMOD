@@ -387,6 +387,9 @@ std::vector<SessionLog> session_logs(const std::string &home);
 std::string log_excerpt(const std::string &path, size_t head, size_t tail);
 // SteamVR's own logs from its last two days, which a bug report carries.
 std::vector<std::string> steamvr_logs(const std::string &home);
+// The lines of a kernel log about the GPU driver: NVIDIA's Xid errors, AMD's ring
+// timeouts and resets, and the like. The last `max` of them.
+std::string gpu_kernel_lines(const std::string &log, size_t max = 300);
 // Every Vulkan layer that loads without being asked for, where the loader looks:
 // its name, library and the variables that turn it on and off. For bug reports,
 // since the checklist's overlays line only knows the tools it names.

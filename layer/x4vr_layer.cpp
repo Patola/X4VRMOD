@@ -808,6 +808,35 @@ struct VrQueueLock {
     VrQueueLock &operator=(const VrQueueLock &) = delete;
 };
 
+// Which call that can block each of the two VR-facing threads is inside, for the
+// stall watchdog (vr_watchdog). Two RTX 5090 freezes under SteamVR stopped every
+// log line at once, and the second came 1100 frames in, past the first frames'
+// trace (2026-11-14): this says where each thread was, whenever it happens.
+struct CallSpot {
+    std::atomic<const char *> what{nullptr};
+    std::atomic<double> since{0.0};
+};
+CallSpot g_spot_xr, g_spot_x4;
+std::atomic<double> g_last_headset_frame{0.0}, g_last_x4_present{0.0};
+
+struct InCall {
+    CallSpot &spot;
+    const char *prev;
+    double prev_since;
+    InCall(CallSpot &s, const char *what)
+        : spot(s), prev(s.what.load(std::memory_order_relaxed)),
+          prev_since(s.since.load(std::memory_order_relaxed)) {
+        spot.since.store(mono_now(), std::memory_order_relaxed);
+        spot.what.store(what, std::memory_order_release);
+    }
+    ~InCall() {
+        spot.since.store(prev_since, std::memory_order_relaxed);
+        spot.what.store(prev, std::memory_order_release);
+    }
+    InCall(const InCall &) = delete;
+    InCall &operator=(const InCall &) = delete;
+};
+
 // Surfaces whose capabilities we reported at half width.
 //
 // This began as the halve/double pairing: only a surface recorded here could
@@ -14117,6 +14146,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
             // not our hook -- so this is the one submit that would otherwise
             // go unserialised.
             VrQueueLock qlock;
+            const InCall in_composite(g_spot_x4, "the composite (its vkQueueSubmit)");
             composited = g_sbs.composite(
                 queue, family, pi->pSwapchains[0], pi->pImageIndices[0],
                 pi->pWaitSemaphores, pi->waitSemaphoreCount,
@@ -14152,6 +14182,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
                                      : kTraceCopies;
         if (tp < kTraceCopies)
             X4VR_LOG("trace: X4's present %u: calling vkQueuePresentKHR", tp + 1);
+        const InCall in_present(g_spot_x4, "vkQueuePresentKHR");
         if (composited != VK_NULL_HANDLE) {
             // Our submit already waits on X4's semaphores, so the present now
             // waits only on ours -- waiting on both would deadlock, since a
@@ -14165,6 +14196,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         }
         if (tp < kTraceCopies)
             X4VR_LOG("trace: X4's present %u: vkQueuePresentKHR returned %d", tp + 1, (int)r);
+        g_last_x4_present.store(mono_now(), std::memory_order_relaxed);
     }
 
     // Read it back after the present has been chained down, so the wait costs
@@ -14465,6 +14497,7 @@ struct VrState {
     x4vr::xr::Runtime rt;
     x4vr::xr::Session session;
     std::thread thread;
+    std::thread watch; // vr_watchdog
     std::atomic<bool> stop{false};
     // Two flags, not one. `started` means the thread was spawned; `session_ok`
     // means xrCreateSession returned a session. Conflating them made a run
@@ -14967,6 +15000,7 @@ static bool loading_panel_frame(const XrView *views) {
         if (!loading_panel_enabled())
             X4VR_LOG("loading panel: off (X4VR_LOADING_PANEL=0)");
         else
+            const InCall in_build(g_spot_xr, "building the loading panel");
             g_vrs.load_ok = loading_panel_build();
         g_vrs.load_up_at = mono_now();
     }
@@ -15033,6 +15067,7 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
             g_vrs.sc_failed.store(true, std::memory_order_relaxed);
             return false;
         }
+        const InCall in_create(g_spot_x4, "xrCreateSwapchain");
         const XrResult r = x4vr::xr::swapchain_create(
             g_vrs.sc, g_vrs.session, pick, eye.width, eye.height, 2, 1);
         if (r != XR_SUCCESS) {
@@ -15092,8 +15127,11 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
         X4VR_LOG("trace: X4's copy %u: calling xrAcquireSwapchainImage and "
                  "xrWaitSwapchainImage (2 ms)",
                  tc + 1);
-    const bool ready = x4vr::xr::swapchain_acquire_timeout(
-        g_vrs.sc, &idx, (XrDuration)2000000, &owed);
+    bool ready = false;
+    {
+        const InCall in_acquire(g_spot_x4, "xrAcquireSwapchainImage and xrWaitSwapchainImage");
+        ready = x4vr::xr::swapchain_acquire_timeout(g_vrs.sc, &idx, (XrDuration)2000000, &owed);
+    }
     if (tc < kTraceCopies)
         X4VR_LOG("trace: X4's copy %u: the acquire returned %s", tc + 1,
                  ready ? "an image" : owed ? "an image not ready in time" : "none");
@@ -15174,7 +15212,10 @@ void vr_finish_blit() {
     const uint32_t tc = g_trace_copies.fetch_add(1, std::memory_order_relaxed);
     if (tc < kTraceCopies)
         X4VR_LOG("trace: X4's copy %u: calling xrReleaseSwapchainImage", tc + 1);
-    x4vr::xr::swapchain_release(g_vrs.sc);
+    {
+        const InCall in_release(g_spot_x4, "xrReleaseSwapchainImage");
+        x4vr::xr::swapchain_release(g_vrs.sc);
+    }
     if (tc < kTraceCopies)
         X4VR_LOG("trace: X4's copy %u: xrReleaseSwapchainImage returned", tc + 1);
     g_vrs.released.fetch_add(1, std::memory_order_relaxed);
@@ -15309,7 +15350,11 @@ void vr_thread() {
         if (tr)
             X4VR_LOG("trace: XR thread, frame %llu: calling xrWaitFrame and xrBeginFrame",
                      (unsigned long long)tf + 1);
-        const bool begun = x4vr::xr::frame_begin(g_vrs.session, &should_render);
+        bool begun = false;
+        {
+            const InCall in_begin(g_spot_xr, "xrWaitFrame and xrBeginFrame");
+            begun = x4vr::xr::frame_begin(g_vrs.session, &should_render);
+        }
         if (tr)
             X4VR_LOG("trace: XR thread, frame %llu: xrWaitFrame and xrBeginFrame returned%s",
                      (unsigned long long)tf + 1, begun ? "" : " a failure");
@@ -15320,7 +15365,11 @@ void vr_thread() {
         }
         XrView views[2] = {};
         XrViewStateFlags flags = 0;
-        const bool have = x4vr::xr::locate_views(g_vrs.session, views, 2, &flags);
+        bool have = false;
+        {
+            const InCall in_locate(g_spot_xr, "xrLocateViews");
+            have = x4vr::xr::locate_views(g_vrs.session, views, 2, &flags);
+        }
         // The menu warp turns X4's still frame to this. views[0] is the head's
         // orientation for the reason given where it is published below.
         if (have) {
@@ -16381,7 +16430,12 @@ void vr_thread() {
             X4VR_LOG("trace: XR thread, frame %llu: calling xrEndFrame with %u layer(s)%s",
                      (unsigned long long)tf + 1, layer_count,
                      show_panel ? ", the loading panel" : "");
-        x4vr::xr::frame_end(g_vrs.session, layers, layer_count);
+        {
+            const InCall in_end(g_spot_xr, show_panel ? "xrEndFrame, with the loading panel"
+                                                      : "xrEndFrame");
+            x4vr::xr::frame_end(g_vrs.session, layers, layer_count);
+        }
+        g_last_headset_frame.store(mono_now(), std::memory_order_relaxed);
         if (tr)
             X4VR_LOG("trace: XR thread, frame %llu: xrEndFrame returned",
                      (unsigned long long)tf + 1);
@@ -16805,6 +16859,60 @@ void vr_session_thread() {
     vr_thread();
 }
 
+// The stall watchdog. When the XR thread has sent the headset no frame for 2 s
+// while its loop was running, it says which call each VR-facing thread is inside
+// and when X4 last presented, then again every 5 s, up to six times, and once
+// more when frames come back. It touches neither Vulkan nor OpenXR, so it still
+// speaks when both threads are stuck: two RTX 5090 freezes under SteamVR left
+// the log silent, the second 1100 frames in (2026-11-14).
+void vr_watchdog() {
+    constexpr double kStall = 2.0, kAgain = 5.0;
+    constexpr int kTimes = 6;
+    int said = 0;
+    double from = 0.0;
+    auto where = [](const CallSpot &s, double now, char *buf, size_t n) {
+        const char *w = s.what.load(std::memory_order_acquire);
+        if (w)
+            snprintf(buf, n, "inside %s for %.1f s", w,
+                     now - s.since.load(std::memory_order_relaxed));
+        else
+            snprintf(buf, n, "in none of the calls watched");
+    };
+    while (!g_vrs.stop.load(std::memory_order_relaxed)) {
+        struct timespec nap = {0, 250 * 1000 * 1000};
+        nanosleep(&nap, nullptr);
+        const double now = mono_now();
+        const double last = g_last_headset_frame.load(std::memory_order_relaxed);
+        const bool running = g_vrs.loop_live.load(std::memory_order_acquire);
+        if (last <= 0.0 || !running || now - last < kStall) {
+            if (said && last > from) {
+                X4VR_LOG("stall: over — the XR thread sent the headset a frame again, "
+                         "%.1f s after the one before",
+                         last - from);
+                said = 0;
+            }
+            continue;
+        }
+        if (said == 0)
+            from = last;
+        if (said >= kTimes || now - from < kStall + said * kAgain)
+            continue;
+        char xr[160], x4[160];
+        where(g_spot_xr, now, xr, sizeof xr);
+        where(g_spot_x4, now, x4, sizeof x4);
+        const double present = g_last_x4_present.load(std::memory_order_relaxed);
+        char p[64];
+        if (present > 0.0)
+            snprintf(p, sizeof p, "%.1f s ago", now - present);
+        else
+            snprintf(p, sizeof p, "never");
+        X4VR_LOG("stall: no frame for the headset for %.1f s — the XR thread is %s; X4's "
+                 "present thread is %s; X4 last presented %s",
+                 now - from, xr, x4, p);
+        said++;
+    }
+}
+
 // Called once X4 is back out of vkCreateDevice. vkGetDeviceQueue is the first
 // thing it does there, and it is a call the application makes rather than one
 // the loader makes into us.
@@ -16812,6 +16920,7 @@ void vr_start_session_deferred() {
     if (!g_vrs.pending || g_vrs.started.exchange(true))
         return;
     g_vrs.thread = std::thread(vr_session_thread);
+    g_vrs.watch = std::thread(vr_watchdog);
 }
 
 // One line the scorer can key on, whatever else the run did.
@@ -16870,6 +16979,8 @@ void vr_shutdown() {
     g_vrs.stop.store(true);
     if (g_vrs.thread.joinable())
         g_vrs.thread.join(); // must finish before the device goes away
+    if (g_vrs.watch.joinable())
+        g_vrs.watch.join();
     vr_report("final");
     g_sbs.cursor_report("final");
     // Before the session, which owns it. The present thread is gone by now:

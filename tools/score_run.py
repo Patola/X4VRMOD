@@ -5097,6 +5097,24 @@ def main(path):
         else:
             print(f"trace    the session's first {traced} traced call(s) all returned")
 
+    # --- the stall watchdog ------------------------------------------------
+    #
+    # When the headset gets no frame for 2 s, the layer's watchdog says which
+    # call each VR-facing thread is inside. A stall the log never says is over
+    # is how the run ended: the RTX 5090's second freeze under SteamVR, 1100
+    # frames in, with SteamVR's compositor stuck presenting at the same moment
+    # (2026-11-14).
+    stalls = re.findall(r"stall: (no frame for the headset .*)$", text, re.M)
+    overs = [m.start() for m in re.finditer(r"stall: over", text)]
+    last_stall = max((m.start() for m in re.finditer(r"stall: no frame", text)), default=-1)
+    for s in stalls:
+        print(f"stall    {s}")
+    if stalls and not any(o > last_stall for o in overs):
+        fails.append("the run ended stalled: the headset got no frame from then on (the stall "
+                     "lines say where each thread was)")
+    elif stalls:
+        print(f"stall    {len(overs)} stall(s) over again")
+
     # --- frame generators and overlays loaded into X4 ----------------------
     #
     # Not the mod's fault and not a FAIL, but the first thing to know about a

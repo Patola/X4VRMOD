@@ -1028,13 +1028,32 @@ static void test_report() {
           "...and nothing else from Steam's logs");
     check(file("summary.txt").find("SteamVR's logs: 3 from the last two days, in steamvr/") !=
               std::string::npos, "the summary counts them");
+    check(!file("kernel-gpu.txt").empty() &&
+              file("summary.txt").find("Kernel log: ") != std::string::npos,
+          "the kernel's GPU lines are in it, and the summary says what was found");
+    {
+        const std::string k = gpu_kernel_lines(
+            "Nov 14 18:13:06 host kernel: NVRM: Xid (PCI:0000:01:00): 109, pid=129656, name=X4\n"
+            "Nov 14 18:13:06 host kernel: usb 1-2: new device\n"
+            "Nov 14 18:13:07 host kernel: amdgpu 0000:03:00.0: ring gfx_0.0.0 timeout\n");
+        check(k.find("Xid") != std::string::npos && k.find("ring gfx") != std::string::npos &&
+                  k.find("usb") == std::string::npos,
+              "kernel lines: NVIDIA's Xid and AMD's ring timeout kept, the rest left out");
+        std::string many;
+        for (int i = 0; i < 400; i++)
+            many += "NVRM: line " + std::to_string(i) + "\n";
+        const std::string last = gpu_kernel_lines(many, 300);
+        check(std::count(last.begin(), last.end(), '\n') == 300 &&
+                  last.find("line 399") != std::string::npos && last.find("line 99\n") == std::string::npos,
+              "...the last 300 of them");
+    }
     check(file("vulkan-layers.txt").find("VkLayer_LSFGVK_frame_generation.json: "
                                          "VK_LAYER_LSFGVK_frame_generation, library "
                                          "~/lib/liblsfg-vk-layer.so, on with nothing (always), "
                                          "off with DISABLE_LSFGVK") != std::string::npos,
           "the implicit layers are listed, with what turns each on and off, scrubbed");
     for (const char *f : {"session.log", "summary.txt", "what-happened.txt", "launch-output.txt",
-                          "steamvr/vrserver.txt", "vulkan-layers.txt"}) {
+                          "steamvr/vrserver.txt", "vulkan-layers.txt", "kernel-gpu.txt"}) {
         const std::string t = file(f);
         check(!t.empty(), std::string(f) + " is in it");
         check(t.find(home) == std::string::npos && t.find("96679891") == std::string::npos &&

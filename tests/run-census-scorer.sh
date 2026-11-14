@@ -2247,6 +2247,21 @@ want "trace: xrEndFrame never returned -> FAIL names it" /tmp/census-trace-hung.
 want "trace: ...and the release on X4's thread" /tmp/census-trace-hung.log "FAIL|  - " "a call into the runtime never returned: xrReleaseSwapchainImage (X4's copy 1)"
 absent "trace: none -> silent" "$BASE" trace
 
+# The stall watchdog: a stall that ended, and one the run ended in.
+st1='[  999950.000] layer   stall: no frame for the headset for 2.0 s — the XR thread is inside xrWaitFrame and xrBeginFrame for 2.0 s; X4'"'"'s present thread is inside vkQueuePresentKHR for 2.1 s; X4 last presented 2.1 s ago'
+st2='[  999955.000] layer   stall: over — the XR thread sent the headset a frame again, 3.5 s after the one before'
+plant /tmp/census-stall-over.log "$st1" "$st2"
+want "stall: listed" /tmp/census-stall-over.log stall "no frame for the headset for 2.0 s — the XR thread is inside xrWaitFrame and xrBeginFrame"
+want "stall: ...and over" /tmp/census-stall-over.log stall "1 stall(s) over again"
+if python3 tools/score_run.py /tmp/census-stall-over.log 2>&1 | grep -qE "^(FAIL|  - ) *the run ended stalled"; then
+    bad "stall: over -> FAILs"
+else
+    ok "stall: over -> no FAIL"
+fi
+plant /tmp/census-stall-end.log "$st2" "$st1"
+want "stall: the run ended in one -> FAIL" /tmp/census-stall-end.log "FAIL|  - " "the run ended stalled"
+absent "stall: none -> silent" "$BASE" stall
+
 # Frame generators and overlays the layer found loaded into X4: said first, no FAIL.
 plant /tmp/census-others.log '[  999940.000] layer   others: loaded into X4 — lsfg-vk (a frame generator) from liblsfg-vk.so. They work on the flat picture X4 draws, not on what the headset shows; the launcher'"'"'s checklist says to turn them off for X4'
 want "others: lsfg-vk loaded -> said" /tmp/census-others.log others "loaded into X4: lsfg-vk (a frame generator) from liblsfg-vk.so"

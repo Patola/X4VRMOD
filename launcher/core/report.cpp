@@ -204,6 +204,59 @@ std::vector<std::string> steamvr_logs(const std::string &home) {
     return out;
 }
 
+// The kernel's lines about the GPU driver. A GPU hang shows there (NVIDIA's Xid,
+// AMD's ring timeouts and resets), and an RTX 5090 froze X4 and SteamVR's
+// compositor in the same instant (2026-11-14), which only the kernel can call a
+// hang or not.
+std::string gpu_kernel_lines(const std::string &log, size_t max) {
+    static const char *const kWords[] = {"nvrm", "xid", "nvidia-modeset", "amdgpu", "radeon",
+                                         "i915", "nouveau", "gpu hang", "gpu reset",
+                                         "ring timeout", "gpu fault"};
+    std::vector<std::string> hits;
+    size_t at = 0;
+    while (at < log.size()) {
+        size_t end = log.find('\n', at);
+        if (end == std::string::npos)
+            end = log.size();
+        const std::string line = log.substr(at, end - at);
+        std::string low = line;
+        for (char &c : low)
+            c = (char)std::tolower((unsigned char)c);
+        for (const char *w : kWords)
+            if (low.find(w) != std::string::npos) {
+                hits.push_back(line);
+                break;
+            }
+        at = end + 1;
+    }
+    std::string out;
+    for (size_t i = hits.size() > max ? hits.size() - max : 0; i < hits.size(); i++)
+        out += hits[i] + "\n";
+    return out;
+}
+
+// From journald, the last day; dmesg where it isn't readable.
+static std::string kernel_gpu_text(std::string *headline) {
+    const ChildResult j = run_child({"journalctl", "-k", "--since", "-24h", "--no-pager",
+                                     "-o", "short-iso"}, 20000);
+    std::string from = "journalctl -k, the last day";
+    std::string log = j.started && j.exit_code == 0 ? j.out : "";
+    if (log.find('\n') == std::string::npos) {
+        const ChildResult d = run_child({"dmesg", "--ctime"}, 20000);
+        log = d.started && d.exit_code == 0 ? d.out : "";
+        from = "dmesg, since boot";
+    }
+    if (log.find('\n') == std::string::npos) {
+        *headline = "the kernel's log couldn't be read";
+        return "Neither journalctl -k nor dmesg could be read by this user.\n";
+    }
+    const std::string lines = gpu_kernel_lines(log);
+    const size_t n = (size_t)std::count(lines.begin(), lines.end(), '\n');
+    *headline = n ? std::to_string(n) + " line(s) about the GPU driver, in kernel-gpu.txt"
+                  : "nothing about the GPU driver";
+    return "From " + from + ".\n" + (n ? lines : "Nothing about the GPU driver.\n");
+}
+
 // ------------------------------------------------------------------ the report
 std::string checks_text(const std::vector<Check> &checks) {
     std::string out;
@@ -321,7 +374,10 @@ ReportResult make_report(const ReportOptions &o) {
     summary += "SteamVR's logs: " +
                (vr_logs.empty() ? std::string("none from the last two days")
                                 : std::to_string(vr_logs.size()) + " from the last two days, in steamvr/") +
-               "\n\n";
+               "\n";
+    std::string kernel_head;
+    const std::string kernel = kernel_gpu_text(&kernel_head);
+    summary += "Kernel log: " + kernel_head + "\n\n";
     summary += "The checklist now, not during the session (VR may simply be off):\n";
     summary += checks_text(rows);
     r.summary = scrub_text(summary, names);
@@ -342,6 +398,7 @@ ReportResult make_report(const ReportOptions &o) {
     // The layers that load into every Vulkan program, as the loader would find them:
     // the checklist missed an lsfg-vk build it didn't know (2026-11-11).
     ok = write_file(r.dir + "/vulkan-layers.txt", scrub_text(implicit_layers_text(home), names)) && ok;
+    ok = write_file(r.dir + "/kernel-gpu.txt", scrub_text(kernel, names)) && ok;
     if (!vr_logs.empty()) {
         std::error_code vec;
         fs::create_directories(r.dir + "/steamvr", vec);
