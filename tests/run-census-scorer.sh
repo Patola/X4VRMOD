@@ -1611,7 +1611,7 @@ want "gamemode: nothing said -> FAIL" /tmp/census-gm-base.log "FAIL|  - " "didn'
 absent "gamemode: not asked -> silent" "$BASE" gamemode
 
 # DLSS in both eyes (x4vr_ngx.hpp).
-for f in '"dlss: PATCHED — X4'"'"'s three NGX calls' '"dlss: patch REFUSED — %s. X4 upscales' '"dlss: X4 says supported=%d on=%d mode=%s auto=%s; features %llu, evaluated left "'; do
+for f in '"dlss: PATCHED — X4'"'"'s three NGX calls' '"dlss: patch REFUSED — %s. X4 upscales' '"dlss: X4 says supported=%d on=%d mode=%s; features %llu, evaluated left "'; do
     if grep -qF "$f" injector/x4vr_inject.cpp; then
         ok "dlss: the injector still prints $f"
     else
@@ -1628,6 +1628,10 @@ if python3 tools/score_run.py /tmp/census-dl-ok.log 2>&1 | grep -qE "^  - .*(DLS
 else
     ok "dlss: both eyes -> no FAIL"
 fi
+# Since take 432a the line has no "auto=" (asking X4 for it crashed it).
+{ cat /tmp/census-dl-base.log; echo "$dlpat"; printf '[  999960.000] inject  dlss: X4 says supported=1 on=1 mode=balanced; features 1, evaluated left 900 right 900, right skipped 0, right failed 0\n'; } > /tmp/census-dl-noauto.log
+want "dlss: the line without auto -> read" /tmp/census-dl-noauto.log dlss "X4 says supported=1 on=1 mode=balanced; 1 feature pair(s), evaluated 900 left 900 right"
+want "dlss: ...and the old line with it still" /tmp/census-dl-ok.log dlss "mode=quality auto=dlaa; 1 feature pair(s)"
 want "dlss: asked, no PATCHED line -> FAIL" /tmp/census-dl-base.log "FAIL|  - " "but no PATCHED line"
 { cat /tmp/census-dl-base.log; echo '[  999950.000] inject  dlss: patch REFUSED — no free page within rel32 reach of the DLSS calls. X4 upscales the left eye only, and the right eye'"'"'s scene is black.'; } > /tmp/census-dl-ref.log
 want "dlss: refused -> FAIL" /tmp/census-dl-ref.log "FAIL|  - " "its patch was refused"

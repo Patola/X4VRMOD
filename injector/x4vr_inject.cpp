@@ -4750,6 +4750,10 @@ static void fullscreen_menu_tick() {
     if (!cursor_canvas_auto() && !headlook_external_asked())
         return;
     using Fn = bool (*)(bool, const char *);
+    // X4CALLEE-OK: IsFullscreenMenuDisplayed 0x1a42350 — X4's printf-style
+    // logger, handed the global at 0x3daa780 (by stderr): reached only with
+    // (false, nullptr). Called with (true, ...), as here, X4 tail-jumps to
+    // 0x117f7c0, a list walk that stops at its static head (2026-11-14).
     static Fn fn = [] {
         Fn f = (Fn)dlsym(RTLD_DEFAULT, "IsFullscreenMenuDisplayed");
         X4VR_LOG("ui: IsFullscreenMenuDisplayed %s",
@@ -5061,15 +5065,20 @@ static void dlss_report() {
     // here and only ever here, they read X4's settings object at a fixed
     // address (0x4533ae0, and 0x4534940's mode table) and nothing X4 NULLs at
     // shutdown; read from the 9.00 disassembly, 2026-11-08.
+    //
+    // Not GetDLSSAutoMode, which said which mode "auto" picked: it reads through
+    // the global at 0x4535b98 two calls down, unchecked, and that is NULL until
+    // X4 has set DLSS up. Asked on X4's first event pump, it crashed an RTX 3070
+    // straight to the desktop (take 432a, 2026-11-14), and only luck had let the
+    // runs before ask later. tests/run-x4-call-guards.sh now looks one call down.
     static auto supported = (bool (*)())dlsym(RTLD_DEFAULT, "IsDLSSSupported");
     static auto on = (bool (*)(bool))dlsym(RTLD_DEFAULT, "GetDLSSOption");
     static auto mode = (const char *(*)(bool))dlsym(RTLD_DEFAULT, "GetDLSSModeOption");
-    static auto automode = (const char *(*)())dlsym(RTLD_DEFAULT, "GetDLSSAutoMode");
     const x4vr::ngx::Stats &s = g_ngx.stats;
-    X4VR_LOG("dlss: X4 says supported=%d on=%d mode=%s auto=%s; features %llu, evaluated left "
+    X4VR_LOG("dlss: X4 says supported=%d on=%d mode=%s; features %llu, evaluated left "
              "%llu right %llu, right skipped %llu, right failed %llu",
              supported && supported() ? 1 : 0, on && on(false) ? 1 : 0,
-             mode ? mode(false) : "?", automode ? automode() : "?",
+             mode ? mode(false) : "?",
              (unsigned long long)s.features.load(), (unsigned long long)s.left.load(),
              (unsigned long long)s.right.load(),
              (unsigned long long)(s.no_feature.load() + s.no_view.load()),

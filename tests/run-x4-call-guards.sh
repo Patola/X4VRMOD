@@ -19,6 +19,16 @@
 #     operand `(%reg)` first = UNGUARDED.
 #   every UNGUARDED function must carry `X4GUARD: <name>` in the injector.
 #
+# **And one call down.** GetDLSSAutoMode loads nothing itself: the function it
+# calls loads the global at 0x4535b98 into %rdi and passes it to one that reads
+# through it, unchecked. NULL until X4 sets DLSS up, it crashed take 432a on X4's
+# first event pump (2026-11-14), and this test had passed it ("loads no global
+# pointer in its prologue"). So each function's direct calls (not the PLT's) are
+# classified too, from the callee's address to its first `ret`: a global loaded
+# and handed on is UNDECIDED, which is unsafe. A callee read and found safe for
+# the arguments the injector passes is named in the injector as
+# `X4CALLEE-OK: <name> <callee address> — <why>`.
+#
 # Controls, so it cannot pass by classifying nothing: IsInPanelMode must come
 # out UNGUARDED and IsExternalViewActive guarded.
 set -uo pipefail
@@ -141,6 +151,30 @@ c=$(classify GetCurrentGameTime)
 [ "$c" = "NOLOAD" ] && ok "control: GetCurrentGameTime ends before its neighbour's load" \
     || bad "control: GetCurrentGameTime classified '$c', expected NOLOAD"
 
+# callees <name>: the addresses of its direct calls, inside its own bytes.
+callees() {
+    local name=$1 addr size
+    read -r addr size < <(nm -D -S --defined-only "$X4" |
+        awk -v n="$name" '$4==n{print $1, $2}')
+    [ -n "$addr" ] && [ -n "$size" ] || return
+    objdump -d --no-show-raw-insn --start-address=0x"$addr" \
+        --stop-address=$(printf '0x%x' $((0x$addr + 0x$size))) "$X4" |
+        grep -E 'call +[0-9a-f]+ <' | grep -v '@plt>' | grep -oE 'call +[0-9a-f]+' |
+        awk '{print $2}' | sort -u
+}
+# classify_at <address>: from there to its first ret, 0x300 bytes at most.
+classify_at() {
+    objdump -d --no-show-raw-insn --start-address=0x"$1" \
+        --stop-address=$(printf '0x%x' $((0x$1 + 0x300))) "$X4" |
+        awk '{print} /\tret/{exit}' | classify_listing
+}
+# The crash's own path must come out unsafe, called or not.
+c=$(classify_at 20130e0)
+[ "$c" = "UNDECIDED:rdi" ] && ok "control: GetDLSSAutoMode's callee hands the global on unchecked (UNDECIDED:rdi)" \
+    || bad "control: GetDLSSAutoMode's callee 0x20130e0 classified '$c', expected UNDECIDED:rdi"
+callees GetDLSSAutoMode | grep -qx 20130e0 && ok "control: ...and is found as GetDLSSAutoMode's callee" \
+    || bad "control: 0x20130e0 not found among GetDLSSAutoMode's calls"
+
 names=$(grep -o -E 'dlsym\(RTLD_DEFAULT, "[A-Za-z0-9_]+"\)' "$SRC" |
         sed -E 's/.*"([^"]+)".*/\1/' | sort -u)
 [ -n "$names" ] || bad "found no dlsym(RTLD_DEFAULT, ...) calls in $SRC"
@@ -157,6 +191,17 @@ for n in $names; do
         NOLOAD)  ok "$n loads no global pointer in its prologue" ;;
         *)       bad "$n: $c" ;;
     esac
+    for t in $(callees "$n"); do
+        c=$(classify_at "$t")
+        case "$c" in
+            UNGUARDED:*|UNDECIDED:*)
+                if grep -q "X4CALLEE-OK: $n 0x$t\b" "$SRC"; then
+                    ok "$n's call to 0x$t: $c, read and found safe for our arguments (X4CALLEE-OK)"
+                else
+                    bad "$n's call to 0x$t: $c — a global is read unchecked one call down, and there is no X4CALLEE-OK; it can crash X4"
+                fi ;;
+        esac
+    done
 done
 
 echo

@@ -4874,7 +4874,8 @@ def main(path):
     dl_mode = re.search(r"\bX4VR_UPSCALE=(dlss_\w+)", run or "")
     dl_patched = "dlss: PATCHED" in text
     dl_refused = re.search(r"dlss: patch REFUSED — (.*?)\. X4 upscales", text)
-    dl_rep = re.findall(r"dlss: X4 says supported=(\d) on=(\d) mode=(\S+) auto=(\S*); "
+    # "auto=" is in logs until 2026-11-14, when asking X4 for it crashed take 432a.
+    dl_rep = re.findall(r"dlss: X4 says supported=(\d) on=(\d) mode=(\S+?)(?: auto=(\S*))?; "
                         r"features (\d+), evaluated left (\d+) right (\d+), right "
                         r"skipped (\d+), right failed (\d+)", text)
     if dl_mode or dl_patched or dl_refused:
@@ -4890,7 +4891,8 @@ def main(path):
             fails.append(f"X4VR_UPSCALE={dl_mode.group(1)} but no PATCHED line")
         if dl_rep:
             sup, on_, mode_, auto_, feats, left, right, skip, bad_ = dl_rep[-1]
-            print(f"dlss    X4 says supported={sup} on={on_} mode={mode_} auto={auto_}; "
+            print(f"dlss    X4 says supported={sup} on={on_} mode={mode_}"
+                  f"{' auto=' + auto_ if auto_ else ''}; "
                   f"{feats} feature pair(s), evaluated {left} left {right} right, "
                   f"{skip} right skipped, {bad_} right failed")
             if dl_mode and sup != "1":
