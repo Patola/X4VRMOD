@@ -2730,7 +2730,7 @@ def main(path):
         rot_on = [r for r in live if r[9]]
         rot_off = [r for r in live if r[9] == 0]
         modes = sorted({r[9] for r in rot_on})
-        msrc = "+".join({1: "at-submit", 2: "at-draw"}.get(m, f"mode{m}")
+        msrc = "+".join({1: "at-submit", 2: "at-draw", 3: "paired"}.get(m, f"mode{m}")
                         for m in modes)
         if rot_on or rot_off:
             print(f"poselag  arm: {len(rot_on)} frame(s) declared X4's OWN "
@@ -5119,6 +5119,27 @@ def main(path):
     rt_kinds = re.findall(r"runtime: (vk\w+), made by the runtime, goes to the driver", text)
     if rt_kinds:
         print(f"runtime  passed through untouched: {', '.join(rt_kinds)}")
+
+    # --- declaration pairing (declpair) -------------------------------------
+    #
+    # Each headset frame declared with what its image was drawn with, instead
+    # of the newest camera; with X4VR_DECLARE_PAIRED_AB the two alternate, and
+    # Patola's eye says whether the cockpit's jitter on a Steam Frame came and
+    # went with them (2026-11-15). The last line says how often, and by how
+    # much, the newest camera was not the submitted image's.
+    dp_phases = re.findall(r"\[\s*([\d.]+)\]\s+layer\s+declpair: phase #(\d+) — (PAIRED|CONTROL)", text)
+    dp_stat = re.findall(r"declpair \((?:periodic|final)\): (\d+) headset frame\(s\) compared, (\d+) "
+                         r"\(([\d.]+)%\) where the newest camera was not the submitted image's, "
+                         r"mean ([\d.]+) deg, max ([\d.]+) deg", text)
+    if dp_phases:
+        t0 = float(dp_phases[0][0])
+        print(f"declpair {len(dp_phases)} phase(s): " + ", ".join(
+            f"#{n} {k} at +{float(t) - t0:.0f} s" for t, n, k in dp_phases[:12])
+              + (" ..." if len(dp_phases) > 12 else ""))
+    if dp_stat:
+        n_, d_, pct, mean, mx = dp_stat[-1]
+        print(f"declpair the newest camera was not the submitted image's in {d_} of {n_} "
+              f"frame(s) ({pct}%), mean {mean} deg, max {mx} deg")
 
     # --- the stall watchdog ------------------------------------------------
     #

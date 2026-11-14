@@ -2265,6 +2265,12 @@ else
     ok "mv: no fallback -> no FAIL"
 fi
 
+# Declaration pairing: the phases of an A/B and how far the two cameras were apart.
+plant /tmp/census-declpair.log '[  999970.000] layer   declpair: phase #1 — CONTROL, the newest values, as before (X4VR_DECLARE_PAIRED_AB=25 s)' '[  999995.000] layer   declpair: phase #2 — PAIRED, each image declared with what it was drawn with (X4VR_DECLARE_PAIRED_AB=25 s)' '[  999999.000] layer   declpair (final): 2000 headset frame(s) compared, 640 (32.0%) where the newest camera was not the submitted image'"'"'s, mean 0.120 deg, max 3.40 deg'
+want "declpair: phases listed" /tmp/census-declpair.log declpair "2 phase(s): #1 CONTROL at +0 s, #2 PAIRED at +25 s"
+want "declpair: the gap read" /tmp/census-declpair.log declpair "in 640 of 2000 frame(s) (32.0%), mean 0.120 deg, max 3.40 deg"
+absent "declpair: none -> silent" "$BASE" declpair
+
 # The stall watchdog: a stall that ended, and one the run ended in.
 st1='[  999950.000] layer   stall: no frame for the headset for 2.0 s — the XR thread is inside xrWaitFrame and xrBeginFrame for 2.0 s; X4'"'"'s present thread is inside vkQueuePresentKHR for 2.1 s; X4 last presented 2.1 s ago'
 st2='[  999955.000] layer   stall: over — the XR thread sent the headset a frame again, 3.5 s after the one before'

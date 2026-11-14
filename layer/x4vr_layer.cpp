@@ -604,6 +604,72 @@ static void camstamp_at_first_pass() {
     g_camstamp.seq.fetch_add(1, std::memory_order_release);
 }
 
+// **Declaration pairing (declpair).** What a headset frame declares has to be
+// what ITS image was drawn with. The XR thread used to read the newest values:
+// g_camstamp, overwritten by the NEXT frame's first render pass soon after X4
+// presents, and the servo's angle, written at the next tick. So at 90 Hz against
+// X4's 47-63 fps the image just released was mostly declared with the next
+// frame's camera, and an image submitted twice could carry two poses, a jump and
+// back whenever the camera moved: the jitter a Steam Frame showed in the
+// cockpit, on foot and in F2-F4, where head-look moves X4's camera, and never in
+// the map, where the camera holds still (2026-11-15). This captures this frame's
+// inputs at the top of its present, before the frame bump lets the next first
+// pass re-stamp; vr_finish_blit files them with the release, and the XR thread
+// looks up the ones of the image it submits.
+struct PresentDecl {
+    float cam_yaw = 0.0f, cam_pitch = 0.0f; // X4's camera at this frame's first pass
+    bool cam_ok = false;
+    x4vr::CamSnap snap;                     // head-look's angle (on foot, external views)
+    bool snap_ok = false;
+};
+static PresentDecl g_present_decl; // X4's present thread only
+
+const x4vr::Shared *shared_state();
+
+static void declpair_capture() {
+    PresentDecl d;
+    const uint32_t f = g_camstamp.frame.load(std::memory_order_relaxed);
+    if (g_camstamp.seq.load(std::memory_order_acquire) &&
+        g_camstamp.stamped.load(std::memory_order_relaxed) == f) {
+        d.cam_yaw = g_camstamp.yaw.load(std::memory_order_relaxed);
+        d.cam_pitch = g_camstamp.pitch.load(std::memory_order_relaxed);
+        d.cam_ok = true;
+    }
+    if (const x4vr::Shared *sh = shared_state()) {
+        x4vr::share_read_camera(sh, &d.snap);
+        d.snap_ok = true;
+    }
+    g_present_decl = d;
+}
+
+// X4VR_DECLARE_PAIRED=1 declares the paired inputs; X4VR_DECLARE_PAIRED_AB=<s>
+// alternates the newest (CONTROL, first) and the paired every <s> seconds, for
+// an eye that judges a change within a run (take 279's way). Each phase change
+// is logged; so, whatever the phase, is how far apart the two would have been.
+static bool declpair_on() {
+    static const bool always = x4vr::env_on("X4VR_DECLARE_PAIRED", false);
+    static const double ab = [] {
+        const char *e = getenv("X4VR_DECLARE_PAIRED_AB");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    if (ab <= 0.0)
+        return always;
+    static double t0 = 0.0;
+    static long phase = -1;
+    const double now = mono_now();
+    if (t0 == 0.0)
+        t0 = now;
+    const long p = (long)((now - t0) / ab);
+    if (p != phase) {
+        phase = p;
+        X4VR_LOG("declpair: phase #%ld — %s (X4VR_DECLARE_PAIRED_AB=%g s)", p + 1,
+                 p % 2 ? "PAIRED, each image declared with what it was drawn with"
+                       : "CONTROL, the newest values, as before",
+                 ab);
+    }
+    return p % 2 == 1;
+}
+
 // Task #77: turn the eye disparity by the head's roll.
 //
 // **ON by default since take 221**, which is the condition the previous
@@ -13930,6 +13996,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // it would otherwise never get one, and "no session" would be reported for
     // a reason that has nothing to do with the runtime.
     vr_start_session_deferred();
+    // declpair: this frame's declaration inputs, before the bump below lets the
+    // next frame's first render pass overwrite the stamp.
+    declpair_capture();
     // #75: the frame boundary the camstamp counts against. Bumped here so the
     // NEXT frame's first render pass takes a fresh sample.
     g_camstamp.frame.fetch_add(1, std::memory_order_relaxed);
@@ -14695,6 +14764,15 @@ struct VrState {
     std::atomic<bool> sc_ready{false};
     std::atomic<bool> sc_failed{false}; // tried once and could not; do not retry
     std::atomic<uint64_t> released{0};  // images handed to the runtime
+    // declpair: the declaration inputs of each released image, by release
+    // count, two deep (vr_finish_blit writes, the XR thread reads).
+    std::mutex pair_mu;
+    PresentDecl pair[2];
+    // How far the newest camera and the submitted image's were apart, whatever
+    // the phase: the error pairing removes.
+    uint64_t pair_frames = 0, pair_differ = 0;
+    float pair_max_deg = 0.0f;
+    double pair_sum_deg = 0.0;
     std::atomic<uint64_t> acquire_fail{0};
     std::atomic<uint64_t> submitted{0}; // frames that carried a projection layer
     // Set once the VR thread has completed a frame, cleared when the session
@@ -15287,6 +15365,13 @@ void vr_finish_blit() {
     const x4vr::xr::InRuntime in_runtime; // as in vr_begin_blit
     std::lock_guard<std::mutex> lock(g_vrs.sc_mu);
     const uint32_t tc = g_trace_copies.fetch_add(1, std::memory_order_relaxed);
+    // declpair: filed under the release count this release will make, before
+    // the release, so an XR frame that sees the new count finds its inputs.
+    {
+        std::lock_guard<std::mutex> pl(g_vrs.pair_mu);
+        g_vrs.pair[(g_vrs.released.load(std::memory_order_relaxed) + 1) & 1] =
+            g_present_decl;
+    }
     if (tc < kTraceCopies)
         X4VR_LOG("trace: X4's copy %u: calling xrReleaseSwapchainImage", tc + 1);
     {
@@ -15902,7 +15987,40 @@ void vr_thread() {
                     was = ext_head;
                 }
             }
-            if (declare_rendered_rot() && !on_foot && !ext_head) {
+            // declpair: the inputs filed with the image this frame submits,
+            // and the phase. Read whatever the phase, so the log can say how far
+            // the newest values and these were apart.
+            const bool paired = declpair_on();
+            PresentDecl pd;
+            const uint64_t pair_rel = g_vrs.released.load(std::memory_order_acquire);
+            {
+                std::lock_guard<std::mutex> pl(g_vrs.pair_mu);
+                pd = g_vrs.pair[pair_rel & 1];
+            }
+            if (declare_rendered_rot() && !on_foot && !ext_head && pd.cam_ok &&
+                g_camstamp.seq.load(std::memory_order_acquire)) {
+                const float ny = g_camstamp.yaw.load(std::memory_order_relaxed);
+                const float np = g_camstamp.pitch.load(std::memory_order_relaxed);
+                float dy = ny - pd.cam_yaw;
+                while (dy > 180.0f)
+                    dy -= 360.0f;
+                while (dy < -180.0f)
+                    dy += 360.0f;
+                const float dd = std::sqrt(dy * dy + (np - pd.cam_pitch) * (np - pd.cam_pitch));
+                std::lock_guard<std::mutex> lock(g_vrs.mu);
+                g_vrs.pair_frames++;
+                if (dd > 0.01f)
+                    g_vrs.pair_differ++;
+                g_vrs.pair_sum_deg += dd;
+                if (dd > g_vrs.pair_max_deg)
+                    g_vrs.pair_max_deg = dd;
+            }
+            if (declare_rendered_rot() && !on_foot && !ext_head && paired && pd.cam_ok) {
+                now_yaw = pd.cam_yaw;
+                now_pitch = pd.cam_pitch;
+                now_ok = true;
+                rot_used = 3;
+            } else if (declare_rendered_rot() && !on_foot && !ext_head) {
                 if (declare_rendered_rot_mode() == 2) {
                     // The camera the draws were actually recorded against.
                     // Only usable once a frame has been stamped -- before the
@@ -16012,6 +16130,11 @@ void vr_thread() {
                         if (now_ok) {
                             decl_yaw = now_yaw;
                             decl_pitch = now_pitch;
+                        } else if (paired && pd.snap_ok && pd.snap.valid) {
+                            // On foot and in external views: head-look's angle
+                            // as it was when this image was drawn.
+                            decl_yaw = pd.snap.yaw_deg;
+                            decl_pitch = pd.snap.pitch_deg;
                         } else {
                             decl_yaw = snap.yaw_deg;
                             decl_pitch = snap.pitch_deg;
@@ -17017,6 +17140,16 @@ void vr_report(const char *when) {
     uint64_t blits = 0, refused = 0;
     g_sbs.vr_counts(&blits, &refused);
     std::lock_guard<std::mutex> lock(g_vrs.mu);
+    // declpair: how far the newest camera stood from the submitted image's, in
+    // whichever phase. The error pairing removes, counted where it can act:
+    // head-look moving X4's camera in the cockpit.
+    if (g_vrs.pair_frames)
+        X4VR_LOG("declpair (%s): %llu headset frame(s) compared, %llu (%.1f%%) where the "
+                 "newest camera was not the submitted image's, mean %.3f deg, max %.2f deg",
+                 when, (unsigned long long)g_vrs.pair_frames,
+                 (unsigned long long)g_vrs.pair_differ,
+                 100.0 * (double)g_vrs.pair_differ / (double)g_vrs.pair_frames,
+                 g_vrs.pair_sum_deg / (double)g_vrs.pair_frames, (double)g_vrs.pair_max_deg);
     X4VR_LOG("vr summary (%s): runtime=%s session=%d focused=%d frames=%llu "
              "located=%llu submitted=%llu span=%.4f,%.4f,%.4f",
              when, g_vrs.rt.ok() ? g_vrs.rt.runtime_name : "none",
