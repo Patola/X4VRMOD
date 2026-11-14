@@ -5097,6 +5097,21 @@ def main(path):
         else:
             print(f"trace    the session's first {traced} traced call(s) all returned")
 
+    # --- multiview fallbacks, and the runtime's own render passes ----------
+    #
+    # A FALLBACK is a view-masked pass with a single-layer attachment: an invalid
+    # framebuffer, whose second view writes past the image. None in 91 takes up
+    # to 429; on an RTX 3070 under SteamVR it was the runtime's own pass, and the
+    # GPU faulted on it (Xid 31, GPCCLIENT_PROP, 2026-11-14).
+    fb = re.findall(r"mv: FALLBACK rp #(\d+) attachment (\d+) — ([^;]+);", text)
+    if fb:
+        fails.append(f"{len(fb)} view-masked pass(es) had a single-layer attachment "
+                     f"(mv: FALLBACK, first: {fb[0][2]}): an invalid framebuffer, which "
+                     f"faults NVIDIA's GPU")
+    rt_passes = len(re.findall(r"mv: a render pass made by the runtime", text))
+    if rt_passes:
+        print(f"mv       {rt_passes} render pass(es) made by the runtime, left with no view mask")
+
     # --- the stall watchdog ------------------------------------------------
     #
     # When the headset gets no frame for 2 s, the layer's watchdog says which

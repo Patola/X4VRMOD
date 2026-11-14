@@ -54,6 +54,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -717,6 +718,31 @@ struct InRuntime {
     InRuntime &operator=(const InRuntime &) = delete;
 };
 
+// The runtime's queue, one thread at a time. XR_KHR_vulkan_enable lets the runtime
+// use the VkQueue of the graphics binding inside xrBeginFrame, xrEndFrame,
+// xrAcquireSwapchainImage and xrReleaseSwapchainImage, and leaves keeping those
+// calls apart to the application, as Vulkan leaves a queue's submissions. A program
+// that makes them from more than one thread sets this mutex, and each of those
+// four calls then holds it; nothing else takes it, so no other lock is ever taken
+// under it but the runtime's own.
+inline std::mutex *&queue_mutex() {
+    static std::mutex *m = nullptr;
+    return m;
+}
+struct QueueTurn {
+    std::mutex *m;
+    QueueTurn() : m(queue_mutex()) {
+        if (m)
+            m->lock();
+    }
+    ~QueueTurn() {
+        if (m)
+            m->unlock();
+    }
+    QueueTurn(const QueueTurn &) = delete;
+    QueueTurn &operator=(const QueueTurn &) = delete;
+};
+
 inline XrResult session_create(Session &s, Runtime &rt, VkInstance vk,
                                VkPhysicalDevice phys, VkDevice dev,
                                uint32_t queue_family, uint32_t queue_index) {
@@ -856,7 +882,11 @@ inline bool frame_begin(Session &s, bool *should_render) {
     }
     XrFrameBeginInfo fbi{};
     fbi.type = XR_TYPE_FRAME_BEGIN_INFO;
-    const XrResult r = s.rt->api.BeginFrame(s.session, &fbi);
+    XrResult r;
+    {
+        const QueueTurn turn; // not across xrWaitFrame, which only waits
+        r = s.rt->api.BeginFrame(s.session, &fbi);
+    }
     // XR_FRAME_DISCARDED is a success code: the frame was begun.
     if (r != XR_SUCCESS && r != XR_FRAME_DISCARDED)
         return false;
@@ -897,6 +927,7 @@ inline XrResult frame_end(Session &s, const XrCompositionLayerBaseHeader *const 
     fei.environmentBlendMode = s.rt->blend;
     fei.layerCount = layer_count;
     fei.layers = layers;
+    const QueueTurn turn;
     return s.rt->api.EndFrame(s.session, &fei);
 }
 
@@ -1018,8 +1049,11 @@ inline bool swapchain_acquire_timeout(Swapchain &sc, uint32_t *index,
         *owed = false;
     XrSwapchainImageAcquireInfo ai{};
     ai.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO;
-    if (sc.s->rt->api.AcquireSwapchainImage(sc.handle, &ai, index) != XR_SUCCESS)
-        return false;
+    {
+        const QueueTurn turn; // the acquire, not the wait after it
+        if (sc.s->rt->api.AcquireSwapchainImage(sc.handle, &ai, index) != XR_SUCCESS)
+            return false;
+    }
     if (owed)
         *owed = true;
     XrSwapchainImageWaitInfo wi{};
@@ -1031,8 +1065,11 @@ inline bool swapchain_acquire_timeout(Swapchain &sc, uint32_t *index,
 inline bool swapchain_acquire(Swapchain &sc, uint32_t *index) {
     XrSwapchainImageAcquireInfo ai{};
     ai.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO;
-    if (sc.s->rt->api.AcquireSwapchainImage(sc.handle, &ai, index) != XR_SUCCESS)
-        return false;
+    {
+        const QueueTurn turn;
+        if (sc.s->rt->api.AcquireSwapchainImage(sc.handle, &ai, index) != XR_SUCCESS)
+            return false;
+    }
     XrSwapchainImageWaitInfo wi{};
     wi.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO;
     wi.timeout = XR_INFINITE_DURATION;
@@ -1042,6 +1079,7 @@ inline bool swapchain_acquire(Swapchain &sc, uint32_t *index) {
 inline void swapchain_release(Swapchain &sc) {
     XrSwapchainImageReleaseInfo ri{};
     ri.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO;
+    const QueueTurn turn;
     sc.s->rt->api.ReleaseSwapchainImage(sc.handle, &ri);
 }
 

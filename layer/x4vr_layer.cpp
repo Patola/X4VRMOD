@@ -4290,6 +4290,22 @@ void bindless_report(const char *when) {
     }
 }
 
+// A render pass the runtime makes, on a thread the layer is calling it from: left
+// as it asked, never given the two eyes' view mask. On an RTX 3070 under SteamVR
+// (2026-11-14), the runtime's pass over the eye-sized images it makes with the
+// first eye frame was taken for one of X4's per-eye passes; those images being made
+// single-layer as asked (runtime_image), each framebuffer fell back, and drawing
+// both views into one layer faulted in the GPU's render-target writes (Xid 31,
+// GPCCLIENT_PROP). Logged once per pass, which is a few.
+bool runtime_pass(uint32_t attachments) {
+    if (!x4vr::xr::in_runtime())
+        return false;
+    X4VR_LOG("mv: a render pass made by the runtime (%u attachment(s)) — left as it asked, "
+             "with no view mask",
+             attachments);
+    return true;
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
     VkDevice device, const VkRenderPassCreateInfo *ci,
     const VkAllocationCallbacks *ac, VkRenderPass *out) {
@@ -4300,7 +4316,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass(
     }
     // Every subpass shares one mask: X4's passes are all single-subpass, and
     // the spec forbids mixing zero and non-zero masks within a render pass.
-    const bool per_eye = pass_is_per_eye(ci);
+    const bool per_eye = !runtime_pass(ci->attachmentCount) && pass_is_per_eye(ci);
     std::vector<uint32_t> masks;
     uint32_t corr = kViewMask;
     VkRenderPassMultiviewCreateInfo mv{};
@@ -4348,7 +4364,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass2(
         return VK_ERROR_EXTENSION_NOT_PRESENT;
     // RenderPass2 carries the mask on each subpass instead of in a pNext
     // struct, so the subpass array has to be copied to set it.
-    const bool per_eye = pass_is_per_eye(ci);
+    const bool per_eye = !runtime_pass(ci->attachmentCount) && pass_is_per_eye(ci);
     std::vector<VkSubpassDescription2> subs;
     VkRenderPassCreateInfo2 mod = *ci;
     if (per_eye) {
@@ -14952,6 +14968,8 @@ static bool loading_panel_build() {
         const bool up = g_loading.upload(
             g_vrs.load_sc.images[idx], iw, ih, px, g_vrs.queue_family, g_vrs.queue_index,
             [](VkQueue q, const VkSubmitInfo &si, VkFence f) {
+                // The runtime's own queue: its turn, as for the runtime's calls.
+                const x4vr::xr::QueueTurn turn;
                 VrQueueLock qlock; // the runtime's queue may be X4's (#36)
                 return g_loading_fns.QueueSubmit(q, 1, &si, f);
             },
@@ -16841,6 +16859,16 @@ void vr_session_thread() {
                  "would abort inside the runtime, as it did in take 111.");
         return;
     }
+    // The XR thread and X4's present thread both call the runtime: its queue is
+    // theirs one at a time. On a GPU with a spare graphics queue (NVIDIA's) the
+    // runtime has a queue of its own and nothing else kept the two apart; an RTX
+    // 3070 and an RTX 5090 under SteamVR then froze, the 3070's kernel naming a
+    // corrupted command stream in X4 (Xid 32, after an Xid 31 command-fetch
+    // fault) with the XR thread inside xrEndFrame and X4's present thread inside
+    // xrReleaseSwapchainImage (2026-11-14). Where the runtime shares X4's queue
+    // (AMD's), VrQueueLock already kept the submissions apart, and still does.
+    static std::mutex runtime_queue_mu;
+    x4vr::xr::queue_mutex() = &runtime_queue_mu;
     const XrResult r =
         x4vr::xr::session_create(g_vrs.session, g_vrs.rt, g_vrs.vk, want,
                                  g_vrs.dev, g_vrs.queue_family,

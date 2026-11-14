@@ -2247,6 +2247,17 @@ want "trace: xrEndFrame never returned -> FAIL names it" /tmp/census-trace-hung.
 want "trace: ...and the release on X4's thread" /tmp/census-trace-hung.log "FAIL|  - " "a call into the runtime never returned: xrReleaseSwapchainImage (X4's copy 1)"
 absent "trace: none -> silent" "$BASE" trace
 
+# A view-masked pass with a single-layer attachment, and the runtime's own passes.
+plant /tmp/census-fallback.log '[  999960.000] layer   mv: FALLBACK rp #4294967295 attachment 0 — backing image is single-layer; pass is view-masked but this attachment cannot be doubled'
+want "mv: a fallback -> FAIL" /tmp/census-fallback.log "FAIL|  - " "1 view-masked pass(es) had a single-layer attachment (mv: FALLBACK, first: backing image is single-layer)"
+plant /tmp/census-rtpass.log '[  999960.000] layer   mv: a render pass made by the runtime (1 attachment(s)) — left as it asked, with no view mask'
+want "mv: the runtime's passes -> counted" /tmp/census-rtpass.log mv "1 render pass(es) made by the runtime, left with no view mask"
+if python3 tools/score_run.py "$BASE" 2>&1 | grep -qE "^(FAIL|  - ) *[0-9]+ view-masked pass"; then
+    bad "mv: no fallback -> FAILs"
+else
+    ok "mv: no fallback -> no FAIL"
+fi
+
 # The stall watchdog: a stall that ended, and one the run ended in.
 st1='[  999950.000] layer   stall: no frame for the headset for 2.0 s — the XR thread is inside xrWaitFrame and xrBeginFrame for 2.0 s; X4'"'"'s present thread is inside vkQueuePresentKHR for 2.1 s; X4 last presented 2.1 s ago'
 st2='[  999955.000] layer   stall: over — the XR thread sent the headset a frame again, 3.5 s after the one before'

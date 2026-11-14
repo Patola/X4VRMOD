@@ -235,20 +235,32 @@ std::string gpu_kernel_lines(const std::string &log, size_t max) {
     return out;
 }
 
-// From journald, the last day; dmesg where it isn't readable.
+// From journald, the last day; dmesg where it isn't readable. A cold journal can
+// take a while: one of two reports a few minutes apart on the same laptop got
+// nothing from it in 20 s (2026-11-14), so it gets a minute, and a failure says
+// which of the two failed and how.
+static std::string why_not(const char *what, const ChildResult &c) {
+    return std::string(what) + (!c.started    ? " didn't start"
+                                : c.timed_out ? " took more than a minute"
+                                : c.exit_code ? " exited with " + std::to_string(c.exit_code)
+                                              : " said nothing");
+}
+
 static std::string kernel_gpu_text(std::string *headline) {
     const ChildResult j = run_child({"journalctl", "-k", "--since", "-24h", "--no-pager",
-                                     "-o", "short-iso"}, 20000);
+                                     "-o", "short-iso"}, 60000);
     std::string from = "journalctl -k, the last day";
-    std::string log = j.started && j.exit_code == 0 ? j.out : "";
+    std::string log = j.started && !j.timed_out && j.exit_code == 0 ? j.out : "";
+    ChildResult d;
     if (log.find('\n') == std::string::npos) {
-        const ChildResult d = run_child({"dmesg", "--ctime"}, 20000);
-        log = d.started && d.exit_code == 0 ? d.out : "";
+        d = run_child({"dmesg", "--ctime"}, 20000);
+        log = d.started && !d.timed_out && d.exit_code == 0 ? d.out : "";
         from = "dmesg, since boot";
     }
     if (log.find('\n') == std::string::npos) {
         *headline = "the kernel's log couldn't be read";
-        return "Neither journalctl -k nor dmesg could be read by this user.\n";
+        return "The kernel's log couldn't be read: " + why_not("journalctl -k", j) + ", and " +
+               why_not("dmesg", d) + ".\n";
     }
     const std::string lines = gpu_kernel_lines(log);
     const size_t n = (size_t)std::count(lines.begin(), lines.end(), '\n');
