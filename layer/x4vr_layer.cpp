@@ -60,6 +60,11 @@
 
 // The build's version (generated/x4vr_version.cpp, from git describe).
 const char *x4vr_build_version();
+#else
+// No runtime to call, so nothing is ever the runtime's.
+namespace x4vr::xr {
+inline bool in_runtime() { return false; }
+}
 #endif
 
 namespace {
@@ -817,6 +822,28 @@ struct CallSpot {
     std::atomic<double> since{0.0};
 };
 CallSpot g_spot_xr, g_spot_x4;
+
+// The runtime's own Vulkan work on X4's device, made on a thread the layer is
+// calling it from (x4vr::xr::InRuntime), goes to the driver as it was asked: no
+// patched shader, no pipeline layout with our set, no swapped pipeline, no
+// mirrored descriptors. Three NVIDIA failures in a row came from the layer taking
+// SteamVR's objects for X4's: its images doubled, its render pass given the view
+// mask, then SteamVR's client crashing inside xrEndFrame as it made the pipeline
+// for X4's eye images (take 432c, RTX 3070, 2026-11-14). Each kind is logged the
+// first time.
+bool runtime_call(const char *what) {
+    if (!x4vr::xr::in_runtime())
+        return false;
+    static std::mutex mu;
+    // Never destroyed (tests/run-no-exit-destructors.sh).
+    static auto &said = x4vr::immortal<std::set<std::string>>();
+    std::lock_guard<std::mutex> lock(mu);
+    if (said.insert(what).second)
+        X4VR_LOG("runtime: %s, made by the runtime, goes to the driver as asked (the first "
+                 "of its kind; the rest unlogged)",
+                 what);
+    return true;
+}
 std::atomic<double> g_last_headset_frame{0.0}, g_last_x4_present{0.0};
 
 struct InCall {
@@ -2605,6 +2632,10 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
     {
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
+    }
+    if (runtime_call("vkUpdateDescriptorSets")) {
+        d->UpdateDescriptorSets(device, writeCount, writes, copyCount, copies);
+        return;
     }
     if (g_bindless_survey && g_active)
         bindless_survey_writes(writeCount, writes);
@@ -4772,6 +4803,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDescriptorSetLayout(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    if (runtime_call("vkCreateDescriptorSetLayout"))
+        return d->CreateDescriptorSetLayout(device, ci, ac, out);
     // Q1: is the array really 53306 descriptors long, or is it declared large
     // in the shader and bound short here? A short binding means the layer would
     // have to widen this layout and the pool behind it -- object surgery, not
@@ -4827,6 +4860,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_AllocateDescriptorSets(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    if (runtime_call("vkAllocateDescriptorSets"))
+        return d->AllocateDescriptorSets(device, ai, out);
     // The other half of Q1. With a VARIABLE binding the layout's count is only
     // a maximum; the real size is chosen here, per set.
     if (g_bindless_survey && ai) {
@@ -4915,6 +4950,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDescriptorUpdateTemplate(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    if (runtime_call("vkCreateDescriptorUpdateTemplate"))
+        return d->CreateDescriptorUpdateTemplate(device, ci, ac, out);
     const VkResult r = d->CreateDescriptorUpdateTemplate(device, ci, ac, out);
     if (r != VK_SUCCESS || !g_bindless_survey || !ci)
         return r;
@@ -4952,6 +4989,10 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSetWithTemplate(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    if (runtime_call("vkUpdateDescriptorSetWithTemplate")) {
+        d->UpdateDescriptorSetWithTemplate(device, set, tmpl, data);
+        return;
+    }
     complog_template(set);
     if (g_bindless_survey) {
         std::lock_guard<std::mutex> dlock(g_desc_mu);
@@ -4970,6 +5011,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImageView(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    if (runtime_call("vkCreateImageView"))
+        return d->CreateImageView(device, ci, ac, out);
     bool doubled = false;
     if (g_active) {
         std::lock_guard<std::mutex> lock(g_img_mu);
@@ -5071,6 +5114,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateFramebuffer(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    if (runtime_call("vkCreateFramebuffer"))
+        return d->CreateFramebuffer(device, ci, ac, out);
     uint32_t serial = UINT32_MAX;
     bool masked = false;
     std::vector<VkImageLayout> finals;
@@ -7845,6 +7890,14 @@ void ffx_dispatch_right(DeviceData *d, VkCommandBuffer cb, uint32_t x, uint32_t 
 VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     VkDevice device, const VkShaderModuleCreateInfo *ci,
     const VkAllocationCallbacks *ac, VkShaderModule *out) {
+    if (runtime_call("vkCreateShaderModule")) {
+        DeviceData *d;
+        {
+            std::lock_guard<std::mutex> lock(g_mu);
+            d = &g_devices.at(dispatch_key(device));
+        }
+        return d->CreateShaderModule(device, ci, ac, out);
+    }
     count_module_stage(ci);
     bool frag_patched = false;
     // X4's FSR pass, created with per-eye table access (take 380).
@@ -8575,6 +8628,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreatePipelineLayout(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    if (runtime_call("vkCreatePipelineLayout"))
+        return d->CreatePipelineLayout(device, ci, ac, out);
     const VkResult r = d->CreatePipelineLayout(device, ci, ac, out);
     if (r == VK_SUCCESS)
         ffx_note_pipeline_layout(ci, *out);
@@ -8882,6 +8937,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    if (runtime_call("vkCreateComputePipelines"))
+        return d->CreateComputePipelines(device, cache, count, ci, ac, out);
 
     // Task #59, same as the graphics path. Compute is included because the
     // head rotation is EYE-INDEPENDENT -- unlike every per-eye correction it
@@ -9021,6 +9078,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    if (runtime_call("vkCreateGraphicsPipelines"))
+        return d->CreateGraphicsPipelines(device, cache, count, ci, ac, out);
 
     // Task #59: every pipeline gets the layout that declares our set, or none
     // of its modules may be patched. `subs` keeps the rewritten create-infos

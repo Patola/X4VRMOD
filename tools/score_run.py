@@ -5113,6 +5113,12 @@ def main(path):
     rt_passes = len(re.findall(r"mv: a render pass made by the runtime", text))
     if rt_passes:
         print(f"mv       {rt_passes} render pass(es) made by the runtime, left with no view mask")
+    # What else the runtime made on X4's device and the layer passed through
+    # untouched: on an RTX 3070 SteamVR made its own pipeline for X4's eye images,
+    # and its client crashed when the layer still treated it as X4's (take 432c).
+    rt_kinds = re.findall(r"runtime: (vk\w+), made by the runtime, goes to the driver", text)
+    if rt_kinds:
+        print(f"runtime  passed through untouched: {', '.join(rt_kinds)}")
 
     # --- the stall watchdog ------------------------------------------------
     #

@@ -2256,6 +2256,9 @@ plant /tmp/census-fallback.log '[  999960.000] layer   mv: FALLBACK rp #42949672
 want "mv: a fallback -> FAIL" /tmp/census-fallback.log "FAIL|  - " "1 view-masked pass(es) had a single-layer attachment (mv: FALLBACK, first: backing image is single-layer)"
 plant /tmp/census-rtpass.log '[  999960.000] layer   mv: a render pass made by the runtime (1 attachment(s)) — left as it asked, with no view mask'
 want "mv: the runtime's passes -> counted" /tmp/census-rtpass.log mv "1 render pass(es) made by the runtime, left with no view mask"
+plant /tmp/census-rtcall.log '[  999960.100] layer   runtime: vkCreateShaderModule, made by the runtime, goes to the driver as asked (the first of its kind; the rest unlogged)' '[  999960.200] layer   runtime: vkCreateGraphicsPipelines, made by the runtime, goes to the driver as asked (the first of its kind; the rest unlogged)'
+want "runtime: its calls passed through -> listed" /tmp/census-rtcall.log runtime "passed through untouched: vkCreateShaderModule, vkCreateGraphicsPipelines"
+absent "runtime: none -> silent" "$BASE" runtime
 if python3 tools/score_run.py "$BASE" 2>&1 | grep -qE "^(FAIL|  - ) *[0-9]+ view-masked pass"; then
     bad "mv: no fallback -> FAILs"
 else
