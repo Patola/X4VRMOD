@@ -20,6 +20,43 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
+## v1.0.0-rc4 — 2026-11-15 — Fourth release candidate: smooth head motion, and NVIDIA under SteamVR
+
+The fourth release candidate for 1.0. Packages call it `1.0.0~rc4` (Arch: `1.0.0rc4`), which
+installs over rc1, rc2 and rc3 as an upgrade and sorts before 1.0.0.
+
+Take the package named for your system: Arch, Ubuntu 24.04, Ubuntu 26.04, Debian 13 or Fedora,
+or the zip for anything else.
+
+* **Head motion is smooth in the cockpit, on foot and in the external views.** About one frame in
+  ten was shown to the headset as if drawn for a newer head position than it was, sometimes by
+  several degrees, so the headset placed it for that newer position and it landed off by the gap.
+  It looked like jitter when turning the head, strongest on a Steam Frame and clearly there on a
+  Quest 3 too. Each frame now carries the head position it was drawn with. The map wasn't
+  affected. `X4VR_DECLARE_PAIRED=0` brings the old behaviour back, for comparison.
+* **NVIDIA cards under SteamVR no longer freeze or crash at the start.** On NVIDIA, X4 and
+  SteamVR's compositor froze together a few seconds after the headset showed the game, or right
+  after the loading picture. The mod was treating some of the VR runtime's own graphics work as
+  X4's: two threads could send work to the runtime's queue at the same time, and the runtime's
+  own images and drawing passes were changed as if they were X4's. All of the runtime's work now
+  goes to the driver as the runtime asked. **Verified on one computer so far** (an RTX 3070
+  laptop with a Steam Frame, under SteamVR); reports from other NVIDIA cards are very welcome.
+* **DLSS has worked in a headset for the first time**, on that same laptop, in both eyes. A crash
+  at the start with DLSS chosen is fixed: the mod asked X4 about DLSS before X4 had started it.
+  **This too is verified on that one computer only**, so far.
+* **Bug reports carry more of what a VR problem needs**: SteamVR's own logs (when SteamVR was
+  used), the list of Vulkan layers that load into every program, and the kernel's messages about
+  the graphics driver, which show whether the GPU itself hung. They're scrubbed like the rest, and
+  "Show the files" lets you read them before sending. When the headset stops getting frames, the
+  mod's log now says where the game is stuck.
+* **The loading picture appears at once under WiVRn**, instead of after a few refused tries.
+
+Known: on an 8 GB card, an eye size of 4000 under SteamVR runs out of video memory and SteamVR
+crashes; choose a smaller eye size there. Once, on the laptop with DLSS, X4 stopped responding
+when quitting from its menu. If that happens to you, stop it with
+`pkill -ABRT -f "X4 Foundations/X4"`, which keeps a record of where it was stuck, and send a
+report.
+
 ## v1.0.0-rc3 — 2026-11-11 — Third release candidate: the help explains VR's own list of extensions
 
 The third release candidate for 1.0. Packages call it `1.0.0~rc3` (Arch: `1.0.0rc3`), which
