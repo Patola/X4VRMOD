@@ -5131,6 +5131,9 @@ def main(path):
     dp_stat = re.findall(r"declpair \((?:periodic|final)\): (\d+) headset frame\(s\) compared, (\d+) "
                          r"\(([\d.]+)%\) where the newest camera was not the submitted image's, "
                          r"mean ([\d.]+) deg, max ([\d.]+) deg", text)
+    dp_mode = re.search(r"declpair: (ON|OFF by request)", text)
+    if dp_mode and not dp_phases:
+        print(f"declpair {'on, the default' if dp_mode.group(1) == 'ON' else 'OFF by request (X4VR_DECLARE_PAIRED=0)'}")
     if dp_phases:
         t0 = float(dp_phases[0][0])
         print(f"declpair {len(dp_phases)} phase(s): " + ", ".join(

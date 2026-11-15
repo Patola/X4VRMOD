@@ -642,18 +642,32 @@ static void declpair_capture() {
     g_present_decl = d;
 }
 
-// X4VR_DECLARE_PAIRED=1 declares the paired inputs; X4VR_DECLARE_PAIRED_AB=<s>
-// alternates the newest (CONTROL, first) and the paired every <s> seconds, for
-// an eye that judges a change within a run (take 279's way). Each phase change
-// is logged; so, whatever the phase, is how far apart the two would have been.
+// **ON by default since take 435**: a Steam Frame's jitter in the cockpit was
+// "VERY clear", and in the PAIRED phases "smooth as butter" (Patola,
+// 2026-11-15); 16% of headset frames had carried a camera up to 2.9 deg off the
+// image's. X4VR_DECLARE_PAIRED=0 restores the newest values;
+// X4VR_DECLARE_PAIRED_AB=<s> alternates the newest (CONTROL, first) and the
+// paired every <s> seconds, for an eye that judges a change within a run (take
+// 279's way). Each phase change is logged; so, whatever the phase, is how far
+// apart the two would have been.
 static bool declpair_on() {
-    static const bool always = x4vr::env_on("X4VR_DECLARE_PAIRED", false);
+    static const bool always = x4vr::env_on("X4VR_DECLARE_PAIRED", true);
     static const double ab = [] {
         const char *e = getenv("X4VR_DECLARE_PAIRED_AB");
         return e && *e ? atof(e) : 0.0;
     }();
-    if (ab <= 0.0)
+    if (ab <= 0.0) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            X4VR_LOG("declpair: %s",
+                     always ? "ON — each image declared with what it was drawn with "
+                              "(X4VR_DECLARE_PAIRED=0 restores the newest values)"
+                            : "OFF by request (X4VR_DECLARE_PAIRED=0) — the newest values, "
+                              "as before take 435");
+        }
         return always;
+    }
     static double t0 = 0.0;
     static long phase = -1;
     const double now = mono_now();

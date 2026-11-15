@@ -2269,6 +2269,8 @@ fi
 plant /tmp/census-declpair.log '[  999970.000] layer   declpair: phase #1 — CONTROL, the newest values, as before (X4VR_DECLARE_PAIRED_AB=25 s)' '[  999995.000] layer   declpair: phase #2 — PAIRED, each image declared with what it was drawn with (X4VR_DECLARE_PAIRED_AB=25 s)' '[  999999.000] layer   declpair (final): 2000 headset frame(s) compared, 640 (32.0%) where the newest camera was not the submitted image'"'"'s, mean 0.120 deg, max 3.40 deg'
 want "declpair: phases listed" /tmp/census-declpair.log declpair "2 phase(s): #1 CONTROL at +0 s, #2 PAIRED at +25 s"
 want "declpair: the gap read" /tmp/census-declpair.log declpair "in 640 of 2000 frame(s) (32.0%), mean 0.120 deg, max 3.40 deg"
+plant /tmp/census-declpair-on.log '[  999970.000] layer   declpair: ON — each image declared with what it was drawn with (X4VR_DECLARE_PAIRED=0 restores the newest values)'
+want "declpair: the default -> said" /tmp/census-declpair-on.log declpair "on, the default"
 absent "declpair: none -> silent" "$BASE" declpair
 
 # The stall watchdog: a stall that ended, and one the run ended in.
