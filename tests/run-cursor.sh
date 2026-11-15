@@ -48,7 +48,9 @@ run "overlay follows an 8 px canvas" \
 
 # Task #40: the canvas is no longer only a translation. Under the off-axis
 # affine it scales too -- 1.2892 in x and 1.1931 in y for the measured Quest 3
-# frusta, the numbers tests/view_math.cpp pins -- and the pointer has to move
+# frusta, the numbers tests/view_math.cpp pins; since #81 the shipped canvas is
+# that times 0.5252, 0.6771 / 0.6266, but any off-centre scale tests the same
+# mapping, so these inputs stand -- and the pointer has to move
 # by the map applied to the HOTSPOT while keeping its own pixel size. A quad
 # that stretched with the map would blur, and one that ignored the scale would
 # sit further from the button the further the pointer is from centre, which is

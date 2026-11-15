@@ -115,25 +115,48 @@ if live_runtime; then
     grep -q 'Use X4VR_OFFAXIS=' "$LOGDIR/rt.log" && ok=1 || ok=0
     say "runtime source: refusal names the way out" "$ok" "explicit angles"
 
-    # Task #40's canvas comes up with it, and on the numbers view_math pins for
-    # these frusta. Asserting the VALUES and not merely the line is what
-    # separates "a canvas was built" from "a canvas was built correctly" --
-    # A_x is the one that would silently be 1.0155 if the screen field were
-    # taken from assumed_proj_sx() instead of X4VR_FOV.
-    ms=$(drive "explicit angles" oa.log X4VR_OFFAXIS="-54,40,44,-55")
+    ms=$(drive "explicit angles" oa-live.log X4VR_OFFAXIS="-54,40,44,-55")
     say "explicit angles: latch is immediate" \
         "$([[ $ms -lt 2000 ]] && echo 1 || echo 0)" "${ms} ms"
-    grep -q "offaxis: target from X4VR_OFFAXIS" "$LOGDIR/oa.log" && ok=1 || ok=0
-    say "explicit angles: the affine is ON" "$ok" "no runtime needed"
-    dis=$(cat "$LOGDIR/oa.log")
-    [[ "$dis" == *"A_x=1.2892 A_y=1.1931"* ]] && ok=1 || ok=0
-    say "explicit angles: canvas A_x/A_y are view_math's" "$ok" "1.2892 / 1.1931"
-    [[ "$dis" == *"eye0 x offset +0.24251 eye1 -0.24251"* ]] && ok=1 || ok=0
-    say "explicit angles: canvas B_x mirrors per eye" "$ok" "+/-0.24251"
 else
     printf 'skip %-42s %s\n' "live runtime cases" \
         "no runtime process (wivrn-server/vrserver/monado-service) — start one to run these"
 fi
+
+# --- explicit angles: the canvas, with or without a runtime -----------------
+#
+# Task #40's canvas comes up with the affine, on the numbers view_math pins for
+# these frusta. Asserting the VALUES and not merely the line is what separates
+# "a canvas was built" from "a canvas was built correctly".
+#
+# These ran only beside a live runtime until 2026-11-15, although the angles
+# need none -- so for two months the suite skipped them, and they kept asking
+# for 1.2892 / 1.1931 after #81 (2026-09-07, on by default since take 268)
+# had scaled the canvas to 0.6771 / 0.6266. The runtime is now held absent, so
+# the result cannot depend on whether a headset happens to be up.
+#
+# Two drives, because #81 hides the mistake this case was written for. The
+# off-axis map alone is ax_num / sx_screen: A_x = 1.2892, which would silently
+# be 1.0155 if the screen field came from assumed_proj_sx() instead of
+# X4VR_FOV. #81 then multiplies by tan(36.87 deg) * sx_screen = 0.75 * 0.70024
+# = 0.5252 (view_math pins it at this field), and sx_screen CANCELS:
+# A_x = ax_num * 0.75 whatever field the screen was taken from. So the
+# default drive checks that #81 is composed onto the canted canvas, and only
+# the X4VR_UI_FOV=0 drive can still see the screen field.
+drive "explicit angles" oa.log X4VR_OFFAXIS="-54,40,44,-55" \
+    XR_RUNTIME_JSON=/nonexistent/runtime.json >/dev/null
+drive "explicit angles, #81 off" oa-raw.log X4VR_OFFAXIS="-54,40,44,-55" \
+    X4VR_UI_FOV=0 XR_RUNTIME_JSON=/nonexistent/runtime.json >/dev/null
+grep -q "offaxis: target from X4VR_OFFAXIS" "$LOGDIR/oa.log" && ok=1 || ok=0
+say "explicit angles: the affine is ON" "$ok" "no runtime needed"
+raw=$(cat "$LOGDIR/oa-raw.log")
+[[ "$raw" == *"A_x=1.2892 A_y=1.1931"* ]] && ok=1 || ok=0
+say "explicit angles: off-axis A_x/A_y (#81 off)" "$ok" "1.2892 / 1.1931"
+dis=$(cat "$LOGDIR/oa.log")
+[[ "$dis" == *"A_x=0.6771 A_y=0.6266"* ]] && ok=1 || ok=0
+say "explicit angles: #81 composed onto them" "$ok" "x 0.5252 = 0.6771 / 0.6266"
+[[ "$dis" == *"eye0 x offset +0.24251 eye1 -0.24251"* ]] && ok=1 || ok=0
+say "explicit angles: canvas B_x mirrors per eye" "$ok" "+/-0.24251"
 
 # --- knob independence: #22/#39 must not ride on the bindless gate ----------
 #
