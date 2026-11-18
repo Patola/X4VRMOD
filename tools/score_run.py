@@ -4499,6 +4499,32 @@ def main(path):
                       f"({len(by['CONTROL'])} window(s)), FIX {mf:.2f} ms "
                       f"({len(by['FIX'])}) — FIX {100 * (mf - mc) / mc:+.1f}%")
 
+    # --- frames X4 presented, from the layer's periodic census (take 438) ---
+    #
+    # Every switch the layer logs is made on a frame X4 presents. Take 438's
+    # on-foot menu 4 opened just as X4 stopped presenting for 14 s (after a
+    # full-screen menu closed, as all five of that run's gaps did: a save from
+    # the menu, by its timing), and the layer switched at the next frame. A
+    # wall-clock window failed a channel that had no frame to act on. The census
+    # is written on the layer's clock, frames or not, so two in a row with the
+    # same count prove X4 presented nothing between them.
+    census_pts = [(float(t), int(n)) for t, n in re.findall(
+        r"\[\s*([\d.]+)\]\s+layer\s+cursor census \(periodic\): (\d+) "
+        r"present\(s\)", text)]
+
+    def late_without_frames(t, win, ons, stop):
+        """For a switch missing from [t, t+win]: its delay when the census
+        proves X4 presented no frame from at most 0.25 s after t to the window's
+        end AND the switch came before `stop` (the menu closing); else None.
+        A late switch while X4 was presenting stays late."""
+        starved = any(n1 == n0 and t0 <= t + 0.25 and t1 >= t + win
+                      for (t0, n0), (t1, n1) in zip(census_pts, census_pts[1:]))
+        if not starved:
+            return None
+        end = stop if stop is not None else float("inf")
+        after = [x for x in ons if t + win < x <= end + 0.05]
+        return after[0] - t if after else None
+
     # --- X4VR_CURSOR_CANVAS=auto: the cursor through the canvas in menus ----
     #
     # Take 326's map menu closed under a cursor drawn at the raw pointer; take
@@ -4594,20 +4620,32 @@ def main(path):
                       "exercised")
         arms = {"A": 0, "B": 0}
         late_a = 0
+        no_frames = 0
         for t, n, res, arm, hy, hp, px, py in fm_open:
             t = float(t)
             arms[arm] += 1
             end = fm_close.get(int(n))
             dur = f"{end - t:5.1f} s" if end is not None else "  open at exit"
             reached = any(t - 0.05 <= x <= t + 1.0 for x in ca_foot_on)
+            delay = (None if reached else
+                     late_without_frames(t, 1.0, ca_foot_on, end))
             if arm == "A" and not reached:
-                late_a += 1
+                if delay is None:
+                    late_a += 1
+                else:
+                    no_frames += 1
             print(f"foot-menu  #{int(n):<3d} t {t:10.1f}  arm {arm}  {dur}  "
                   f"head-look {float(hy):+6.1f} {float(hp):+6.1f}  "
                   f"pointer {float(px):6.0f},{float(py):6.0f}"
                   + ("  canvas ON" if reached else "")
+                  + (f"  canvas ON {delay:.1f} s later, at X4's first frame"
+                     if delay is not None else "")
                   + ("  (resumed after a HUD-down menu)" if res else "")
                   + ("  recentred" if int(n) in fm_rec else ""))
+        if no_frames:
+            print(f"foot-menu  {no_frames} opening(s) reached the layer late "
+                  f"because X4 presented no frame for the second after them "
+                  f"(the census shows none); the switch came at the next frame")
         if fm_open:
             print(f"foot-menu  {len(fm_open)} opening(s): arm A (canvas) "
                   f"{arms['A']}, arm B (raw) {arms['B']}"
@@ -4789,8 +4827,20 @@ def main(path):
               f"switched to the twins {len(cv_sw)} time(s); twins "
               f"{'BOUND' if cv_bound else 'never bound'}"
               + (f", {cv_failed[-1]} FAILED to build" if cv_failed else ""))
-        late = [t for t in cv_on
-                if not any(t - 0.05 <= q <= t + 1.0 for q in cv_sw)]
+        cv_off = [float(t) for t in re.findall(
+            r"\[\s*([\d.]+)\]\s+inject\s+ui: cinematic view off", text)]
+        missed = [t for t in cv_on
+                  if not any(t - 0.05 <= q <= t + 1.0 for q in cv_sw)]
+        late = []
+        for t in missed:
+            off = [x for x in cv_off if x > t]
+            if late_without_frames(t, 1.0, cv_sw,
+                                   off[0] if off else None) is None:
+                late.append(t)
+        if len(missed) > len(late):
+            print(f"cinematic  {len(missed) - len(late)} period(s) reached the "
+                  f"layer late because X4 presented no frame for the second "
+                  f"after them (the census shows none)")
         if late:
             fails.append(f"the cinematic view: {len(late)} period(s) never "
                          f"reached the layer (first t={late[0]:.1f})")
@@ -4799,8 +4849,6 @@ def main(path):
         # 39.74 s (take 358). The HUD going down for about a second on leaving an
         # external view reads as F6 too (0.71 s, 2026-11-05; 1.23 s, take 390), and X4
         # draws no overlay in it, so there is nothing to bind.
-        cv_off = [float(t) for t in re.findall(
-            r"\[\s*([\d.]+)\]\s+inject\s+ui: cinematic view off", text)]
         def cv_held(t):
             later = [x for x in cv_off if x > t]
             return later[0] - t if later else float("inf")
@@ -5370,15 +5418,21 @@ def main(path):
         # waits for a frame. The window widens for such runs only.
         rc_win = 0.4 if re.search(r"\bX4VR_DUMP_MATRICES=1\b", run or "") else 0.2
         late = 0
+        ca_ons = [tc for tc, k, _why in ca_state if k == "ON"]
         for t0, t1 in periods:
             k, why = _canvas_at(t0 + rc_win)
             ok_ = k == "ON"
-            if not ok_ and (t1 is None or t1 - t0 > 0.5):
+            delay = (None if ok_ else
+                     late_without_frames(t0, rc_win, ca_ons, t1))
+            if not ok_ and delay is None and (t1 is None or t1 - t0 > 0.5):
                 late += 1
             print(f"rclick  t {t0:10.1f}  "
                   + (f"{t1 - t0:5.1f} s" if t1 is not None else "open at exit")
                   + ("  canvas ON" + (f" ({why})" if why else " (full-screen)")
-                     if ok_ else "  canvas OFF"))
+                     if ok_ else
+                     f"  canvas ON {delay:.1f} s later, at X4's first frame "
+                     f"(none presented before)" if delay is not None
+                     else "  canvas OFF"))
         print(f"rclick  {len(periods)} right-click menu period(s) from X4's "
               f"table; Patola's eye says whether the cursor sat on the "
               f"highlighted option")
@@ -5390,6 +5444,7 @@ def main(path):
         arms = {"A": 0, "B": 0}
         late_a = 0
         moot = 0
+        no_frames = 0
         for t, n, arm in hm_open:
             t = float(t)
             arms[arm] += 1
@@ -5398,13 +5453,24 @@ def main(path):
             reached = any(t - 0.05 <= x <= t + 1.0 for x in ca_cen_on)
             k, why = _canvas_at(t + 1.0)
             full = k == "ON" and not why
+            delay = (None if reached or k == "ON" else
+                     late_without_frames(t, 1.0, ca_cen_on, end))
             if arm == "A" and not (reached or k == "ON"):
-                late_a += 1
+                if delay is None:
+                    late_a += 1
+                else:
+                    no_frames += 1
             if full:
                 moot += 1
             print(f"hud-menu   #{int(n):<3d} t {t:10.1f}  arm {arm}  {dur}"
                   + ("  canvas ON (full-screen: either arm)" if full else
-                     "  canvas ON" if reached or k == "ON" else ""))
+                     "  canvas ON" if reached or k == "ON" else
+                     f"  canvas ON {delay:.1f} s later, at X4's first frame"
+                     if delay is not None else ""))
+        if no_frames:
+            print(f"hud-menu   {no_frames} period(s) reached the layer late "
+                  f"because X4 presented no frame for the second after them "
+                  f"(the census shows none); the switch came at the next frame")
         print(f"hud-menu   {len(hm_open)} period(s) off the seat: arm A "
               f"(canvas) {arms['A']}, arm B (raw) {arms['B']}"
               + (" — alternating, X4VR_CURSOR_CENTRED_AB" if hm_ab else ""))

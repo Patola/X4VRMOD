@@ -1203,6 +1203,24 @@ fi
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" "$fmoA" "$fmcA"; } > /tmp/census-fm-nolayer.log
 want "foot-menu arm A never reached the layer -> FAIL" /tmp/census-fm-nolayer.log "FAIL|  - " "1 canvas-arm opening(s) never reached the layer"
 want "foot-menu one arm only -> said" /tmp/census-fm-nolayer.log foot-menu "ONLY ONE ARM opened"
+# Take 438: the opening came as X4 stopped presenting (14 s, a save from the
+# menu), and the layer switched at the next frame. The census, written on the
+# layer's clock, shows the frozen count. Two controls keep the FAIL: the same
+# late switch while X4 WAS presenting, and a stall the switch never followed.
+fmcen() { printf '[  %s] layer   cursor census (periodic): %s present(s) — drew %s | pointer x=0..4000 y=0..4000 against a 4224x4224 eye (moved)' "$1" "$2" "$2"; }
+fmlate='[  999980.150] layer   cursor canvas: AUTO — ON (an on-foot menu has the pointer: the cursor follows X4'"'"'s UI)'
+fmcL='[  999981.000] inject  ui: on-foot menu 1 closed — the cursor is drawn at the raw pointer'
+{ cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" "$(fmcen 999970.100 400)" "$(fmcen 999975.100 510)" "$fmoA" "$(fmcen 999980.100 510)" "$fmlate" "$fmcL"; } > /tmp/census-fm-noframes.log
+want "foot-menu late switch, X4 presenting nothing -> at the first frame" /tmp/census-fm-noframes.log foot-menu "canvas ON 5.2 s later, at X4's first frame"
+if python3 tools/score_run.py /tmp/census-fm-noframes.log 2>&1 | grep -q "canvas-arm opening"; then
+    bad "foot-menu late switch, X4 presenting nothing -> FAILs"
+else
+    ok "foot-menu late switch, X4 presenting nothing -> no FAIL"
+fi
+{ cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" "$(fmcen 999970.100 400)" "$(fmcen 999975.100 510)" "$fmoA" "$(fmcen 999980.100 800)" "$fmlate" "$fmcL"; } > /tmp/census-fm-frames.log
+want "foot-menu late switch, X4 presenting -> FAIL" /tmp/census-fm-frames.log "FAIL|  - " "1 canvas-arm opening(s) never reached the layer"
+{ cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" "$(fmcen 999970.100 400)" "$(fmcen 999975.100 510)" "$fmoA" "$(fmcen 999980.100 510)" "$fmcL" "$(printf '%s' "$fmlate" | sed 's/999980\.150/999981.500/')"; } > /tmp/census-fm-stallnever.log
+want "foot-menu stall, switch only after the close -> FAIL" /tmp/census-fm-stallnever.log "FAIL|  - " "1 canvas-arm opening(s) never reached the layer"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" '[  999975.000] inject  sdl: relative mouse mode ON (fold stands down)' '[  999976.000] inject  sdl: relative mouse mode off (fold applies)'; } > /tmp/census-fm-old.log
 want "foot-menu pointer freed, nothing logged -> an older build" /tmp/census-fm-old.log foot-menu "X4 freed the pointer 1 time(s) off the seat and no on-foot menu was logged"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" '[  999969.000] inject  sdl: relative mouse mode off (fold applies)' "$fmout"; } > /tmp/census-fm-none.log
@@ -1252,6 +1270,17 @@ fi
 { cat /tmp/census-hm-base.log; printf '%s\n' "$mcarm" "$fmout" "$hmcen" "$hmoA" "$hmcA"; } > /tmp/census-hm-nolayer.log
 want "hud-menu arm A never reached the layer -> FAIL" /tmp/census-hm-nolayer.log "FAIL|  - " "1 canvas-arm period(s) never reached the layer"
 want "hud-menu one arm only -> said" /tmp/census-hm-nolayer.log hud-menu "ONLY ONE ARM"
+# The twin of take 438's on-foot case: the same rule, the same two outcomes.
+hmlate=$(printf '%s' "$hmlA" | sed 's/999975\.020/999980.150/')
+{ cat /tmp/census-hm-base.log; printf '%s\n' "$mcarm" "$fmout" "$(fmcen 999970.100 400)" "$(fmcen 999975.100 510)" "$hmcen" "$hmoA" "$(fmcen 999980.100 510)" "$hmlate" "$hmcA"; } > /tmp/census-hm-noframes.log
+want "hud-menu late switch, X4 presenting nothing -> at the first frame" /tmp/census-hm-noframes.log hud-menu "canvas ON 5.1 s later, at X4's first frame"
+if python3 tools/score_run.py /tmp/census-hm-noframes.log 2>&1 | grep -q "canvas-arm period"; then
+    bad "hud-menu late switch, X4 presenting nothing -> FAILs"
+else
+    ok "hud-menu late switch, X4 presenting nothing -> no FAIL"
+fi
+{ cat /tmp/census-hm-base.log; printf '%s\n' "$mcarm" "$fmout" "$(fmcen 999970.100 400)" "$(fmcen 999975.100 510)" "$hmcen" "$hmoA" "$(fmcen 999980.100 800)" "$hmlate" "$hmcA"; } > /tmp/census-hm-frames.log
+want "hud-menu late switch, X4 presenting -> FAIL" /tmp/census-hm-frames.log "FAIL|  - " "1 canvas-arm period(s) never reached the layer"
 # ------------------------------------------ menus: X4's open-menu table (take 342)
 mnfmt=1
 for frag in '"menus: IsConversationActive and the open-menu lookup "' \
