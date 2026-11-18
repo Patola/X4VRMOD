@@ -643,6 +643,23 @@ static void test_overlays() {
                   l->detail.find("lsfg-vk: LSFG_PROCESS is set.") == 0,
               "lsfg: a variable alone: set up, not installed for the whole system");
     }
+    // DISABLE_LSFGVK=1 in the environment has done what the row asks: silent (Patola,
+    // 2026-11-18). Only 1, and only the environment: X4's launch options turn it off for
+    // X4 alone.
+    setenv("DISABLE_LSFGVK", "1", 1);
+    check(!row(run_checks(o), "lsfg"), "lsfg: DISABLE_LSFGVK=1 in the environment: silent");
+    setenv("DISABLE_LSFGVK", "0", 1);
+    {
+        const std::vector<Check> v2 = run_checks(o);
+        check(row(v2, "lsfg") != nullptr, "lsfg: control: DISABLE_LSFGVK=0 isn't turning it off");
+    }
+    unsetenv("DISABLE_LSFGVK");
+    {
+        bool found = false;
+        for (const LsfgVariable &x : lsfg_variables({"DISABLE_LSFGVK=1 %command%"}))
+            found = found || (x.name == "DISABLE_LSFGVK" && x.launch_options);
+        check(found, "lsfg: DISABLE_LSFGVK=1 in X4's launch options is still a variable naming it");
+    }
     unsetenv("LSFG_PROCESS");
     check(!row(run_checks(o), "lsfg"), "lsfg: neither: no row");
     check(!row(run_checks(o), "overlays"), "overlays: with none, no row at all");

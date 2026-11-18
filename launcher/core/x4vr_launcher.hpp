@@ -257,7 +257,8 @@ std::vector<UnwantedLayer> unwanted_layers(const std::string &home,
 // Settings for lsfg-vk: any variable with LSFG in its name, in this environment or in
 // X4's Steam launch options -- DISABLE_LSFGVK as much as LSFG_PROCESS. Patola,
 // 2026-11-18: lsfg-vk can keep the mod from working, so it set up at all, or installed
-// for the whole system, gets a row of its own asking to disable it for the whole system.
+// for the whole system, gets a row of its own asking to disable it for the whole system --
+// silent when DISABLE_LSFGVK=1 in this environment has done that.
 struct LsfgVariable {
     std::string name;
     bool launch_options = false; // X4's in Steam, not the environment

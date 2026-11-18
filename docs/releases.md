@@ -29,9 +29,10 @@ on the remote beside their `take-NNN-name` twins.
   in every language.
 * **A warning of its own for lsfg-vk**, when it's installed for the whole system (it then loads
   into every Vulkan program, the VR runtime included) or when any variable naming it is set, in
-  your environment or in X4's launch options in Steam, even one that turns it off such as
-  `DISABLE_LSFGVK`. lsfg-vk can keep the mod from working, so the launcher asks you to disable it
-  for the whole system while you play in VR, not only for X4. The help says so in every language.
+  your environment or in X4's launch options in Steam. lsfg-vk can keep the mod from working, so
+  the launcher asks you to disable it for the whole system while you play in VR, not only for X4;
+  with `DISABLE_LSFGVK=1` in your environment the warning goes away. The help says so in every
+  language.
 
 ## v1.0.0-rc5 — 2026-11-18 — Fifth release candidate: the whole mod under a privileged gamescope, and no crash without an OpenXR loader
 

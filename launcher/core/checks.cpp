@@ -602,6 +602,11 @@ std::vector<LsfgVariable> lsfg_variables(const std::vector<std::string> &launch_
 // system while playing in VR, not to uninstall it, which was too much.
 static bool add_lsfg_row(const std::vector<UnwantedLayer> &layers,
                          const std::vector<LsfgVariable> &v, std::vector<Check> &out) {
+    // Turned off for everything started from here, as the advice asks: no warning
+    // (Patola, 2026-11-18). Not from X4's launch options, which turn it off for X4 alone.
+    if (const char *off = getenv("DISABLE_LSFGVK"))
+        if (!strcmp(off, "1"))
+            return false;
     std::string facts;
     bool everywhere = false;
     for (const UnwantedLayer &x : layers) {
