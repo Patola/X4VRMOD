@@ -30195,3 +30195,47 @@ was full size and crisp." F8 in F6 (X4's "cinematic camera", the flatscreen lose
 our window slightly taller with the overlay unchanged; as on the flatscreen, nothing to change.
 The cursor's log said "OFF (no full-screen menu …)" in F6 even docked, with one up; F6 has a line of
 its own now.
+
+## The guns aim by two different points (read-only, 2026-11-15)
+
+For the rare split Patola has seen three times in dozens of hours: six identical gimballed guns
+on an Xperimental shuttle, firing together, part of them straight and the rest in a cluster up and
+to the left, steadily, through overheating; after a load all straight. Read from X4 9.00's binary;
+nothing patched.
+
+**Where a gun's aim point comes from.** `U::PlayerShootController` (vtable 0x3b2fc38), slot 0xb0
+(0x12576d0):
+* the player object P = *(root+0x238), root = *0x3db6948, else *0x3db6c00 (0x1257749);
+* aim assist as GetAimAssistState reads it: `hotkey == 3 ? option : hotkey` from 0x3d8e030 and
+  0x3d8e02c (0 off, 1 on, 2 "with controller", which counts as off while X4 has the mouse);
+  1 sets a per-gun flag from the gun's own data ([r15+0x60] -> 0x135a950, byte +0x318);
+* while X4 has the mouse (in[0x9f33]) and either flag 0x3d8e081 or 0x3df81a9 is set
+  (0x12578ff), the gun aims at **record B**, if it holds an object: distance P+0x6c70 >= 0 and
+  object P+0x6c78 set, and that object not the one 0x1699f20 returns. The point is B's P+0x6c50,
+  stored in the object's frame and carried into the world each call (0x1698cf0, 0x18a2900);
+* otherwise, a **fresh pick ray** through the live pointer (0x1257ac0: 0x1d6e080 with cl = 0),
+  the ray X4VR_STEER_PICK shifts to the ring.
+
+So two aim points exist, and which one a gun takes is X4's state at that call: B's content, the
+capture, the two flags. **Correction to the 2026-10-29 survey above:** of the pick ray's four
+callers, 0x1257ade isn't a hover; it is this one, the guns. The ~630 Hz on the Movement worker take
+373 measured fits a call per gun per tick.
+
+**Record B and its neighbours** (take 372 named them A/C/B/D): A +0x6bd0 hover in the UI, C +0x6c10
+click in the UI, B +0x6c50 hover in the world, D +0x6c90 click in the world; each a point, a
+distance at +0x20, objects at +0x28/+0x30. The live-hover function (ray at 0x1379ba7) writes A and
+B; the click function (0x13724e9, cl = 1, the last click's position) writes C and D. Both clear A
+and B on one path (0x1379ed4, 0x1372924). Other writers of B, unread: 0x137a037,
+0x13857c9/0x138588b, 0x1386229/0x13862eb, 0x136bd64.
+
+**The mouse object** (X4's getters 0xcdfc80/0xcdfcc0/0xcdfd00/0xcdfd40, vtable 0x3aad678 slots 6-9):
+pointer +0x260/+0x264, last click +0x274/+0x278, reference +0x27c/+0x280 of the object at
+in+0x64b8; each getter returns field - reference, or 0 unless in[0x9f33] or in[0x9f41], and 0 while
+the int at 0x3dea750 is set.
+
+**Not known:** why identical guns would split, since all of them read the same B at a given
+moment. Candidates: B changing between the guns' calls within one tick (several writers), the
+gimbals' reach toward B's point, the per-gun aim-assist flag. An instrument that logs these inputs
+every 2 s in the cockpit (`X4VR_AIMWATCH`, commit f7e66ac) ran for hours in takes 438 and 440
+without the split coming back, and is parked on the branch `aimwatch`. If the split recurs, save
+the game at once, so the state can be loaded again with the instrument back in.

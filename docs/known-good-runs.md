@@ -1209,3 +1209,62 @@ periods; Patola: "In all cases the overlay was full size and crisp."
 ```
 X4VR_TAKE=424 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4000 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8000 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4000x4000 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=fsr_quality X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_GAMEMODE=1 X4VR_STEER_PICK=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOADING_ART=1 X4VR_PROJ_INVPROJ=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take424.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
 ```
+
+## Takes 425 to 437 (2026-11-09 to 2026-11-15) — the loading panel, NVIDIA, the paired declaration; `env: run =` LOST
+
+Their logs were cleaned out of `/tmp` before they were recorded here, so by this file's rule none of
+them is known good. What they established, from the notes kept at the time:
+
+* **Takes 425 and 426 (2026-11-09):** the headset's loading panel showed on SteamVR and was refused
+  on WiVRn. WiVRn's client reported a size mismatch: the layer's multiview hook had doubled an image
+  the runtime made on X4's device.
+* **Takes 427 and 427b (2026-11-13):** with the runtime's images left alone, WiVRn took the panel at
+  the first try; SteamVR on AMD was fine.
+* **Take 429 (2026-11-14), SteamVR on AMD, the rule made per thread:** PASS. None of the panel's 5
+  images doubled; 17 runtime images kept single-layer.
+* **Takes 432e and 432f (2026-11-14), the RTX 3070 laptop and the Steam Frame, code a2dac2d:** PASS.
+  432f was the first DLSS in a headset (`dlss_auto`, 3890 evaluations per eye, none failed). It hung
+  on quitting from X4's menu, once.
+* **Takes 434 and 434b (2026-11-14), the desktop with SteamVR and WiVRn, code a2dac2d:** PASS.
+* **Take 435 (2026-11-15), the Steam Frame through WiVRn, `X4VR_DECLARE_PAIRED_AB=25`:** Patola:
+  jitter "VERY clear" unpaired, "smooth as butter" paired. 16% of cockpit frames had been declared with
+  a camera up to 2.91 deg off their image. Pairing is on by default since 0f6d272.
+* **Takes 436 and 437 (2026-11-15), the Frame on foot and in F2, then a Quest 3:** Patola: "even in
+  the quest it made a big difference". Their scorer verdicts weren't kept.
+
+## Take 438 (2026-11-15) — the stray-shots instrument on rc4, an hour of play
+
+`./launch/x4vr-launch.sh` with WiVRn, the instrument uncommitted on rc4 (later the `aimwatch-rc4`
+branch). `score_run.py` PASS since the scorer's fix of 2026-11-18, `/tmp/x4vr-take438.log`: 60
+minutes, 10 on-foot menus all through the canvas. X4 presented no frame five times, for 10 to 15 s
+each, every time right after a full-screen menu closed (saves, by their timing). Its one FAIL before
+the fix was the scorer's: on-foot menu 4 opened as one of those gaps began, and the layer switched at
+the first frame after it, 13.8 s later. The stray shots didn't come back. `X4VR_AIMWATCH=1` does
+nothing on main, which doesn't have the instrument.
+
+```
+X4VR_TAKE=438 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_AIMWATCH=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8448 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=fsr_balanced X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_GAMEMODE=1 X4VR_STEER_PICK=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOADING_ART=1 X4VR_PROJ_INVPROJ=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take438.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+```
+
+## Take 439 (2026-11-18) — issue #4's fix under a privileged gamescope (code 3f0cebf)
+
+`./launch/x4vr-launch.sh` from the release build with WiVRn, gamescope given `cap_sys_nice` by
+Patola for this run and the capability removed after. `score_run.py` PASS, `/tmp/x4vr-take439.log`
+(137 s): the injector reached X4 while gamescope, Xwayland, xkbcomp and gamescopereaper lost it, so
+glibc's secure mode did strip `LD_PRELOAD` and the fix put it back; GameMode in X4. Patola: X4
+played. Its two window FAILs were the scorer's, reading X4's window line when gamescope had no
+injector; fixed before rc5, which is this code plus that fix.
+
+```
+X4VR_TAKE=439 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8448 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=fsr_balanced X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_GAMEMODE=1 X4VR_STEER_PICK=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOADING_ART=1 X4VR_PROJ_INVPROJ=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take439.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+```
+
+## Take 440 (2026-11-18) — rc5 with the stray-shots instrument (code f7e66ac, branch `aimwatch`)
+
+`./launch/x4vr-launch.sh` with WiVRn. `score_run.py` PASS, `/tmp/x4vr-take440.log`, 52 minutes.
+Patola hunted the stray shots in this and other sessions and never saw them; the instrument is parked
+on `aimwatch`, to come back if they do.
+
+```
+X4VR_TAKE=440 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_AIMWATCH=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=4224 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=8448 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=4224x4224 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=fsr_balanced X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_GAMEMODE=1 X4VR_STEER_PICK=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOADING_ART=1 X4VR_PROJ_INVPROJ=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take440.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+```

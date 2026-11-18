@@ -14,8 +14,11 @@
 // reference can move one without the other; the pick has to be told.
 //
 // **Where.** 0x1d6e080 builds the ray from X4's camera through the centred
-// pointer. Its four callers: hover twice (0x1257ade, 0x1379ba7), click-select
-// with the last-click position (0x13724e9, cl=1), IsPointingWithinAimingRange.
+// pointer. Its four callers: the guns' aim (0x1257ade, U::PlayerShootController,
+// when the world hover record holds nothing -- docs/x4-quirks.md, "The guns aim
+// by two different points"; first read as a hover), hover (0x1379ba7),
+// click-select with the last-click position (0x13724e9, cl=1),
+// IsPointingWithinAimingRange.
 // Its three paths -- the live pointer, the last click, no mouse object --
 // meet at 0x1d6e0e1 with r13d = centred x and ebx = centred y, in X4's window
 // pixels (y down); the ray then takes them over (window * 0.5), so a pixel
