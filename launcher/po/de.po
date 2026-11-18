@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-18 19:05+0100\n"
+"POT-Creation-Date: 2026-11-18 20:09+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -29,8 +29,28 @@ msgstr "%1 ist nicht gestartet: %2"
 
 #: launcher/core/checks.cpp
 #, qt-format
+msgid "%1 in X4's launch options in Steam"
+msgstr "%1 in den Startoptionen von X4 in Steam"
+
+#: launcher/core/checks.cpp
+#, qt-format
 msgid "%1 is running, with no headset connected."
 msgstr "%1 läuft, aber kein Headset ist verbunden."
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid ""
+"%1 is set. lsfg-vk can keep the mod from working, even when it's turned off: "
+"uninstall it, or don't install it for the whole system."
+msgid_plural ""
+"%1 are set. lsfg-vk can keep the mod from working, even when it's turned "
+"off: uninstall it, or don't install it for the whole system."
+msgstr[0] ""
+"%1 ist gesetzt. lsfg-vk kann die Mod auch ausgeschaltet am Funktionieren "
+"hindern: Deinstalliere es oder installiere es nicht für das ganze System."
+msgstr[1] ""
+"%1 sind gesetzt. lsfg-vk kann die Mod auch ausgeschaltet am Funktionieren "
+"hindern: Deinstalliere es oder installiere es nicht für das ganze System."
 
 #: launcher/core/checks.cpp
 #, qt-format
@@ -339,6 +359,11 @@ msgstr "gamescope ist nicht installiert"
 #, qt-format
 msgid "it loads into every Vulkan program"
 msgstr "es wird in jedes Vulkan-Programm geladen"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "lsfg-vk is set up on this computer"
+msgstr "lsfg-vk ist auf diesem Computer eingerichtet"
 
 #: launcher/core/checks.cpp
 #, qt-format
@@ -1152,6 +1177,16 @@ msgstr "Auf Standard zurücksetzen..."
 #, qt-format
 msgid "Retry"
 msgstr "Erneut versuchen"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Settings for lsfg-vk, Lossless Scaling's frame generator, in your "
+"environment or X4's launch options in Steam. Shown only when there are some."
+msgstr ""
+"Einstellungen für lsfg-vk, den Frame-Generator von Lossless Scaling, in "
+"deiner Umgebung oder den Startoptionen von X4 in Steam. Wird nur angezeigt, "
+"wenn es welche gibt."
 
 #: launcher/gui/window.cpp
 #, qt-format

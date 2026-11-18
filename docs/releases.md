@@ -27,6 +27,10 @@ on the remote beside their `take-NNN-name` twins.
   installed, the VR row's Start menu can start it. With no headset connected Monado runs a
   simulated one, and the row says no headset is connected rather than "VR ready". The help says so
   in every language.
+* **A warning when lsfg-vk is set up at all.** Any variable naming it, in your environment or in
+  X4's launch options in Steam, even one that turns it off such as `DISABLE_LSFGVK`, gets its own
+  amber row: lsfg-vk can keep the mod from working even when it's turned off, so the launcher asks
+  you to uninstall it, or not install it for the whole system. The help says so in every language.
 
 ## v1.0.0-rc5 — 2026-11-18 — Fifth release candidate: the whole mod under a privileged gamescope, and no crash without an OpenXR loader
 

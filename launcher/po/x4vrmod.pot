@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-18 19:05+0100\n"
+"POT-Creation-Date: 2026-11-18 20:09+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -216,6 +216,27 @@ msgstr ""
 #, qt-format
 msgid "X4's launch options in Steam turn it on"
 msgstr ""
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1 in X4's launch options in Steam"
+msgstr ""
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "lsfg-vk is set up on this computer"
+msgstr ""
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid ""
+"%1 is set. lsfg-vk can keep the mod from working, even when it's turned off: "
+"uninstall it, or don't install it for the whole system."
+msgid_plural ""
+"%1 are set. lsfg-vk can keep the mod from working, even when it's turned "
+"off: uninstall it, or don't install it for the whole system."
+msgstr[0] ""
+msgstr[1] ""
 
 #: launcher/core/checks.cpp
 #, qt-format
@@ -869,6 +890,13 @@ msgid ""
 "Frame generators such as lsfg-vk, and overlays and filters such as MangoHud "
 "and vkBasalt, work on the flat picture X4 draws, not on what the headset "
 "shows. Shown only when one would load into X4."
+msgstr ""
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Settings for lsfg-vk, Lossless Scaling's frame generator, in your "
+"environment or X4's launch options in Steam. Shown only when there are some."
 msgstr ""
 
 #: launcher/gui/window.cpp

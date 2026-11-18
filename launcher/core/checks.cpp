@@ -6,6 +6,7 @@
 #include "x4vr_launcher.hpp"
 
 #include <dirent.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cctype>
@@ -561,9 +562,75 @@ std::vector<UnwantedLayer> unwanted_layers(const std::string &home,
     return out;
 }
 
-// Only when there's something to say: most players have none of these.
-static void add_overlays_row(const std::string &home, std::vector<Check> &out) {
-    const std::vector<UnwantedLayer> u = unwanted_layers(home, x4_steam_launch_options(home));
+std::vector<LsfgVariable> lsfg_variables(const std::vector<std::string> &launch_options) {
+    std::vector<LsfgVariable> out;
+    auto add = [&out](const std::string &name, bool lo) {
+        if (lower(name).find("lsfg") == std::string::npos)
+            return;
+        for (const LsfgVariable &v : out)
+            if (v.name == name && v.launch_options == lo)
+                return;
+        out.push_back({name, lo});
+    };
+    for (char **e = environ; e && *e; e++) {
+        const char *eq = strchr(*e, '=');
+        if (eq)
+            add(std::string(*e, (size_t)(eq - *e)), false);
+    }
+    // NAME=value words on the launch line, as in "LSFG_PROCESS=x4 %command%".
+    for (const std::string &o : launch_options) {
+        size_t at = 0;
+        while (at < o.size()) {
+            const size_t start = o.find_first_not_of(" \t", at);
+            if (start == std::string::npos)
+                break;
+            size_t end = o.find_first_of(" \t", start);
+            if (end == std::string::npos)
+                end = o.size();
+            const std::string word = o.substr(start, end - start);
+            const size_t eq = word.find('=');
+            if (eq != std::string::npos && eq > 0)
+                add(word.substr(0, eq), true);
+            at = end;
+        }
+    }
+    return out;
+}
+
+// lsfg-vk set up at all, by its variables: one row of its own, with stronger advice
+// than the overlays row's "turn it off for X4".
+static bool add_lsfg_row(const std::vector<LsfgVariable> &v, std::vector<Check> &out) {
+    if (v.empty())
+        return false;
+    std::string names;
+    for (const LsfgVariable &x : v)
+        names += (names.empty() ? "" : ", ") +
+                 (x.launch_options ? fmt(tr_("%1 in X4's launch options in Steam"), {x.name})
+                                   : x.name);
+    Check c;
+    c.id = "lsfg";
+    c.status = Status::Warn;
+    c.fix = "help-overlays";
+    c.title = tr_("lsfg-vk is set up on this computer");
+    c.detail = fmt(trn_("%1 is set. lsfg-vk can keep the mod from working, even when it's turned "
+                        "off: uninstall it, or don't install it for the whole system.",
+                        "%1 are set. lsfg-vk can keep the mod from working, even when it's turned "
+                        "off: uninstall it, or don't install it for the whole system.",
+                        v.size()),
+                   {names});
+    out.push_back(c);
+    return true;
+}
+
+// Only when there's something to say: most players have none of these. Without lsfg-vk
+// when its own row says more about it.
+static void add_overlays_row(const std::string &home, std::vector<Check> &out,
+                             bool without_lsfg) {
+    std::vector<UnwantedLayer> u = unwanted_layers(home, x4_steam_launch_options(home));
+    if (without_lsfg)
+        u.erase(std::remove_if(u.begin(), u.end(),
+                               [](const UnwantedLayer &x) { return x.tool == "lsfg-vk"; }),
+                u.end());
     if (u.empty())
         return;
     Check c;
@@ -700,7 +767,10 @@ std::vector<Check> run_checks(const CheckOptions &o) {
         out.push_back(check_mod_row(l, in));
     if (!o.skip_gpu)
         out.push_back(check_gpu_row());
-    add_overlays_row(home, out);
+    std::vector<Check> lsfg;
+    const bool lsfg_row = add_lsfg_row(lsfg_variables(x4_steam_launch_options(home)), lsfg);
+    add_overlays_row(home, out, lsfg_row);
+    out.insert(out.end(), lsfg.begin(), lsfg.end());
     return out;
 }
 

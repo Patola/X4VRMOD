@@ -507,6 +507,44 @@ static const Check *row(const std::vector<Check> &v, const char *id) {
 // Frame generators and overlays that would load into X4: from the manifests, the
 // environment and X4's launch options in Steam. Under a fake home whose XDG folders
 // are the only ones looked in, besides /etc/vulkan, which holds none of these here.
+// Whatever lsfg-vk variables this test was started with, gone.
+static void unset_lsfg_variables() {
+    std::vector<std::string> names;
+    for (char **e = environ; e && *e; e++) {
+        std::string n(*e);
+        n = n.substr(0, n.find('='));
+        std::string l = n;
+        for (char &c : l)
+            c = (char)std::tolower((unsigned char)c);
+        if (l.find("lsfg") != std::string::npos)
+            names.push_back(n);
+    }
+    for (const std::string &n : names)
+        unsetenv(n.c_str());
+}
+
+// Any variable naming lsfg-vk, from the environment or X4's launch line, turned off or on
+// (Patola, 2026-11-18).
+static void test_lsfg_variables() {
+    unset_lsfg_variables();
+    check(lsfg_variables({}).empty(), "lsfg: none set, none found");
+    setenv("DISABLE_LSFGVK", "1", 1);
+    std::vector<LsfgVariable> v = lsfg_variables({});
+    check(v.size() == 1 && v[0].name == "DISABLE_LSFGVK" && !v[0].launch_options,
+          "lsfg: DISABLE_LSFGVK in the environment counts, though it turns lsfg-vk off");
+    unsetenv("DISABLE_LSFGVK");
+    v = lsfg_variables({"LSFG_PROCESS=x4 DISABLE_LSFG=1 lsfg_legacy=1 x4vrmod run %command%"});
+    check(v.size() == 3 && v[0].name == "LSFG_PROCESS" && v[1].name == "DISABLE_LSFG" &&
+              v[2].name == "lsfg_legacy" && v[0].launch_options,
+          "lsfg: each one on X4's launch line, in any case, from the launch options");
+    setenv("SELF_GRAPH", "1", 1);
+    setenv("LSF_LIMIT", "1", 1);
+    check(lsfg_variables({"lsfg-vk-wrapper %command%", "MANGOHUD=1 %command%"}).empty(),
+          "lsfg: control: other names, and a command with lsfg in it, aren't variables naming it");
+    unsetenv("SELF_GRAPH");
+    unsetenv("LSF_LIMIT");
+}
+
 static void test_overlays() {
     const std::string h = g_tmp + "/overlays";
     const std::string data = h + "/.local/share/vulkan/implicit_layer.d";
@@ -518,6 +556,7 @@ static void test_overlays() {
     for (const char *v : {"MANGOHUD", "DISABLE_MANGOHUD", "ENABLE_VKBASALT", "VK_INSTANCE_LAYERS",
                           "VK_LOADER_LAYERS_ENABLE", "VK_ADD_IMPLICIT_LAYER_PATH"})
         unsetenv(v);
+    unset_lsfg_variables(); // a machine that has lsfg-vk set up would change every row below
     auto tools = [](const std::vector<UnwantedLayer> &u) {
         std::string s;
         for (const UnwantedLayer &x : u)
@@ -573,6 +612,20 @@ static void test_overlays() {
               r->title.find("lsfg-vk") != std::string::npos &&
               r->detail.find("every Vulkan program") != std::string::npos,
           "overlays: the checklist's row is amber, names lsfg-vk and why, with the help's section");
+    // Its variables set: a row of its own asking to uninstall it, and the overlays row,
+    // which would say "turn it off for X4", leaves it out.
+    setenv("LSFG_PROCESS", "x4", 1);
+    {
+        const std::vector<Check> v2 = run_checks(o);
+        const Check *l = row(v2, "lsfg");
+        check(l && l->status == Status::Warn && l->fix == "help-overlays" &&
+                  l->detail.find("LSFG_PROCESS is set.") == 0 &&
+                  l->detail.find("uninstall it") != std::string::npos,
+              "lsfg: LSFG_PROCESS set: its own amber row, naming it, asking to uninstall");
+        check(!row(v2, "overlays"), "lsfg: ...and the overlays row doesn't say it twice");
+    }
+    unsetenv("LSFG_PROCESS");
+    check(!row(run_checks(o), "lsfg"), "lsfg: none set: no row");
     remove((data + "/VkLayer_LS_frame_generation.json").c_str());
     check(!row(run_checks(o), "overlays"), "overlays: with none, no row at all");
     // X4's launch options, from Steam's own file.
@@ -1303,6 +1356,7 @@ int main() {
     test_eye_rule();
     test_profile();
     test_vr_row();
+    test_lsfg_variables();
     test_closed_process();
     test_profile_dirs();
     test_child_env();

@@ -253,6 +253,15 @@ struct UnwantedLayer {
 };
 std::vector<UnwantedLayer> unwanted_layers(const std::string &home,
                                            const std::vector<std::string> &launch_options);
+// Settings for lsfg-vk: any variable with LSFG in its name, in this environment or in
+// X4's Steam launch options -- DISABLE_LSFGVK as much as LSFG_PROCESS. Patola,
+// 2026-11-18: lsfg-vk can keep the mod from working even turned off, so having it set up
+// at all is worth its own warning, and asking to uninstall it rather than turn it off.
+struct LsfgVariable {
+    std::string name;
+    bool launch_options = false; // X4's in Steam, not the environment
+};
+std::vector<LsfgVariable> lsfg_variables(const std::vector<std::string> &launch_options);
 bool steamvr_is_running();
 bool monado_is_running();
 // Any process whose program is this file, or is called X4.
