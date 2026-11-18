@@ -37,9 +37,16 @@ on the remote beside their `take-NNN-name` twins.
   it left no log, and a report made afterwards took the last VR session's log for it, with the flat
   game's launch output beside it. The Flatscreen box now leaves a short log saying X4 ran without
   the mod; the report window lists that session as flatscreen, and the report's summary says so.
+* **The launcher no longer says DLSS hasn't been played in a headset:** it has, on an RTX 3070
+  laptop and an RTX 5090, each under SteamVR with a Steam Frame, in both eyes.
 * **Ticking Flatscreen says why the eye size, the upscaler and Debug log grey out:** they're the
   mod's VR settings, and a flat game uses X4's own, so DLSS for a flat game is chosen in X4's
   graphics settings. A greyed "DLSS Auto" had read as DLSS not being available.
+
+Known: with DLSS on, X4 9.00 can crash while quitting, with or without the mod. It's X4's own:
+started flat without the mod, it crashes when quitting too (an RTX 3070 laptop), and where it was
+caught with the mod (an RTX 5090), the crash was inside X4's own FidelityFX shutdown
+(`ffxCasContextDestroy`).
 
 ## v1.0.0-rc5 — 2026-11-18 — Fifth release candidate: the whole mod under a privileged gamescope, and no crash without an OpenXR loader
 

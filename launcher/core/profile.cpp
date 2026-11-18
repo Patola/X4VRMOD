@@ -44,12 +44,6 @@ const std::vector<Upscaler> &upscalers() {
 
 bool is_dlss(const std::string &mode) { return mode.rfind("dlss_", 0) == 0; }
 
-std::string upscaler_note(const std::string &mode) {
-    return is_dlss(mode) ? tr_("DLSS hasn't been played in a headset yet. If an eye looks wrong, "
-                               "please report it.")
-                         : "";
-}
-
 const std::vector<int> &eye_sizes() {
     static const std::vector<int> v = {1600, 2048, 2400, 2816, 3072, 3200, 3600, 4000, 4224};
     return v;
@@ -232,7 +226,7 @@ std::string profile_set(Profile &p, const std::string &key, const std::string &v
         EyeSettings s = eye_settings(p);
         set_upscaler(s, value);
         store_eye_settings(p, s);
-        return upscaler_note(value);
+        return "";
     }
     if (key == "ipd") {
         if (!number(0.04, 0.09))

@@ -371,8 +371,8 @@ static void test_eye_rule(Window &w, const std::string &home) {
     check(up->currentData().toString() == "none", "offering it doesn't choose it");
     up->setCurrentIndex(up->findData("dlss_quality"));
     check(load_profile(profile_path(home)).get("upscaler") == "dlss_quality", "DLSS Quality is saved");
-    check(!renders->isHidden() && renders->text().contains("hasn't been played"),
-          "...and the window says it's untried in a headset");
+    check(!renders->text().contains("hasn't been played"),
+          "...and the window no longer calls it untried in a headset (played on two RTX cards)");
     w.showChecks(good_rows());
     check(up->findData("dlss_quality") < 0, "the GPU row changes: it's off the list");
     check(up->currentData().toString() == "none" &&

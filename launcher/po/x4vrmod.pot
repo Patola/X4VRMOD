@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-18 22:17+0100\n"
+"POT-Creation-Date: 2026-11-18 23:02+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -583,13 +583,6 @@ msgstr ""
 #: launcher/core/profile.cpp
 #, qt-format
 msgid "FSR 3 Ultra Performance"
-msgstr ""
-
-#: launcher/core/profile.cpp
-#, qt-format
-msgid ""
-"DLSS hasn't been played in a headset yet. If an eye looks wrong, please "
-"report it."
 msgstr ""
 
 #: launcher/core/profile.cpp

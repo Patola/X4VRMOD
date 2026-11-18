@@ -975,16 +975,14 @@ static void test_offered() {
         all_valid = all_valid && valid_upscaler(u.mode) && u.label && *u.label;
     check(all_valid && upscalers()[0].mode == std::string("none"), "None comes first, all labelled");
     check(valid_upscaler(kAutoUpscaler), "the rule's choice is on the list");
-    check(!is_dlss(kAutoUpscaler), "the rule never chooses what hasn't been played in VR");
+    check(!is_dlss(kAutoUpscaler), "the rule never chooses DLSS, which only RTX cards have");
     int dlss = 0;
     for (const Upscaler &u : upscalers())
         if (u.dlss) {
             dlss++;
-            check(is_dlss(u.mode) && !upscaler_note(u.mode).empty(),
-                  std::string(u.mode) + " says it hasn't been played in a headset");
+            check(is_dlss(u.mode), std::string(u.mode) + " is DLSS");
         } else {
-            check(!is_dlss(u.mode) && upscaler_note(u.mode).empty(),
-                  std::string(u.mode) + " isn't DLSS");
+            check(!is_dlss(u.mode), std::string(u.mode) + " isn't DLSS");
         }
     check(dlss == 6, "DLSS's six modes are listed");
     check(render_size(3000, "dlss_quality") == 2000 && render_size(3000, "dlss_dlaa") == 3000,

@@ -136,7 +136,7 @@ blocks every frame.
 | GOG's X4, and hotfixes that only move code | done | **`v0.9.10`** |
 | The launcher window, packages and a zip | done | **`v0.9.10`** |
 | The eye distance from the headset, following its dial | done | **`v0.9.10`** |
-| DLSS in both eyes (`X4VR_UPSCALE=dlss_*`) | not yet played in a headset | **`v0.9.10`** |
+| DLSS in both eyes (`X4VR_UPSCALE=dlss_*`) | played on two RTX cards | **`v0.9.10`** |
 | GameMode | done | **`v0.9.10`** |
 | Full-screen menus sharp to their edges when streaming (the streamer's sharp middle follows your gaze) | done | **`v1.0.0-rc1`** |
 | The launcher and its help in English, Brazilian Portuguese, French, Russian and German | first draft, corrections welcome | **`v1.0.0-rc1`** |
@@ -281,7 +281,8 @@ which (`config: upmode: …`). Both upscalers run in both eyes:
 
 Both are on by default; set either to `0` only to compare.
 
-**DLSS needs an NVIDIA RTX card, and is best effort: it hasn't been played in a headset.**
+**DLSS needs an NVIDIA RTX card.** It has been played in a headset on two: an RTX 3070
+laptop and an RTX 5090, each under SteamVR with a Steam Frame.
 The launcher offers it only with such a card. X4 calls NVIDIA's code directly, so when a
 `dlss_*` mode is asked for, the mod patches those three calls to run it again for the right
 eye, with its own history (`injector/x4vr_ngx.hpp`). No other session is patched. X4 9.00

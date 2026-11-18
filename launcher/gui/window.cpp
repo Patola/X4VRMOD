@@ -563,9 +563,6 @@ void Window::syncSettings() {
     const std::string en = eye_note(m_eye.eye, m_steamvr);
     if (!en.empty())
         lines << q(en);
-    const std::string un = upscaler_note(m_eye.upscaler);
-    if (!un.empty())
-        lines << q(un);
     // Flatscreen greys these out: they're the mod's VR settings, and a flat game runs
     // nothing of the mod's. Say so, or "DLSS" greyed reads as "no DLSS" (the RTX 5090
     // player, 2026-11-18).

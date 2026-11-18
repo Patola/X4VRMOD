@@ -58,7 +58,7 @@ baseline stays comparable. `run` passes everything after its own options on as t
 start, which is how Steam's `%command%` reaches X4.
 
 **DLSS** is offered only when the GPU the mod would run on is an NVIDIA RTX one, and the
-gpu row says so. It hasn't been played in a headset, and the window says that too.
+gpu row says so. It has been played in a headset on an RTX 3070 laptop and an RTX 5090.
 
 **Other builds of X4.** `probe x4` and `doctor` find the code wherever this build keeps it
 (`common/x4vr_reloc.hpp`) before checking it. `x4vrmod probe x4 PATH --map` shows how far

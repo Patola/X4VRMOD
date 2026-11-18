@@ -310,8 +310,6 @@ struct Upscaler {
     bool dlss = false;
 };
 bool is_dlss(const std::string &mode);
-// What the player should know about this upscaler, or "".
-std::string upscaler_note(const std::string &mode);
 const std::vector<Upscaler> &upscalers();
 const std::vector<int> &eye_sizes();
 // What the player should know about this size, or "".
