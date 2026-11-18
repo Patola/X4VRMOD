@@ -150,21 +150,29 @@ std::string reloc_report(const ElfFile &x4);
 // Which OpenXR runtime is active, by the loader's search order. It is only a
 // file: nothing is loaded. WiVRn's exists only while WiVRn runs.
 //
-// With no file, a running SteamVR's own manifest, if `steamvr_fallback`:
+// With no file, a running runtime's own manifest, if `look_for_running`:
 // SteamVR writes the file only when it is made the default OpenXR runtime, and
 // Patola had declined its prompt, so a SteamVR he started and connected read as
-// "No VR runtime running" (2026-11-08). `fallback` says so, and whoever
-// probes or starts X4 then sets XR_RUNTIME_JSON to `path`.
+// "No VR runtime running" (2026-11-08). Monado never writes it. `fallback` says
+// so, and whoever probes or starts X4 then sets XR_RUNTIME_JSON to `path`.
 struct ActiveRuntime {
     std::string path; // "" when there is none
     std::string name, library;
     bool steamvr = false;
-    bool fallback = false; // SteamVR's own manifest, not the loader's file
+    bool monado = false;
+    bool fallback = false; // a running runtime's own manifest, not the loader's file
 };
-ActiveRuntime active_runtime(const std::string &home, bool steamvr_fallback = true);
+ActiveRuntime active_runtime(const std::string &home, bool look_for_running = true);
 // <SteamVR>/bin/linux64/vrserver -> <SteamVR>/steamxr_linux64.json, if it is
 // there; "" otherwise.
 std::string steamvr_manifest_for(const std::string &vrserver_exe);
+// <prefix>/bin/monado-service -> <prefix>/share/openxr/1/openxr_monado.json, if it
+// is there; "" otherwise.
+std::string monado_manifest_for(const std::string &service_exe);
+// Monado's systemd user unit, by systemd's own search path for user units, or "".
+// The launcher starts Monado only through it: monado-service run directly watches
+// its standard input and won't start on /dev/null (2026-11-18).
+std::string monado_unit(const std::string &home);
 
 enum class XrStatus { Ready, NoLoader, NoRuntime, NoHeadset, Failed, TimedOut, NotRun };
 const char *xr_status_name(XrStatus s);
@@ -246,6 +254,7 @@ struct UnwantedLayer {
 std::vector<UnwantedLayer> unwanted_layers(const std::string &home,
                                            const std::vector<std::string> &launch_options);
 bool steamvr_is_running();
+bool monado_is_running();
 // Any process whose program is this file, or is called X4.
 bool x4_is_running(const std::string &exe);
 

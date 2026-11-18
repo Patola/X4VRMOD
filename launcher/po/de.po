@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-09 22:22+0100\n"
+"POT-Creation-Date: 2026-11-18 19:05+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -161,6 +161,15 @@ msgstr "Mod nicht installiert"
 #, qt-format
 msgid "Mod out of date"
 msgstr "Mod veraltet"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid ""
+"Monado found no headset and is running a simulated one. Connect the headset, "
+"then start Monado again."
+msgstr ""
+"Monado hat kein Headset gefunden und simuliert eines. Schließe das Headset "
+"an und starte Monado dann neu."
 
 #: launcher/core/checks.cpp
 #, qt-format
@@ -1154,6 +1163,11 @@ msgstr ""
 "Manche Funktionen ändern den Code von X4 im Speicher, deshalb braucht jede "
 "genau den Code, für den sie geschrieben wurde. Findet eine ihn nicht, "
 "schaltet sie sich selbst ab, und das Spiel läuft trotzdem."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Start Monado"
+msgstr "Monado starten"
 
 #: launcher/gui/window.cpp
 #, qt-format

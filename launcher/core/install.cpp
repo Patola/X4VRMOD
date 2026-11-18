@@ -492,7 +492,7 @@ int run_mod(const std::string &home, const std::string &game,
         const char *d = getenv("X4VR_DEBUG");
         setenv("X4VR_LOG", new_log_path(home, d && !strcmp(d, "1")).c_str(), 1);
     }
-    // A running SteamVR that isn't the default OpenXR runtime: the runtime the
+    // A running SteamVR or Monado that isn't the default OpenXR runtime: the runtime the
     // checklist found is the one X4 gets, and the log's run line records it.
     {
         const ActiveRuntime rt = active_runtime(home);

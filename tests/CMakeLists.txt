@@ -245,6 +245,9 @@ add_executable(x4vr_test_pause pause.cpp)
 # each patch group against bent bytes. Self-checking.
 add_executable(x4vr_test_launcher launcher_core.cpp)
 target_link_libraries(x4vr_test_launcher PRIVATE x4vrmod_core)
+# A process with its /proc files closed, for the test above to find by name.
+add_executable(x4vr_nondumpable nondumpable.c)
+add_dependencies(x4vr_test_launcher x4vr_nondumpable)
 # common/x4vr_reloc.hpp on a made-up X4. Self-checking, with no game installed.
 add_executable(x4vr_test_reloc reloc.cpp)
 # Not a test: what tools/make_reloc_table.py is fed, which of X4's bytes the checks read.

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-09 22:22+0100\n"
+"POT-Creation-Date: 2026-11-18 19:05+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -67,6 +67,18 @@ msgstr ""
 
 #: launcher/core/checks.cpp
 #, qt-format
+msgid "Headset not connected"
+msgstr ""
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid ""
+"Monado found no headset and is running a simulated one. Connect the headset, "
+"then start Monado again."
+msgstr ""
+
+#: launcher/core/checks.cpp
+#, qt-format
 msgid "VR ready"
 msgstr ""
 
@@ -78,11 +90,6 @@ msgstr ""
 #: launcher/core/checks.cpp
 #, qt-format
 msgid "%1, headset connected. It recommends %2 x %3 per eye."
-msgstr ""
-
-#: launcher/core/checks.cpp
-#, qt-format
-msgid "Headset not connected"
 msgstr ""
 
 #: launcher/core/checks.cpp
@@ -1130,6 +1137,11 @@ msgstr ""
 #: launcher/gui/window.cpp
 #, qt-format
 msgid "Start SteamVR"
+msgstr ""
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid "Start Monado"
 msgstr ""
 
 #: launcher/gui/window.cpp

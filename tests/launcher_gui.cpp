@@ -523,6 +523,58 @@ static void test_suggests_wivrn(Window &w) {
     w.showChecks(good_rows());
 }
 
+// Monado: offered when its systemd user unit is there, third, and started through it
+// (2026-11-18: run directly, monado-service won't start on /dev/null for its input).
+static void test_offers_monado(Window &w) {
+    const std::string keep = getenv("PATH");
+    const char *xch = getenv("XDG_CONFIG_HOME");
+    const std::string keepXdg = xch ? xch : "";
+    const std::string bin = dir_name(self_dir()) + "/tests/fake-monado";
+    const std::string cfg = bin + "/config";
+    QDir().mkpath(QString::fromStdString(cfg + "/systemd/user"));
+    auto script = [](const std::string &path) {
+        QFile f(QString::fromStdString(path));
+        if (f.open(QIODevice::WriteOnly))
+            f.write("#!/bin/sh\n");
+        f.close();
+        f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    };
+    script(bin + "/wivrn-server");
+    script(bin + "/steam");
+    script(cfg + "/systemd/user/monado.service");
+    auto rows = good_rows();
+    replace(rows, row("vr", Status::Block, "No VR runtime running", "", "start-vr"));
+    setenv("XDG_CONFIG_HOME", cfg.c_str(), 1);
+    setenv("PATH", bin.c_str(), 1);
+    w.showChecks(rows);
+    auto *start = w.findChild<QToolButton *>("start-vr");
+    QList<QAction *> choices = start->menu()->actions();
+    check(choices.size() == 2, "no systemctl: Monado isn't offered");
+    script(bin + "/systemctl");
+    w.showChecks(rows);
+    choices = start->menu()->actions();
+    check(choices.size() == 3 && choices[2]->text() == "Start Monado" &&
+              start->text() == "Start WiVRn",
+          "Monado's unit and systemctl: Start Monado, third");
+    if (choices.size() == 3)
+        choices[2]->trigger();
+    check(w.lastLaunch().size() == 4 && w.lastLaunch()[0].endsWith("/systemctl") &&
+              w.lastLaunch().mid(1) == QStringList({"--user", "start", "monado.service"}),
+          "...which starts its user unit");
+    QFile::remove(QString::fromStdString(bin + "/wivrn-server"));
+    QFile::remove(QString::fromStdString(bin + "/steam"));
+    w.showChecks(rows);
+    check(start->isVisibleTo(&w) && start->text() == "Start Monado",
+          "Monado alone: it's what's offered");
+    setenv("PATH", keep.c_str(), 1);
+    if (keepXdg.empty())
+        unsetenv("XDG_CONFIG_HOME");
+    else
+        setenv("XDG_CONFIG_HOME", keepXdg.c_str(), 1);
+    QDir(QString::fromStdString(bin)).removeRecursively();
+    w.showChecks(good_rows());
+}
+
 static void test_help(const std::string &helpDir) {
     const QString dir = QString::fromStdString(helpDir);
     QFile f(dir + "/index.html");
@@ -844,6 +896,7 @@ int main(int argc, char **argv) {
         test_eye_rule(w, home);
         test_play(w, shots);
         test_suggests_wivrn(w);
+        test_offers_monado(w);
         test_browse(w, tmp);
     }
     test_uninstall(shots);

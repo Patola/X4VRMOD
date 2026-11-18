@@ -628,6 +628,25 @@ std::string steamvr_manifest_for(const std::string &vrserver_exe) {
     return is_file(m) ? m : "";
 }
 
+std::string monado_manifest_for(const std::string &service_exe) {
+    if (base_name(service_exe) != "monado-service")
+        return "";
+    const std::string m =
+        dir_name(dir_name(service_exe)) + "/share/openxr/1/openxr_monado.json";
+    return is_file(m) ? m : "";
+}
+
+std::string monado_unit(const std::string &home) {
+    const char *xch = getenv("XDG_CONFIG_HOME");
+    const std::string cfg = xch && *xch ? std::string(xch) : home + "/.config";
+    for (const std::string d : {cfg + "/systemd/user", std::string("/etc/systemd/user"),
+                                std::string("/usr/local/lib/systemd/user"),
+                                std::string("/usr/lib/systemd/user")})
+        if (is_file(d + "/monado.service"))
+            return d + "/monado.service";
+    return "";
+}
+
 static void read_runtime_manifest(const std::string &p, ActiveRuntime *rt) {
     rt->path = p;
     const std::string t = read_text_file(p, 64 * 1024);
@@ -638,9 +657,11 @@ static void read_runtime_manifest(const std::string &p, ActiveRuntime *rt) {
     const std::string both = rt->name + " " + rt->library + " " + real_path(p);
     rt->steamvr = both.find("SteamVR") != std::string::npos ||
                   both.find("steamxr") != std::string::npos;
+    rt->monado = both.find("Monado") != std::string::npos ||
+                 both.find("monado") != std::string::npos;
 }
 
-ActiveRuntime active_runtime(const std::string &home, bool steamvr_fallback) {
+ActiveRuntime active_runtime(const std::string &home, bool look_for_running) {
     ActiveRuntime rt;
     std::vector<std::string> tries;
     if (const char *e = getenv("XR_RUNTIME_JSON"))
@@ -662,18 +683,23 @@ ActiveRuntime active_runtime(const std::string &home, bool steamvr_fallback) {
         read_runtime_manifest(p, &rt);
         return rt;
     }
-    if (steamvr_fallback) {
-        std::string exe;
-        any_process([&exe](const std::string &e) {
-            if (base_name(e) != "vrserver")
-                return false;
-            exe = e;
-            return true;
+    if (look_for_running) {
+        std::string vrserver, monado;
+        any_process([&](const std::string &e) {
+            if (base_name(e) == "vrserver" && vrserver.empty())
+                vrserver = e;
+            if (base_name(e) == "monado-service" && monado.empty())
+                monado = e;
+            return !vrserver.empty() && !monado.empty();
         });
-        const std::string m = steamvr_manifest_for(exe);
+        std::string m = steamvr_manifest_for(vrserver);
         if (!m.empty()) {
             read_runtime_manifest(m, &rt);
             rt.steamvr = true;
+            rt.fallback = true;
+        } else if (!(m = monado_manifest_for(monado)).empty()) {
+            read_runtime_manifest(m, &rt);
+            rt.monado = true;
             rt.fallback = true;
         }
     }
@@ -681,11 +707,25 @@ ActiveRuntime active_runtime(const std::string &home, bool steamvr_fallback) {
 }
 
 // ----------------------------------------------------------------- is it running
+// The program a process runs. Its exe link, or, for one of the player's own processes
+// whose link is closed, the first word of its command line: a program with file
+// capabilities isn't dumpable, so its /proc files belong to root. Monado's
+// monado-service ships with cap_sys_nice, and read as not running (2026-11-18).
 static std::string proc_exe(const std::string &pid) {
     char buf[PATH_MAX];
-    const std::string link = "/proc/" + pid + "/exe";
-    const ssize_t n = readlink(link.c_str(), buf, sizeof buf - 1);
-    return n > 0 ? std::string(buf, (size_t)n) : "";
+    const std::string dir = "/proc/" + pid;
+    const ssize_t n = readlink((dir + "/exe").c_str(), buf, sizeof buf - 1);
+    if (n > 0)
+        return std::string(buf, (size_t)n);
+    const std::string status = read_text_file(dir + "/status", 8192);
+    const size_t u = status.find("\nUid:\t");
+    if (u == std::string::npos || strtoul(status.c_str() + u + 6, nullptr, 10) != getuid())
+        return "";
+    const std::string cmd = read_text_file(dir + "/cmdline", PATH_MAX);
+    const std::string arg0 = cmd.substr(0, cmd.find('\0'));
+    if (arg0.empty())
+        return "";
+    return arg0.find('/') != std::string::npos ? arg0 : find_on_path(arg0);
 }
 
 // Calls `f` with each process's program until it returns true.
@@ -728,6 +768,12 @@ bool steam_is_running(const std::string &home) {
 bool steamvr_is_running() {
     return any_process([](const std::string &exe) {
         return base_name(exe) == "vrserver";
+    });
+}
+
+bool monado_is_running() {
+    return any_process([](const std::string &exe) {
+        return base_name(exe) == "monado-service";
     });
 }
 

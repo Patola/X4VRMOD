@@ -20,6 +20,14 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
+## Unreleased
+
+* **Monado, for wired headsets.** While Monado runs, the launcher finds it and X4 uses it, even
+  though Monado never makes itself the system's default VR runtime. When Monado's service is
+  installed, the VR row's Start menu can start it. With no headset connected Monado runs a
+  simulated one, and the row says no headset is connected rather than "VR ready". The help says so
+  in every language.
+
 ## v1.0.0-rc5 — 2026-11-18 — Fifth release candidate: the whole mod under a privileged gamescope, and no crash without an OpenXR loader
 
 The fifth release candidate for 1.0, for the first bug report from a player (issue #4). Packages

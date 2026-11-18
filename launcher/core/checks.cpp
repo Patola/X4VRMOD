@@ -197,6 +197,13 @@ static Check check_vr_row(const std::string &home, XrProbe *xr_out) {
         no_runtime(c);
         return c;
     }
+    // Monado the same way: as the default runtime it's usually socket-activated, so
+    // asking would start it, and with no headset it starts anyway, on a simulated
+    // one (2026-11-18: "Selected legacy ... 'Simulated HMD'").
+    if (rt.monado && !monado_is_running()) {
+        no_runtime(c);
+        return c;
+    }
     const XrProbe p = xr_probe_child(5000);
     if (xr_out)
         *xr_out = p;
@@ -220,6 +227,16 @@ Check vr_row(const ActiveRuntime &rt, const XrProbe &p) {
                                                : !rt.name.empty() ? rt.name
                                                                   : tr_("The VR runtime"));
     const bool steamvr = rt.steamvr || who == "SteamVR";
+    // Monado with no headset found offers its simulated one, which X4 would happily
+    // draw into: nothing for the player to see.
+    if (p.status == XrStatus::Ready && who == "Monado" &&
+        p.system.find("Simulated HMD") != std::string::npos) {
+        c.title = tr_("Headset not connected");
+        c.detail = tr_("Monado found no headset and is running a simulated one. Connect the "
+                       "headset, then start Monado again.");
+        c.fix = "retry";
+        return c;
+    }
     switch (p.status) {
     case XrStatus::Ready: {
         c.status = Status::Ok;

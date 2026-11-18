@@ -5,6 +5,10 @@
 // file, children that hang, the probes' lines. Against the real X4 when there is
 // one, every feature's check must fail when its own bytes are bent. Self-checking.
 #include <fcntl.h>
+#include <cerrno>
+#include <limits.h>
+#include <sys/wait.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -421,13 +425,36 @@ static void test_runtime_file() {
           "runtime: ...only from vrserver");
     check(steamvr_manifest_for(h + "/Other/bin/linux64/vrserver").empty(),
           "runtime: ...and only where the manifest is");
+    // Monado never writes the loader's file either: its manifest beside the running
+    // monado-service, in the same prefix (2026-11-18).
+    put(h + "/mnd/share/openxr/1/openxr_monado.json",
+        "{\"runtime\": {\"name\": \"Monado\", \"library_path\": \"../../../lib/libopenxr_monado.so\"}}");
+    check(monado_manifest_for(h + "/mnd/bin/monado-service") ==
+              h + "/mnd/share/openxr/1/openxr_monado.json",
+          "runtime: Monado's own manifest, from its monado-service");
+    check(monado_manifest_for(h + "/mnd/bin/monado-cli").empty(),
+          "runtime: ...only from monado-service");
+    check(monado_manifest_for(h + "/other/bin/monado-service").empty(),
+          "runtime: ...and only where the manifest is");
+    setenv("XR_RUNTIME_JSON", (h + "/mnd/share/openxr/1/openxr_monado.json").c_str(), 1);
+    {
+        const ActiveRuntime m = active_runtime(h, false);
+        check(m.monado && !m.steamvr && m.name == "Monado", "runtime: Monado known as Monado");
+    }
+    unsetenv("XR_RUNTIME_JSON");
+    // Its user unit, by systemd's search path: the player's own folder first.
+    put(h + "/units/systemd/user/monado.service", "[Service]\n");
+    setenv("XDG_CONFIG_HOME", (h + "/units").c_str(), 1);
+    check(monado_unit(h) == h + "/units/systemd/user/monado.service",
+          "runtime: Monado's unit in the player's systemd folder comes first");
+    unsetenv("XDG_CONFIG_HOME");
     put(h + "/.config/openxr/1/active_runtime.json",
         "{\"file_format_version\": \"1.0.0\", \"runtime\": {\"name\": \"WiVRn\", "
         "\"library_path\": \"/usr/lib/wivrn/libopenxr_wivrn.so\"}}");
     ActiveRuntime rt = active_runtime(h);
     check(rt.name == "WiVRn" && rt.library == "/usr/lib/wivrn/libopenxr_wivrn.so",
           "runtime: name and library");
-    check(!rt.steamvr, "runtime: WiVRn isn't SteamVR");
+    check(!rt.steamvr && !rt.monado, "runtime: WiVRn isn't SteamVR or Monado");
     const std::string steam = h + "/steamxr_linux64.json";
     put(steam, "{\"runtime\": {\"name\": \"SteamVR\", \"library_path\": "
                "\"../linux64/vrclient.so\"}}");
@@ -765,6 +792,28 @@ static void test_vr_row() {
           "SteamVR waiting for its headset reads as no headset");
     c = vr_row(other, p);
     check(c.title == "VR runtime not answering", "...another runtime's failure doesn't");
+    // Monado with no headset runs a simulated one (2026-11-18): not a headset to play in.
+    ActiveRuntime monado;
+    monado.name = "Monado";
+    monado.monado = true;
+    p.status = XrStatus::Ready;
+    p.detail.clear();
+    p.runtime = "Monado(XRT) by Collabora et al 'v25.1.0-1137-gcfe34f7b2'";
+    p.system = "Monado: Simulated HMD";
+    p.eye_w = 896;
+    p.eye_h = 1007;
+    c = vr_row(monado, p);
+    check(c.status == Status::Block && c.title == "Headset not connected" &&
+              c.detail.find("simulated") != std::string::npos,
+          "Monado's simulated headset reads as no headset");
+    p.system = "Monado: Valve Index";
+    c = vr_row(monado, p);
+    check(c.status == Status::Ok && c.detail.find("Monado, Monado: Valve Index") == 0,
+          "...a real one Monado found is ready");
+    p.system = "Simulated HMD";
+    p.runtime = "WiVRn";
+    c = vr_row(wivrn, p);
+    check(c.status == Status::Ok, "...and another runtime's \"Simulated HMD\" isn't judged");
 }
 
 // X4 asks XDG_CONFIG_HOME, then HOME. The folder inside is the player's own.
@@ -1195,6 +1244,43 @@ static void test_real_x4() {
     check(allbad, "patches: a file with none of the code fails every group");
 }
 
+// A runtime started with file capabilities isn't dumpable, so its /proc/<pid>/exe is
+// closed even to its own user: Monado's monado-service (cap_sys_nice) read as not
+// running, and the launcher said "No VR runtime running" beside it (2026-11-18). A copy
+// of a program that closes its own files the same way, named monado-service, must be
+// found -- and its link must really be closed, or this proves nothing.
+static void test_closed_process() {
+    if (monado_is_running()) {
+        printf("SKIP   a monado-service is running here: can't tell ours from it\n");
+        return;
+    }
+    char self[PATH_MAX];
+    const ssize_t n = readlink("/proc/self/exe", self, sizeof self - 1);
+    if (n <= 0)
+        return;
+    const std::string helper = dir_name(std::string(self, (size_t)n)) + "/x4vr_nondumpable";
+    const std::string copy = g_tmp + "/closed/bin/monado-service";
+    put(copy, read_text_file(helper, 1 << 24));
+    chmod(copy.c_str(), 0755);
+    const pid_t pid = fork();
+    if (pid == 0) {
+        execl(copy.c_str(), copy.c_str(), (char *)nullptr);
+        _exit(127);
+    }
+    char link[PATH_MAX];
+    const std::string exe = "/proc/" + std::to_string(pid) + "/exe";
+    bool closed = false;
+    for (int i = 0; i < 200 && !closed; i++) {
+        usleep(10000);
+        closed = readlink(exe.c_str(), link, sizeof link) < 0 && errno == EACCES;
+    }
+    check(closed, "closed process: its exe link really is closed to us");
+    check(monado_is_running(), "closed process: a monado-service with its exe closed is found");
+    kill(pid, SIGKILL);
+    waitpid(pid, nullptr, 0);
+    check(!monado_is_running(), "closed process: ...and once it's gone, it isn't");
+}
+
 int main() {
     char tmpl[] = "/tmp/x4vrmod-test-XXXXXX";
     if (!mkdtemp(tmpl)) {
@@ -1217,6 +1303,7 @@ int main() {
     test_eye_rule();
     test_profile();
     test_vr_row();
+    test_closed_process();
     test_profile_dirs();
     test_child_env();
     test_offered();

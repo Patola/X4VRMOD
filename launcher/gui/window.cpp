@@ -805,10 +805,14 @@ void Window::updateRow(const std::string &id) {
 
 void Window::updateVrStart(bool wanted) {
     const QString wivrn = q(wivrn_program()), steam = q(find_on_path("steam"));
-    m_vrStart->setVisible(wanted && (!wivrn.isEmpty() || !steam.isEmpty()));
+    // Monado through its systemd user unit, the one way it starts from here: run
+    // directly, monado-service won't start without a real standard input.
+    const QString systemctl = q(find_on_path("systemctl"));
+    const QString monado = !systemctl.isEmpty() && !monado_unit(m_home).empty() ? systemctl : QString();
+    m_vrStart->setVisible(wanted && (!wivrn.isEmpty() || !steam.isEmpty() || !monado.isEmpty()));
     // Rebuilt only when it differs, because this runs on every check and could close an
     // open menu.
-    const QString choices = wivrn + "|" + steam;
+    const QString choices = wivrn + "|" + steam + "|" + monado;
     if (choices == m_vrChoices)
         return;
     m_vrChoices = choices;
@@ -822,6 +826,8 @@ void Window::updateVrStart(bool wanted) {
         choice(qtr("Start WiVRn"), wivrn, {});
     if (!steam.isEmpty())
         choice(qtr("Start SteamVR"), steam, {"steam://run/250820"});
+    if (!monado.isEmpty())
+        choice(qtr("Start Monado"), monado, {"--user", "start", "monado.service"});
     if (!menu->actions().isEmpty())
         m_vrStart->setText(menu->actions().first()->text());
 }
