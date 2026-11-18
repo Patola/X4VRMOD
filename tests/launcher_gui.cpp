@@ -429,6 +429,21 @@ static void test_report(const std::string &home, const QString &shots) {
     auto *session = d.findChild<QComboBox *>("session");
     check(session && session->count() == 1 && session->currentText().contains("debug log"),
           "report: the session is offered, marked as a debug log");
+    {
+        const std::string flat = logs + "/x4vrmod-20260105-063000-flat.log";
+        QFile ff(QString::fromStdString(flat));
+        if (ff.open(QIODevice::WriteOnly))
+            ff.write("x4vrmod: a flatscreen session\n");
+        ff.close();
+        gui::ReportDialog fd(home, "", nullptr);
+        auto *fs = fd.findChild<QComboBox *>("session");
+        bool marked = false;
+        for (int i = 0; fs && i < fs->count(); i++)
+            marked = marked || (fs->itemData(i).toString().endsWith("-flat.log") &&
+                                fs->itemText(i).contains("flatscreen: X4 without the mod"));
+        check(fs && fs->count() == 2 && marked, "report: a flat session is offered, marked as flat");
+        QFile::remove(QString::fromStdString(flat));
+    }
     auto *issue = d.findChild<QPushButton *>("issue");
     auto *files = d.findChild<QPushButton *>("files");
     check(issue && !issue->isEnabled() && files && !files->isEnabled(), "nothing to send until it's made");

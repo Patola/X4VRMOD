@@ -214,10 +214,14 @@ ReportDialog::ReportDialog(const std::string &home, const std::string &game, QWi
     for (const SessionLog &l : session_logs(m_home)) {
         const QString when = QDateTime::fromSecsSinceEpoch(l.when).toString("yyyy-MM-dd hh:mm");
         const double mb = double(l.size) / (1024.0 * 1024.0);
-        m_session->addItem((l.debug ? qtr("%1, debug log, %2 MB") : qtr("%1, %2 MB"))
-                               .arg(when)
-                               .arg(mb, 0, 'f', 1),
-                           q(l.path));
+        if (l.flat)
+            m_session->addItem(qtr("%1, flatscreen: X4 without the mod, nothing logged").arg(when),
+                               q(l.path));
+        else
+            m_session->addItem((l.debug ? qtr("%1, debug log, %2 MB") : qtr("%1, %2 MB"))
+                                   .arg(when)
+                                   .arg(mb, 0, 'f', 1),
+                               q(l.path));
     }
     if (m_session->count() == 0)
         m_session->addItem(qtr("No session log yet: X4 hasn't got that far"), QString());

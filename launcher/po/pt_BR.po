@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-18 20:22+0100\n"
+"POT-Creation-Date: 2026-11-18 22:05+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -665,6 +665,11 @@ msgstr "%1, %2 MB"
 #, qt-format
 msgid "%1, debug log, %2 MB"
 msgstr "%1, log de depuração, %2 MB"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "%1, flatscreen: X4 without the mod, nothing logged"
+msgstr "%1, Sem VR: X4 sem o mod, nada registrado"
 
 #: launcher/gui/dialogs.cpp
 #, qt-format

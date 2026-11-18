@@ -1222,6 +1222,44 @@ static void test_report() {
     const ReportResult nr = make_report(none);
     check(nr.ok && !is_file(nr.dir + "/session.log"), "no log yet: a report can still be made");
     check(read_text_file(nr.dir + "/summary.txt").find("Log: none") != std::string::npos, "...and says so");
+
+    // A flat session, which only notes that it started (2026-11-18: with no log of its
+    // own, a report took the last VR session's log for it, with the flat game's launch
+    // output beside it, and called it a debug session).
+    const std::string flat = logs + "/x4vrmod-20260103-100000-flat.log";
+    put(flat, "x4vrmod v0: a flatscreen session, X4 started by itself without the mod\n");
+    {
+        struct timespec later[2] = {{time(nullptr) + 60, 0}, {time(nullptr) + 60, 0}};
+        utimensat(AT_FDCWD, flat.c_str(), later, 0);
+    }
+    put(logs + "/launch-output.txt", "Loading saved game 'save_001', first pass\n");
+    const std::vector<SessionLog> fl = session_logs(home);
+    check(!fl.empty() && fl[0].path == flat && fl[0].flat && !fl[0].debug,
+          "sessions: a flat one listed, newest, marked flat");
+    check(fl.size() > 1 && !fl[1].flat, "...and the others aren't");
+    ReportOptions fo;
+    fo.home = home;
+    fo.log = flat;
+    const ReportResult fr = make_report(fo);
+    check(fr.ok && read_text_file(fr.dir + "/summary.txt").find("Log: flat session: X4 without the mod") !=
+                       std::string::npos,
+          "flat: the report says the session was flat");
+    check(read_text_file(fr.dir + "/session.log").find("flatscreen session") != std::string::npos &&
+              read_text_file(fr.dir + "/launch-output.txt").find("save_001") != std::string::npos,
+          "flat: its own log, with the flat game's launch output");
+    ReportOptions vo;
+    vo.home = home;
+    vo.log = debug;
+    const ReportResult vr = make_report(vo);
+    check(vr.ok && read_text_file(vr.dir + "/summary.txt").find("Log: debug session") != std::string::npos &&
+              !is_file(vr.dir + "/launch-output.txt"),
+          "flat: the VR session before it keeps its own name, without the flat game's output");
+    // The control: without the flat session's log, that report takes the flat game's
+    // output as its own -- what the RTX 5090 player's report did.
+    remove(flat.c_str());
+    const ReportResult cr = make_report(vo);
+    check(cr.ok && read_text_file(cr.dir + "/launch-output.txt").find("save_001") != std::string::npos,
+          "flat: control: with no flat log, the VR session's report takes the flat game's output");
     if (saved)
         setenv("XDG_STATE_HOME", keep.c_str(), 1);
 }

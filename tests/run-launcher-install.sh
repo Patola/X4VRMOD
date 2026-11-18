@@ -272,6 +272,14 @@ grep -q '^THROUGH testandlaunch' <<<"$out" && ok "run --flat: by X4's own testan
 grep -q '^FAKE args=3 steam=unset ' <<<"$out" && ok "run --flat: the usual flags, no Steam for a non-Steam X4" || bad "flat: $out"
 grep -q 'poselog=unset' <<<"$out" && ok "run --flat: no instruments" || bad "flat: $out"
 grep -q 'x4vr-launch' <<<"$out" && bad "run --flat: went through the launch script" || ok "run --flat: not through the launch script"
+# A flat session leaves its own log, saying so, for a bug report to name it (2026-11-18).
+flatlog=$(ls -t "$H/.local/state/x4vrmod/logs/"*-flat.log 2>/dev/null | head -1)
+if [ -n "$flatlog" ] && grep -q 'a flatscreen session, X4 started by itself without the mod' "$flatlog" &&
+    grep -qF "X4: $G/X4" "$flatlog"; then
+    ok "run --flat: leaves a -flat.log saying so, naming the X4"
+else
+    bad "run --flat: no flat log ($flatlog)"
+fi
 out=$(env LD_PRELOAD= $I run --flat --debug --game "$G" 2>&1)
 grep -q 'poselog=unset' <<<"$out" && ok "run --flat --debug: flat wins" || bad "flat debug: $out"
 out=$($I run --flat --game "$G" -- /bin/true 2>&1); rc=$?

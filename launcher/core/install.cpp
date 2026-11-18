@@ -318,6 +318,31 @@ ActionReport uninstall_apply(const UninstallPlan &p) {
     return r;
 }
 
+static std::string new_log_path(const std::string &home, const char *ending);
+
+// A flat session's own log, which is all the mod can say about it: nothing of the mod's
+// runs, so nothing else would mark the session, and a bug report would take the last VR
+// session's log for it -- with the flat game's launch output beside it (2026-11-18).
+static void write_flat_log(const std::string &home, const std::string &exe, bool gamemode) {
+    const std::string path = new_log_path(home, "-flat.log");
+    FILE *f = fopen(path.c_str(), "w");
+    if (!f)
+        return;
+    char when[64];
+    const time_t now = time(nullptr);
+    struct tm tmv;
+    localtime_r(&now, &tmv);
+    strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", &tmv);
+    fprintf(f,
+            "x4vrmod %s: a flatscreen session, X4 started by itself without the mod "
+            "(x4vrmod run --flat).\n"
+            "The mod's layer and injector weren't loaded, so it logged nothing else: what "
+            "X4 itself printed, when started from the window, is in launch-output.txt.\n"
+            "started: %s\nX4: %s\nGameMode: %s\n",
+            own_version(), when, exe.c_str(), gamemode ? "on" : "off");
+    fclose(f);
+}
+
 int run_flat(const std::string &home, const std::string &game) {
     bool found = false;
     const Install in = choose_install(home, game, &found);
@@ -349,6 +374,7 @@ int run_flat(const std::string &home, const std::string &game) {
     const std::string wrap = !gm.empty() && gm[0] != '0' ? find_on_path("gamemoderun") : "";
     if (!wrap.empty())
         argv.insert(argv.begin(), const_cast<char *>(wrap.c_str()));
+    write_flat_log(home, in.exe, !wrap.empty());
     fflush(nullptr);
     execv(argv[0], argv.data());
     perror("x4vrmod: couldn't start X4");
@@ -374,9 +400,9 @@ std::string terminal_line(const std::string &home) {
 }
 
 // One log per run, because the scorer refuses a file holding two sessions; the
-// newest twenty stay.
+// newest twenty stay. `ending` is ".log", "-debug.log" or "-flat.log".
 // The window names this folder and the debug log's ending in Debug log's tooltip.
-static std::string new_log_path(const std::string &home, bool debug) {
+static std::string new_log_path(const std::string &home, const char *ending) {
     const std::string dir = log_dir(home);
     std::error_code ec;
     fs::create_directories(dir, ec);
@@ -400,7 +426,7 @@ static std::string new_log_path(const std::string &home, bool debug) {
     struct tm tmv;
     localtime_r(&now, &tmv);
     strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tmv);
-    return dir + "/x4vrmod-" + stamp + (debug ? "-debug.log" : ".log");
+    return dir + "/x4vrmod-" + stamp + ending;
 }
 
 std::string log_dir(const std::string &home) {
@@ -490,7 +516,8 @@ int run_mod(const std::string &home, const std::string &game,
     }
     if (!getenv("X4VR_LOG")) {
         const char *d = getenv("X4VR_DEBUG");
-        setenv("X4VR_LOG", new_log_path(home, d && !strcmp(d, "1")).c_str(), 1);
+        setenv("X4VR_LOG", new_log_path(home, d && !strcmp(d, "1") ? "-debug.log" : ".log").c_str(),
+               1);
     }
     // A running SteamVR or Monado that isn't the default OpenXR runtime: the runtime the
     // checklist found is the one X4 gets, and the log's run line records it.

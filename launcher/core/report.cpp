@@ -136,6 +136,7 @@ std::vector<SessionLog> session_logs(const std::string &home) {
         l.when = st.st_mtime;
         l.size = (uint64_t)st.st_size;
         l.debug = n.find("-debug.log") != std::string::npos;
+        l.flat = n.find("-flat.log") != std::string::npos;
         out.push_back(l);
     }
     std::sort(out.begin(), out.end(), [](const SessionLog &a, const SessionLog &b) {
@@ -371,17 +372,24 @@ ReportResult make_report(const ReportOptions &o) {
     const EyeSettings eye = eye_settings(profile);
     const std::vector<SessionLog> logs = session_logs(home);
     bool found_log = !o.log.empty();
-    bool debug = false, newest = o.log.empty() || (!logs.empty() && logs[0].path == o.log);
+    bool debug = false, flat = false,
+         newest = o.log.empty() || (!logs.empty() && logs[0].path == o.log);
     for (const SessionLog &l : logs)
-        if (l.path == o.log)
+        if (l.path == o.log) {
             debug = l.debug;
+            flat = l.flat;
+        }
 
     std::string summary = std::string("X4 VR Mod ") + own_version() + " (" +
                           layout_name(detect_layout(home).kind) + ")\n";
     summary += system_lines();
     summary += "Settings: eye " + std::to_string(eye.eye) + ", upscaler " + eye.upscaler + "\n";
-    summary += std::string("Log: ") + (found_log ? (debug ? "debug session" : "normal session")
-                                                 : "none") + "\n";
+    summary += std::string("Log: ") +
+               (!found_log ? "none"
+                : flat     ? "flat session: X4 without the mod, which logged nothing during it"
+                : debug    ? "debug session"
+                           : "normal session") +
+               "\n";
     const std::vector<std::string> vr_logs = steamvr_logs(home);
     summary += "SteamVR's logs: " +
                (vr_logs.empty() ? std::string("none from the last two days")

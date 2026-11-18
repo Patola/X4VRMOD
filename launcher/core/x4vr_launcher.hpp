@@ -401,6 +401,7 @@ struct SessionLog {
     long long when = 0;
     uint64_t size = 0;
     bool debug = false;
+    bool flat = false; // `run --flat`: X4 without the mod, which only noted that it started
 };
 std::vector<SessionLog> session_logs(const std::string &home);
 // A log, keeping `head` and `tail` bytes of one that's longer than both.
