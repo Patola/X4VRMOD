@@ -1726,6 +1726,20 @@ want "aimpick: asked, no PATCHED line -> FAIL" /tmp/census-ap-base.log "FAIL|  -
 { cat "$BASE"; printf '%s\n' "$app"; } > /tmp/census-ap-unasked.log
 want "aimpick: patched unasked -> FAIL" /tmp/census-ap-unasked.log "FAIL|  - " "the targeting patch acted in a run that did not ask for it"
 absent "aimpick: not asked -> silent" "$BASE" aimpick
+# The window check reads GAMESCOPE's window, from the injector loaded into it
+# (take 101's defect). Take 439's gamescope had CAP_SYS_NICE, refused the
+# injector, and the first window line was X4's own: two FAILs for a healthy run.
+sed 's/SDL_GetWindowSize -> 5632x2816 (pid 769789)/SDL_GetWindowSize -> 2816x792 (pid 769789)/' "$BASE" > /tmp/census-win-bad.log
+want "window: gamescope's window wrong -> FAIL" /tmp/census-win-bad.log "FAIL|  - " "the composite is 5632x2816 but X4's window is 2816x792"
+grep -v 'injector loaded into pid 769789 (/usr/bin/gamescope)\|SDL_GetWindowSize -> 5632x2816 (pid 769789)' "$BASE" > /tmp/census-win-priv.log
+want "window: no injector in gamescope -> unmeasured" /tmp/census-win-priv.log extents "gamescope's window unmeasured (the injector wasn't in gamescope)"
+if python3 tools/score_run.py /tmp/census-win-priv.log 2>&1 | grep -qE "^  - .*X4's window is"; then
+    bad "window: no injector in gamescope -> FAILs on X4's own window"
+else
+    ok "window: no injector in gamescope -> X4's own window isn't taken for it"
+fi
+sed -e 's/ (pid [0-9]*)$//' -e 's/SDL_GetWindowSize -> 5632x2816$/SDL_GetWindowSize -> 2816x792/' "$BASE" > /tmp/census-win-old.log
+want "window: a log without pids, wrong first window -> FAIL as before" /tmp/census-win-old.log "FAIL|  - " "the composite is 5632x2816 but X4's window is 2816x792"
 # Issue #4: X4 without the injector, though the run asked for it.
 if grep -qF '"milestone: X4 is running WITHOUT the mod'"'"'s "' layer/x4vr_layer.cpp; then
     ok "noinject: the layer still prints it"

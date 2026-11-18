@@ -255,7 +255,20 @@ def main(path):
     m_ext = re.search(
         r"extents: X4 renders (\d+)x(\d+), this run's eye is (\d+)x(\d+) "
         r"\(from ([^)]+)\), the composite presents (\d+)x(\d+) -- (.+)", text)
-    m_win = re.search(r"sdl: SDL_GetWindowSize -> (\d+)x(\d+)", text)
+    # The window is gamescope's, logged by the injector loaded INTO gamescope.
+    # Take 439's gamescope had CAP_SYS_NICE, refused the injector, and the
+    # first window line was X4's own one-eye window: two FAILs for a healthy
+    # run. So: the line from gamescope's pid. None when the injector wasn't in
+    # gamescope; a log whose lines carry no pid keeps the first, as before.
+    gs_pids = set(re.findall(r"injector loaded into pid (\d+) \([^)]*/gamescope\)",
+                             text))
+    m_win = None
+    for w in re.finditer(r"sdl: SDL_GetWindowSize -> (\d+)x(\d+)(?: \(pid (\d+)\))?",
+                         text):
+        if w.group(3) is None or w.group(3) in gs_pids:
+            m_win = w
+            break
+    win_unmeasured = m_win is None and re.search(r"sdl: SDL_GetWindowSize", text)
     m_swap = re.search(r"WARNING swapchain is (\d+)x(\d+), expected (\d+)x(\d+)",
                        text)
 
@@ -281,7 +294,9 @@ def main(path):
 
     if m_ext:
         rw, rh, ew, eh, src, cw, ch, verdict = m_ext.groups()
-        win = f", window {m_win.group(1)}x{m_win.group(2)}" if m_win else ""
+        win = (f", window {m_win.group(1)}x{m_win.group(2)}" if m_win else
+               ", gamescope's window unmeasured (the injector wasn't in "
+               "gamescope)" if win_unmeasured else "")
         print(f"extents  X4 renders {rw}x{rh}, eye {ew}x{eh} (from {src}), "
               f"composite {cw}x{ch}{win}")
         if "DISAGREE" in verdict:
