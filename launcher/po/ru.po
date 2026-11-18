@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-18 22:05+0100\n"
+"POT-Creation-Date: 2026-11-18 22:17+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -1052,6 +1052,16 @@ msgstr "Найдите программу X4"
 #, qt-format
 msgid "Flatscreen"
 msgstr "Без VR"
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Flatscreen: these are the mod's VR settings, and so is the debug log. A flat "
+"game uses X4's own: choose DLSS in X4's graphics settings."
+msgstr ""
+"Без VR: это настройки VR мода, как и отладочный журнал. Игра без VR "
+"использует собственные настройки X4: выберите DLSS в графических настройках "
+"X4."
 
 #: launcher/gui/window.cpp
 #, qt-format

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-18 22:05+0100\n"
+"POT-Creation-Date: 2026-11-18 22:17+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -1153,6 +1153,13 @@ msgstr ""
 #: launcher/gui/window.cpp
 #, qt-format
 msgid "Renders %1 x %1."
+msgstr ""
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Flatscreen: these are the mod's VR settings, and so is the debug log. A flat "
+"game uses X4's own: choose DLSS in X4's graphics settings."
 msgstr ""
 
 #: launcher/gui/window.cpp

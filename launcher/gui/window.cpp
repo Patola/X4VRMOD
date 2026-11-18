@@ -566,6 +566,13 @@ void Window::syncSettings() {
     const std::string un = upscaler_note(m_eye.upscaler);
     if (!un.empty())
         lines << q(un);
+    // Flatscreen greys these out: they're the mod's VR settings, and a flat game runs
+    // nothing of the mod's. Say so, or "DLSS" greyed reads as "no DLSS" (the RTX 5090
+    // player, 2026-11-18).
+    if (m_flat && m_flat->isChecked())
+        lines = QStringList{qtr("Flatscreen: these are the mod's VR settings, and so is the debug "
+                                "log. A flat game uses X4's own: choose DLSS in X4's graphics "
+                                "settings.")};
     m_renders->setText(lines.join(' '));
     m_renders->setVisible(!lines.isEmpty());
 
@@ -655,6 +662,7 @@ void Window::flatToggled() {
     m_debug->setEnabled(!flat);
     m_eyeBox->setEnabled(!flat);
     m_upBox->setEnabled(!flat);
+    syncSettings(); // its note says why they're greyed
     for (const char *id : kRowIds)
         updateRow(id);
     updatePlay();

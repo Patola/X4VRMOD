@@ -250,6 +250,15 @@ static void test_play(Window &w, const QString &shots) {
     check(!w.findChild<QToolButton *>("start-vr")->isVisibleTo(&w), "...the VR row offers nothing");
     check(!debug->isEnabled() && !w.findChild<QComboBox *>("eye")->isEnabled(),
           "...and Debug log and the VR settings grey out");
+    // ...and say why, or a greyed "DLSS Auto" reads as no DLSS (the RTX 5090 player).
+    auto *renders = w.findChild<QLabel *>("renders");
+    check(renders && renders->isVisibleTo(&w) && renders->text().contains("mod's VR settings") &&
+              renders->text().contains("X4's graphics settings") &&
+              renders->text().contains("debug log"),
+          "...and say why: the mod's VR settings and its debug log, DLSS in X4's own settings");
+    flat->setChecked(false);
+    check(!renders->text().contains("mod's VR settings"), "...unticked, the VR notes come back");
+    flat->setChecked(true);
     debug->setChecked(true);
     w.play();
     check(w.lastLaunch() == QStringList({"run", "--flat", "--game", QString::fromStdString(w.gameExe())}),
