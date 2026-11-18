@@ -18,6 +18,7 @@
 // before the writer's first update looked torn. Seeding them equal is the
 // fix, and the episode is why the negative control above was run at all.
 #include "../common/x4vr_share.hpp"
+#include <chrono>
 #include <cstdio>
 #include <thread>
 extern "C" x4vr::Shared *x4vr_shared_state() { static x4vr::Shared s; return &s; }
@@ -171,32 +172,68 @@ int main() {
                  got, attempts);
         ck(got >= kWant, buf);
 
-        // **The cadence that actually ships.** The servo publishes at 90 Hz and
-        // the layer reads once a frame, so the two are nowhere near this
-        // contended -- and a refusal costs a frame served from the previous
-        // snapshot. Refusals have to be rare at the real ratio, not merely
-        // survivable at the worst one.
-        std::atomic<bool> stop4{false};
-        long refused_real = 0, got_real = 0, torn_real = 0;
-        std::thread w4([&]{
-            for (int i = 1; i <= kIter && !stop4; i++) {
-                publish(i);
-                for (volatile int spin = 0; spin < 2000; spin++) {}
+        // **The cadence that actually ships**, or near it. The servo publishes
+        // at 90 Hz and the layer reads once a frame, and a refusal costs a frame
+        // served from the previous snapshot: refusals have to be rare at the
+        // real ratio, not merely survivable at the worst one. Here the writer
+        // publishes every millisecond and the reader reads every 50 us -- 11x
+        // and well over 100x the real rates -- both SLEEPING. The first version
+        // spun 2000 iterations between publishes, about a megahertz, so it
+        // timed the runner rather than the seqlock: a writer preempted inside
+        // its write starves a spinning reader, and rc5's first CI run measured
+        // 1.349% with nothing changed in twelve days.
+        auto cadence = [&](auto read, long *refused, long *got, long *torn) {
+            std::atomic<bool> stop{false};
+            std::thread w([&] {
+                for (int i = 1; !stop; i++) {
+                    publish(i % 300000 + 1);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+            });
+            const auto end =
+                std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+            while (std::chrono::steady_clock::now() < end) {
+                x4vr::CamSnap c;
+                if (!read(&c)) {
+                    (*refused)++;
+                } else {
+                    (*got)++;
+                    if (!consistent(c)) (*torn)++;
+                }
+                std::this_thread::sleep_for(std::chrono::microseconds(50));
             }
-        });
-        for (int i = 0; i < 200000; i++) {
-            x4vr::CamSnap c;
-            if (!x4vr::share_read_camera(s, &c)) { refused_real++; continue; }
-            got_real++;
-            if (!consistent(c)) torn_real++;
-        }
-        stop4 = true; w4.join();
-        const double pct = 100.0 * (double)refused_real /
-                           (double)(refused_real + got_real);
+            stop = true;
+            w.join();
+        };
+        auto pct_of = [](long refused, long got) {
+            return 100.0 * (double)refused / (double)(refused + got);
+        };
+        // The control, FIRST, as above: a reader that refuses whenever anything
+        // was published since its last read must fail the same bar, or a pass
+        // below is the sleeps' doing and not the seqlock's.
+        long refused_c = 0, got_c = 0, torn_c = 0;
+        uint32_t last = s->cam_seq.load();
+        cadence([&](x4vr::CamSnap *c) {
+            const uint32_t now = s->cam_seq.load();
+            if (now != last) {
+                last = now;
+                return false;
+            }
+            return x4vr::share_read_camera(s, c);
+        }, &refused_c, &got_c, &torn_c);
         snprintf(buf, sizeof buf,
-                 "at a realistic write cadence: %.3f%% refused, %ld torn", pct,
-                 torn_real);
-        ck(pct < 1.0 && torn_real == 0, buf);
+                 "control: a refuse-on-any-change reader fails it (%.3f%%)",
+                 pct_of(refused_c, got_c));
+        ck(pct_of(refused_c, got_c) >= 1.0, buf);
+
+        long refused_real = 0, got_real = 0, torn_real = 0;
+        cadence([&](x4vr::CamSnap *c) { return x4vr::share_read_camera(s, c); },
+                &refused_real, &got_real, &torn_real);
+        const double pct = pct_of(refused_real, got_real);
+        snprintf(buf, sizeof buf,
+                 "at a realistic write cadence: %.3f%% refused, %ld torn of %ld", pct,
+                 torn_real, got_real);
+        ck(pct < 1.0 && torn_real == 0 && got_real >= 5000, buf);
     }
 
     printf("\n%s\n", fails?"FAILURES":"all cases passed");
