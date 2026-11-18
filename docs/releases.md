@@ -20,13 +20,21 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
-## Unreleased
+## v1.0.0-rc5 — 2026-11-18 — Fifth release candidate: the whole mod under a privileged gamescope, and no crash without an OpenXR loader
+
+The fifth release candidate for 1.0, for the first bug report from a player (issue #4). Packages
+call it `1.0.0~rc5` (Arch: `1.0.0rc5`), which installs over rc1 to rc4 as an upgrade and sorts
+before 1.0.0.
+
+Take the package named for your system: Arch, Ubuntu 24.04, Ubuntu 26.04, Debian 13 or Fedora,
+or the zip for anything else.
 
 * **With some distributions' gamescope (Nobara's, in issue #4), X4 started without half of the
   mod**: no head-look, menus left fixed in the room behind you, recentring doing nothing, the
   cursor gone. That gamescope has extra privileges (to raise its own priority), and the system
   then strips the setting that loads the mod's injector from everything gamescope starts. The
-  launcher now hands it to X4 directly. Elsewhere nothing changes.
+  launcher now hands it to X4 directly; tested with a gamescope given that privilege. Elsewhere
+  nothing changes.
 * **No more crash at start when X4 can't find the OpenXR loader**, as happened when starting X4
   from Steam inside its runtime container. X4 now plays flat and the log says why, and that
   the launcher's Play starts X4 outside the container.
