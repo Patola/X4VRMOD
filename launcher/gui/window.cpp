@@ -119,8 +119,8 @@ QString rowTip(const std::string &id) {
                    "and vkBasalt, work on the flat picture X4 draws, not on what the headset "
                    "shows. Shown only when one would load into X4.");
     if (id == "lsfg")
-        return qtr("Settings for lsfg-vk, Lossless Scaling's frame generator, in your "
-                   "environment or X4's launch options in Steam. Shown only when there are some.");
+        return qtr("lsfg-vk, Lossless Scaling's frame generator: installed for the whole system, or "
+                   "set up in your environment or X4's launch options in Steam. Shown only when it is.");
     return "";
 }
 

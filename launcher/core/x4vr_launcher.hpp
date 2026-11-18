@@ -250,13 +250,14 @@ struct UnwantedLayer {
     std::string tool;   // as people call it: lsfg-vk, MangoHud, vkBasalt
     std::string why;    // loads everywhere, the environment, the launch options
     std::string where;  // its manifest, or the setting that turns it on
+    bool everywhere = false; // its manifest loads it into every Vulkan program
 };
 std::vector<UnwantedLayer> unwanted_layers(const std::string &home,
                                            const std::vector<std::string> &launch_options);
 // Settings for lsfg-vk: any variable with LSFG in its name, in this environment or in
 // X4's Steam launch options -- DISABLE_LSFGVK as much as LSFG_PROCESS. Patola,
-// 2026-11-18: lsfg-vk can keep the mod from working even turned off, so having it set up
-// at all is worth its own warning, and asking to uninstall it rather than turn it off.
+// 2026-11-18: lsfg-vk can keep the mod from working, so it set up at all, or installed
+// for the whole system, gets a row of its own asking to disable it for the whole system.
 struct LsfgVariable {
     std::string name;
     bool launch_options = false; // X4's in Steam, not the environment

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-18 20:09+0100\n"
+"POT-Creation-Date: 2026-11-18 20:22+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -224,19 +224,27 @@ msgstr ""
 
 #: launcher/core/checks.cpp
 #, qt-format
+msgid "%1 is set"
+msgid_plural "%1 are set"
+msgstr[0] ""
+msgstr[1] ""
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "lsfg-vk is installed for the whole system"
+msgstr ""
+
+#: launcher/core/checks.cpp
+#, qt-format
 msgid "lsfg-vk is set up on this computer"
 msgstr ""
 
 #: launcher/core/checks.cpp
 #, qt-format
 msgid ""
-"%1 is set. lsfg-vk can keep the mod from working, even when it's turned off: "
-"uninstall it, or don't install it for the whole system."
-msgid_plural ""
-"%1 are set. lsfg-vk can keep the mod from working, even when it's turned "
-"off: uninstall it, or don't install it for the whole system."
-msgstr[0] ""
-msgstr[1] ""
+"lsfg-vk: %1. It can keep the mod from working: disable it for the whole "
+"system while you play in VR, not only for X4."
+msgstr ""
 
 #: launcher/core/checks.cpp
 #, qt-format
@@ -895,8 +903,9 @@ msgstr ""
 #: launcher/gui/window.cpp
 #, qt-format
 msgid ""
-"Settings for lsfg-vk, Lossless Scaling's frame generator, in your "
-"environment or X4's launch options in Steam. Shown only when there are some."
+"lsfg-vk, Lossless Scaling's frame generator: installed for the whole system, "
+"or set up in your environment or X4's launch options in Steam. Shown only "
+"when it is."
 msgstr ""
 
 #: launcher/gui/window.cpp

@@ -607,26 +607,44 @@ static void test_overlays() {
     o.home = h;
     o.skip_vr = o.skip_gpu = true;
     const std::vector<Check> v = run_checks(o);
-    const Check *r = row(v, "overlays");
-    check(r && r->status == Status::Warn && r->fix == "help-overlays" &&
-              r->title.find("lsfg-vk") != std::string::npos &&
-              r->detail.find("every Vulkan program") != std::string::npos,
-          "overlays: the checklist's row is amber, names lsfg-vk and why, with the help's section");
-    // Its variables set: a row of its own asking to uninstall it, and the overlays row,
-    // which would say "turn it off for X4", leaves it out.
+    // lsfg-vk installed for the whole system: a row of its own, asking to disable it for
+    // the whole system (Patola, 2026-11-18), and never in the overlays row.
+    const Check *l = row(v, "lsfg");
+    check(l && l->status == Status::Warn && l->fix == "help-overlays" &&
+              l->title == "lsfg-vk is installed for the whole system" &&
+              l->detail.find("lsfg-vk: it loads into every Vulkan program.") == 0 &&
+              l->detail.find("disable it for the whole system") != std::string::npos,
+          "lsfg: installed for the whole system: its own amber row, why, asking to disable it");
+    check(!row(v, "overlays"), "lsfg: ...and the overlays row doesn't say it again");
+    setenv("MANGOHUD", "1", 1);
+    {
+        const std::vector<Check> vm = run_checks(o); // kept: row() points into it
+        const Check *r = row(vm, "overlays");
+        check(r && r->title.find("MangoHud") != std::string::npos &&
+                  r->title.find("lsfg-vk") == std::string::npos,
+              "overlays: another tool keeps the overlays row, without lsfg-vk in it");
+    }
+    unsetenv("MANGOHUD");
+    // Its variables as well: one row, saying both.
     setenv("LSFG_PROCESS", "x4", 1);
+    l = nullptr;
     {
         const std::vector<Check> v2 = run_checks(o);
-        const Check *l = row(v2, "lsfg");
-        check(l && l->status == Status::Warn && l->fix == "help-overlays" &&
-                  l->detail.find("LSFG_PROCESS is set.") == 0 &&
-                  l->detail.find("uninstall it") != std::string::npos,
-              "lsfg: LSFG_PROCESS set: its own amber row, naming it, asking to uninstall");
-        check(!row(v2, "overlays"), "lsfg: ...and the overlays row doesn't say it twice");
+        l = row(v2, "lsfg");
+        check(l && l->detail.find("lsfg-vk: it loads into every Vulkan program; LSFG_PROCESS is "
+                                  "set. It can keep the mod from working") == 0,
+              "lsfg: installed and a variable set: one row, both said");
+    }
+    remove((data + "/VkLayer_LS_frame_generation.json").c_str());
+    {
+        const std::vector<Check> v2 = run_checks(o);
+        l = row(v2, "lsfg");
+        check(l && l->title == "lsfg-vk is set up on this computer" &&
+                  l->detail.find("lsfg-vk: LSFG_PROCESS is set.") == 0,
+              "lsfg: a variable alone: set up, not installed for the whole system");
     }
     unsetenv("LSFG_PROCESS");
-    check(!row(run_checks(o), "lsfg"), "lsfg: none set: no row");
-    remove((data + "/VkLayer_LS_frame_generation.json").c_str());
+    check(!row(run_checks(o), "lsfg"), "lsfg: neither: no row");
     check(!row(run_checks(o), "overlays"), "overlays: with none, no row at all");
     // X4's launch options, from Steam's own file.
     put(h + "/.local/share/Steam/userdata/12345/config/localconfig.vdf",

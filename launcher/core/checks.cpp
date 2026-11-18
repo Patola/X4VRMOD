@@ -536,7 +536,7 @@ std::vector<UnwantedLayer> unwanted_layers(const std::string &home,
                 const char *onv = on.empty() ? nullptr : getenv(on.c_str());
                 if (on.empty())
                     out.push_back({k.tool, tr_("it loads into every Vulkan program"),
-                                   dir + "/" + f});
+                                   dir + "/" + f, true});
                 else if (onv && *onv && strcmp(onv, "0") != 0)
                     out.push_back({k.tool, tr_("your environment turns it on"),
                                    on + "=" + onv});
@@ -597,40 +597,49 @@ std::vector<LsfgVariable> lsfg_variables(const std::vector<std::string> &launch_
     return out;
 }
 
-// lsfg-vk set up at all, by its variables: one row of its own, with stronger advice
-// than the overlays row's "turn it off for X4".
-static bool add_lsfg_row(const std::vector<LsfgVariable> &v, std::vector<Check> &out) {
-    if (v.empty())
+// lsfg-vk installed for the whole system (its layer loads into everything) or set up by
+// its variables: one row of its own. Patola, 2026-11-18: ask to disable it for the whole
+// system while playing in VR, not to uninstall it, which was too much.
+static bool add_lsfg_row(const std::vector<UnwantedLayer> &layers,
+                         const std::vector<LsfgVariable> &v, std::vector<Check> &out) {
+    std::string facts;
+    bool everywhere = false;
+    for (const UnwantedLayer &x : layers) {
+        if (x.tool != "lsfg-vk")
+            continue;
+        facts += (facts.empty() ? "" : "; ") + x.why;
+        everywhere = everywhere || x.everywhere;
+    }
+    if (!v.empty()) {
+        std::string names;
+        for (const LsfgVariable &x : v)
+            names += (names.empty() ? "" : ", ") +
+                     (x.launch_options ? fmt(tr_("%1 in X4's launch options in Steam"), {x.name})
+                                       : x.name);
+        facts += (facts.empty() ? "" : "; ") +
+                 fmt(trn_("%1 is set", "%1 are set", v.size()), {names});
+    }
+    if (facts.empty())
         return false;
-    std::string names;
-    for (const LsfgVariable &x : v)
-        names += (names.empty() ? "" : ", ") +
-                 (x.launch_options ? fmt(tr_("%1 in X4's launch options in Steam"), {x.name})
-                                   : x.name);
     Check c;
     c.id = "lsfg";
     c.status = Status::Warn;
     c.fix = "help-overlays";
-    c.title = tr_("lsfg-vk is set up on this computer");
-    c.detail = fmt(trn_("%1 is set. lsfg-vk can keep the mod from working, even when it's turned "
-                        "off: uninstall it, or don't install it for the whole system.",
-                        "%1 are set. lsfg-vk can keep the mod from working, even when it's turned "
-                        "off: uninstall it, or don't install it for the whole system.",
-                        v.size()),
-                   {names});
+    c.title = everywhere ? tr_("lsfg-vk is installed for the whole system")
+                         : tr_("lsfg-vk is set up on this computer");
+    c.detail = fmt(tr_("lsfg-vk: %1. It can keep the mod from working: disable it for the whole "
+                       "system while you play in VR, not only for X4."),
+                   {facts});
     out.push_back(c);
     return true;
 }
 
-// Only when there's something to say: most players have none of these. Without lsfg-vk
-// when its own row says more about it.
-static void add_overlays_row(const std::string &home, std::vector<Check> &out,
-                             bool without_lsfg) {
-    std::vector<UnwantedLayer> u = unwanted_layers(home, x4_steam_launch_options(home));
-    if (without_lsfg)
-        u.erase(std::remove_if(u.begin(), u.end(),
-                               [](const UnwantedLayer &x) { return x.tool == "lsfg-vk"; }),
-                u.end());
+// Only when there's something to say: most players have none of these. Never lsfg-vk,
+// which has its own row.
+static void add_overlays_row(std::vector<UnwantedLayer> u, std::vector<Check> &out) {
+    u.erase(std::remove_if(u.begin(), u.end(),
+                           [](const UnwantedLayer &x) { return x.tool == "lsfg-vk"; }),
+            u.end());
     if (u.empty())
         return;
     Check c;
@@ -767,10 +776,10 @@ std::vector<Check> run_checks(const CheckOptions &o) {
         out.push_back(check_mod_row(l, in));
     if (!o.skip_gpu)
         out.push_back(check_gpu_row());
-    std::vector<Check> lsfg;
-    const bool lsfg_row = add_lsfg_row(lsfg_variables(x4_steam_launch_options(home)), lsfg);
-    add_overlays_row(home, out, lsfg_row);
-    out.insert(out.end(), lsfg.begin(), lsfg.end());
+    const std::vector<std::string> lo = x4_steam_launch_options(home);
+    const std::vector<UnwantedLayer> layers = unwanted_layers(home, lo);
+    add_overlays_row(layers, out);
+    add_lsfg_row(layers, lsfg_variables(lo), out);
     return out;
 }
 

@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-18 20:09+0100\n"
+"POT-Creation-Date: 2026-11-18 20:22+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -39,18 +39,10 @@ msgstr "%1 läuft, aber kein Headset ist verbunden."
 
 #: launcher/core/checks.cpp
 #, qt-format
-msgid ""
-"%1 is set. lsfg-vk can keep the mod from working, even when it's turned off: "
-"uninstall it, or don't install it for the whole system."
-msgid_plural ""
-"%1 are set. lsfg-vk can keep the mod from working, even when it's turned "
-"off: uninstall it, or don't install it for the whole system."
-msgstr[0] ""
-"%1 ist gesetzt. lsfg-vk kann die Mod auch ausgeschaltet am Funktionieren "
-"hindern: Deinstalliere es oder installiere es nicht für das ganze System."
-msgstr[1] ""
-"%1 sind gesetzt. lsfg-vk kann die Mod auch ausgeschaltet am Funktionieren "
-"hindern: Deinstalliere es oder installiere es nicht für das ganze System."
+msgid "%1 is set"
+msgid_plural "%1 are set"
+msgstr[0] "%1 ist gesetzt"
+msgstr[1] "%1 sind gesetzt"
 
 #: launcher/core/checks.cpp
 #, qt-format
@@ -362,8 +354,22 @@ msgstr "es wird in jedes Vulkan-Programm geladen"
 
 #: launcher/core/checks.cpp
 #, qt-format
+msgid "lsfg-vk is installed for the whole system"
+msgstr "lsfg-vk ist für das ganze System installiert"
+
+#: launcher/core/checks.cpp
+#, qt-format
 msgid "lsfg-vk is set up on this computer"
 msgstr "lsfg-vk ist auf diesem Computer eingerichtet"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid ""
+"lsfg-vk: %1. It can keep the mod from working: disable it for the whole "
+"system while you play in VR, not only for X4."
+msgstr ""
+"lsfg-vk: %1. Es kann die Mod am Funktionieren hindern: Schalte es für das "
+"ganze System aus, solange du in VR spielst, nicht nur für X4."
 
 #: launcher/core/checks.cpp
 #, qt-format
@@ -1181,16 +1187,6 @@ msgstr "Erneut versuchen"
 #: launcher/gui/window.cpp
 #, qt-format
 msgid ""
-"Settings for lsfg-vk, Lossless Scaling's frame generator, in your "
-"environment or X4's launch options in Steam. Shown only when there are some."
-msgstr ""
-"Einstellungen für lsfg-vk, den Frame-Generator von Lossless Scaling, in "
-"deiner Umgebung oder den Startoptionen von X4 in Steam. Wird nur angezeigt, "
-"wenn es welche gibt."
-
-#: launcher/gui/window.cpp
-#, qt-format
-msgid ""
 "Some features change X4's code in memory, so each needs the exact code it "
 "was written for. Any that doesn't find it turns off by itself, and the game "
 "still runs."
@@ -1417,3 +1413,14 @@ msgid ""
 msgstr ""
 "gamescope gibt X4 einen virtuellen Bildschirm in der Größe für beide Augen, "
 "egal welche Auflösung dein Desktop hat."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"lsfg-vk, Lossless Scaling's frame generator: installed for the whole system, "
+"or set up in your environment or X4's launch options in Steam. Shown only "
+"when it is."
+msgstr ""
+"lsfg-vk, der Frame-Generator von Lossless Scaling: für das ganze System "
+"installiert oder in deiner Umgebung oder den Startoptionen von X4 in Steam "
+"eingerichtet. Wird nur dann angezeigt."
