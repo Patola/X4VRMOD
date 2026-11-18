@@ -48,6 +48,7 @@
 #endif
 
 #include <dlfcn.h>
+#include <unistd.h>
 
 #include <cmath>
 #include <cstdarg>
@@ -167,9 +168,12 @@ inline bool api_open(Api &api, std::string *why) {
             break;
     }
     if (!api.dl) {
+        // Read once: dlerror() clears the message, so a second call returns
+        // NULL -- and std::string + NULL was X4's crash at start in issue #4,
+        // in Steam's runtime container, which has no OpenXR loader.
+        const char *err = dlerror();
         if (why)
-            *why = std::string("dlopen libopenxr_loader.so.1: ") +
-                   (dlerror() ? dlerror() : "?");
+            *why = std::string("dlopen libopenxr_loader.so.1: ") + (err ? err : "?");
         return false;
     }
     api.GetInstanceProcAddr =
@@ -322,6 +326,12 @@ inline void say_to(Sink sink, void *user, const char *fmt, ...) {
 inline bool runtime_open(Runtime &rt, Sink sink, void *user) {
 #define say(...) say_to(sink, user, __VA_ARGS__)
     if (!api_open(rt.api, &rt.last_error)) {
+        // Steam's runtime container (sniper) ships no OpenXR loader, and
+        // issue #4's start from Steam found none there; the launcher's Play
+        // starts X4 outside it.
+        if (access("/run/host", F_OK) == 0)
+            rt.last_error += ". X4 is inside Steam's runtime container: start "
+                             "it from the launcher's Play, which runs it outside";
         say("xr: no loader — %s", rt.last_error.c_str());
         return false;
     }

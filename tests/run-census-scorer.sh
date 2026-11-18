@@ -1726,6 +1726,20 @@ want "aimpick: asked, no PATCHED line -> FAIL" /tmp/census-ap-base.log "FAIL|  -
 { cat "$BASE"; printf '%s\n' "$app"; } > /tmp/census-ap-unasked.log
 want "aimpick: patched unasked -> FAIL" /tmp/census-ap-unasked.log "FAIL|  - " "the targeting patch acted in a run that did not ask for it"
 absent "aimpick: not asked -> silent" "$BASE" aimpick
+# Issue #4: X4 without the injector, though the run asked for it.
+if grep -qF '"milestone: X4 is running WITHOUT the mod'"'"'s "' layer/x4vr_layer.cpp; then
+    ok "noinject: the layer still prints it"
+else
+    bad "noinject: the layer's format moved"
+fi
+{ cat "$BASE"; echo '[  999950.000] layer   milestone: X4 is running WITHOUT the mod'"'"'s injector, though this run asked for it: LD_PRELOAD didn'"'"'t reach X4. Head-look, the menus'"'"' placement and the cursor are all off. A gamescope with file capabilities strips it; x4vr-launch.sh passes it on since issue #4.'; } > /tmp/census-noinj.log
+want "noinject: X4 without the injector -> FAIL" /tmp/census-noinj.log "FAIL|  - " "X4 ran WITHOUT the mod's injector, though the run asked for it"
+{ cat "$BASE"; echo '[  999950.000] layer   vr: no x4vr_head_state — the injector is off (X4VR_NO_INJECT=1), so head-look has nothing to drive'; } > /tmp/census-noinj-asked.log
+if python3 tools/score_run.py /tmp/census-noinj-asked.log 2>&1 | grep -qE "^  - .*WITHOUT the mod's injector"; then
+    bad "noinject: turned off on purpose -> FAILs"
+else
+    ok "noinject: turned off on purpose -> no FAIL"
+fi
 # Take 367: X4's mouse-capture flag against ARMED and the first steering.
 if grep -qF '"steer: X4'"'"'s mouse capture (in[0x9f33]) is now %s — "' injector/x4vr_inject.cpp; then
     ok "capture: the injector's line is the planted one"

@@ -16700,8 +16700,21 @@ void vr_thread() {
                 x4vr::head_share_write(head_fn(), a.yaw_deg, a.pitch_deg, have);
             } else if (!said) {
                 said = true;
-                X4VR_LOG("vr: no x4vr_head_state — injector not preloaded, so "
-                         "head-look has nothing to drive");
+                // Only X4 has a session, so this is X4 without the injector.
+                // Issue #4's log said so in one quiet line, and the report
+                // read as a menu stuck in the room.
+                const char *no = getenv("X4VR_NO_INJECT");
+                if (no && !strcmp(no, "1"))
+                    X4VR_LOG("vr: no x4vr_head_state — the injector is off "
+                             "(X4VR_NO_INJECT=1), so head-look has nothing to "
+                             "drive");
+                else
+                    X4VR_LOG("milestone: X4 is running WITHOUT the mod's "
+                             "injector, though this run asked for it: "
+                             "LD_PRELOAD didn't reach X4. Head-look, the "
+                             "menus' placement and the cursor are all off. A "
+                             "gamescope with file capabilities strips it; "
+                             "x4vr-launch.sh passes it on since issue #4.");
             }
         }
 

@@ -138,6 +138,13 @@ def main(path):
     run = next((ln.split("env: run =", 1)[1].strip()
                 for ln in lines if "env: run =" in ln), None)
     print(f"run  {run or '(not recorded — pre-take-34 build)'}")
+    # Issue #4: X4 without the injector, though the run asked for it (the
+    # layer decides, from X4VR_NO_INJECT). Head-look, the menus' placement
+    # and the cursor are all off, and nothing else here would say why: the
+    # run line above is the injector's, so it's missing too.
+    if any("X4 is running WITHOUT the mod's injector" in ln for ln in lines):
+        fails.append("X4 ran WITHOUT the mod's injector, though the run asked "
+                     "for it: LD_PRELOAD didn't reach X4")
 
     # 1. The split render. Without it nothing else is stereo.
     if any("SPLIT OFF" in ln for ln in lines):

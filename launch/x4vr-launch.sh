@@ -774,10 +774,26 @@ if [[ "${X4VR_GAMESCOPE:-0}" == 1 ]]; then
     # window; if that is wrong, the split test fails and SPLIT OFF says so.
     [[ "${X4VR_WINDOWS_FULLSCREEN:-0}" == 1 ]] &&
         GS_DECOR+=(--force-windows-fullscreen)
+    # **A gamescope with file capabilities** (issue #4: Nobara's has CAP_SYS_NICE, so it
+    # never printed "No CAP_SYS_NICE") runs in glibc's secure-execution mode, which strips
+    # LD_PRELOAD, LD_LIBRARY_PATH, TMPDIR and the rest of ld.so(8)'s list from the
+    # environment it hands its children. The layer still reached X4, through Vulkan; the
+    # injector didn't, and with it went head-look, the menus' placement and the cursor.
+    # So X4 gets them on gamescope's command line, which nothing strips, as they stand
+    # here; GameMode's wrapper runs once more inside, to put its library in front for X4
+    # as it already did for gamescope. Where gamescope has no capability, X4 gets exactly
+    # what it got before.
+    KEEP=()
+    for _v in GCONV_PATH GETCONF_DIR HOSTALIASES LOCALDOMAIN LD_AUDIT LD_DEBUG \
+        LD_DEBUG_OUTPUT LD_DYNAMIC_WEAK LD_HWCAP_MASK LD_LIBRARY_PATH LD_ORIGIN_PATH \
+        LD_PRELOAD LD_PROFILE LD_SHOW_AUXV LOCPATH MALLOC_TRACE NIS_PATH NLSPATH \
+        RESOLV_HOST_CONF RES_OPTIONS TMPDIR TZDIR; do
+        [[ -v $_v ]] && KEEP+=("$_v=${!_v}")
+    done
     exec "${GAMEMODE[@]}" gamescope "${GS_DECOR[@]}" -w "$W" -h "$H" -W "$W" -H "$H" \
         --backend sdl -- \
-        env -u WAYLAND_DISPLAY "SDL_VIDEODRIVER=${X4VR_SDL_DRIVER:-x11}" \
-            "SDL_VIDEO_DRIVER=${X4VR_SDL_DRIVER:-x11}" "$@"
+        env -u WAYLAND_DISPLAY "${KEEP[@]}" "SDL_VIDEODRIVER=${X4VR_SDL_DRIVER:-x11}" \
+            "SDL_VIDEO_DRIVER=${X4VR_SDL_DRIVER:-x11}" "${GAMEMODE[@]}" "$@"
 else
     exec "${GAMEMODE[@]}" "$@"
 fi
