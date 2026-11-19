@@ -344,6 +344,16 @@ That's one of the reasons <a href="#wivrn">we suggest WiVRn</a>.</p>
 <p>That comes from the Steam Overlay, which also handles Steam Input, not working with Wayland.
 The newer 64-bit Steam that's on its way may eventually resolve it.</p>
 
+<a name="forward"></a>
+<h3>The scene isn't in front of you</h3>
+<p>Recentre with the headset: on a Quest, hold the Meta button on the right controller; in
+SteamVR, use "Reset seated position" in its menu. Forward is the headset's seated forward, so it
+points wherever you last recentred, which can be another way from where you sit now.</p>
+<p>Some headsets' recentring is still new. Through WiVRn, the Steam Frame's turned the scene too
+far in our tests, whichever way <b>Where forward is</b> was set (under <a href="#more">More,
+Advanced</a>). On such a headset, set it to <tt>stage</tt> and don't recentre: forward then stays
+where the headset's boundary was set up, as it did up to 1.0.0-rc6.</p>
+
 <a name="jumbled"></a>
 <h3>The picture is jumbled</h3>
 <p>This has been seen with SteamVR at 4224 per eye. Choose a lower
