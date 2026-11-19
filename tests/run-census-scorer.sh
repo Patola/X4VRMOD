@@ -1247,6 +1247,16 @@ grep -qF '"declpair residual (%s): %llu headset frame(s) compared, %llu (%.1f%%)
     || bad "declpair residual: the layer's line changed — replant the line below"
 plant /tmp/census-dpres.log '[  999990.000] layer   declpair residual (final): 5000 headset frame(s) compared, 1200 (24.0%) where the newest residual was not the submitted image'"'"'s, mean 0.031 deg, max 0.84 deg'
 want "declpair residual -> listed" /tmp/census-dpres.log declpair "the newest residual was not the submitted image's in 1200 of 5000 frame(s) (24.0%), mean 0.031 deg, max 0.84 deg"
+
+# ------------------------------------------ decltrace: X4's camera beside head-look's command
+grep -qF 'X4VR_LOG("decltrace: f=%u %s cam=%.3f,%.3f,%.3f cmd=%.3f,%.3f%s pass=%.1f "' layer/x4vr_layer.cpp \
+    && ok "decltrace: the planted lines match the layer's format" \
+    || bad "decltrace: the layer's line changed — replant the lines below"
+plant /tmp/census-dt.log \
+    '[  999990.000] layer   decltrace: f=10 seat cam=1.000,2.000,0.000 cmd=1.000,2.000 pass=3.0 tick=5.0 ms ago, 0 tick(s) since the pass' \
+    '[  999990.016] layer   decltrace: f=11 foot cam=8.000,2.000,0.100 cmd=1.200,2.100 pass=3.1 tick=5.2 ms ago, 0 tick(s) since the pass' \
+    '[  999990.033] layer   decltrace: f=12 ext cam=1.300,2.200,0.000 cmd=1.300,2.200 pass=2.9 tick=4.9 ms ago, 0 tick(s) since the pass'
+want "decltrace -> counted by view" /tmp/census-dt.log decltrace "3 frame(s): cockpit 1, on foot 1, external 1"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" '[  999975.000] inject  sdl: relative mouse mode ON (fold stands down)' '[  999976.000] inject  sdl: relative mouse mode off (fold applies)'; } > /tmp/census-fm-old.log
 want "foot-menu pointer freed, nothing logged -> an older build" /tmp/census-fm-old.log foot-menu "X4 freed the pointer 1 time(s) off the seat and no on-foot menu was logged"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" '[  999969.000] inject  sdl: relative mouse mode off (fold applies)' "$fmout"; } > /tmp/census-fm-none.log

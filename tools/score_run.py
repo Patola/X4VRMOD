@@ -5230,26 +5230,17 @@ def main(path):
     elif dp_stat and dp_mode and dp_mode.group(1) == "ON" and "pose: channel up" in text:
         print("declpair no residual was paired: no frame published a pose (a build before "
               "2026-11-19 doesn't pair it)")
-    # On foot and in the external views (2026-11-19): head-look's angle from the
-    # frame's first render pass, against the present's, which takes 443 and 444
-    # declared and which twitched there. With X4VR_DECLARE_FOOT_AB the two
-    # alternate, and Patola's eye says whether the twitch comes and goes with them.
-    df_phases = re.findall(r"\[\s*([\d.]+)\]\s+layer\s+declpair foot: phase #(\d+) — "
-                           r"(FIRST PASS|CONTROL)", text)
-    df_stat = re.findall(r"declpair foot \((?:periodic|final)\): (\d+) headset frame\(s\) on foot "
-                         r"or in an external view, (\d+) \(([\d.]+)%\) where head-look ticked "
-                         r"between the first render pass and the present, (\d+) \(([\d.]+)%\) "
-                         r"where its angle had moved, mean ([\d.]+) deg, max ([\d.]+) deg", text)
-    if df_phases:
-        t0 = float(df_phases[0][0])
-        print(f"declfoot {len(df_phases)} phase(s): " + ", ".join(
-            f"#{n} {k} at +{float(t) - t0:.0f} s" for t, n, k in df_phases[:12])
-              + (" ..." if len(df_phases) > 12 else ""))
-    if df_stat:
-        n_, tk, tpct, dfr, dpct, mean, mx = df_stat[-1]
-        print(f"declfoot head-look ticked between the first render pass and the present in {tk} "
-              f"of {n_} frame(s) ({tpct}%); its angle had moved in {dfr} ({dpct}%), mean {mean} "
-              f"deg, max {mx} deg")
+    # X4VR_DECLTRACE (2026-11-19): one line per X4 frame, X4's camera as drawn
+    # beside head-look's command, for the twitch on foot and in F2-F4 (takes
+    # 443-445). Read offline; listed here so a run that asked and got none says so.
+    dt_asked = bool(re.search(r"\bX4VR_DECLTRACE=1\b", run or ""))
+    dt_views = re.findall(r"layer\s+decltrace: f=\d+ (seat|foot|ext) ", text)
+    if dt_views:
+        n = collections.Counter(dt_views)
+        print(f"decltrace {len(dt_views)} frame(s): cockpit {n['seat']}, on foot {n['foot']}, "
+              f"external {n['ext']}")
+    elif dt_asked:
+        fails.append("X4VR_DECLTRACE=1 was asked for and no decltrace line was written")
 
     # --- the space forward is measured in (issue #4, 2026-11-19) -------------
     #

@@ -577,6 +577,21 @@ static bool x4_camera_rotation_now(float *yaw_deg, float *pitch_deg) {
     return true;
 }
 
+// The same call with the roll too, for X4VR_DECLTRACE; degrees, the roll's sign
+// as X4 gives it.
+static bool x4_camera_rotation3(float *yaw_deg, float *pitch_deg, float *roll_deg) {
+    using Fn = X4Rot (*)();
+    static Fn fn = (Fn)dlsym(RTLD_DEFAULT, "GetCameraRotation");
+    if (!fn)
+        return false;
+    const X4Rot r = fn();
+    constexpr float kRad2Deg = 57.2957795130823f;
+    *yaw_deg = kRad2Deg * -r.yaw;
+    *pitch_deg = kRad2Deg * r.pitch;
+    *roll_deg = kRad2Deg * r.roll;
+    return true;
+}
+
 // Defined further down, next to the capture code that also uses it. Declared
 // here because the camstamp needs the SAME clock X4VR_LOG stamps lines with --
 // a second clock would make `dt` incomparable to every other time in the log.
@@ -631,6 +646,17 @@ struct PresentDecl {
     bool first_ok = false;
     uint32_t ticks_between = 0;
 };
+
+// X4VR_DECLTRACE=1: one line per X4 frame, at its present -- X4's camera as it
+// stood at the frame's first render pass (yaw, pitch, roll) beside head-look's
+// command and the view. On foot and in F2-F4 the whole view twitched while the
+// head alone turned (takes 443-445, Patola), and the frame declares the command
+// there; the cockpit declares the camera and was smooth. Whatever separates the
+// two, frame by frame, is in these lines. Off by default: about 60 lines a second.
+static bool decltrace_on() {
+    static const bool on = x4vr::env_on("X4VR_DECLTRACE", false);
+    return on;
+}
 static PresentDecl g_present_decl; // X4's present thread only
 
 const x4vr::Shared *shared_state();
@@ -649,6 +675,10 @@ struct FirstPassSnap {
     x4vr::CamSnap snap;
     uint32_t seq = 0;
     bool ok = false;
+    // X4VR_DECLTRACE: X4's camera at that moment, and when.
+    float cam_yaw = 0.f, cam_pitch = 0.f, cam_roll = 0.f;
+    bool cam_ok = false;
+    double t = 0.0;
 };
 static std::mutex g_firstsnap_mu;
 static FirstPassSnap g_firstsnap;
@@ -665,6 +695,10 @@ static void firstsnap_at_first_pass() {
     g_firstsnap.frame = f;
     g_firstsnap.seq = sh->cam_seq.load(std::memory_order_acquire);
     g_firstsnap.ok = x4vr::share_read_camera(sh, &g_firstsnap.snap);
+    g_firstsnap.cam_ok = decltrace_on() && x4_camera_rotation3(&g_firstsnap.cam_yaw,
+                                                                &g_firstsnap.cam_pitch,
+                                                                &g_firstsnap.cam_roll);
+    g_firstsnap.t = mono_now();
 }
 
 static void declpair_capture() {
@@ -685,6 +719,19 @@ static void declpair_capture() {
             d.first_snap = g_firstsnap.snap;
             d.first_ok = true;
             d.ticks_between = (seq_now - g_firstsnap.seq) / 2;
+            if (decltrace_on() && g_firstsnap.cam_ok) {
+                const double now = mono_now();
+                const int foot = sh->on_foot.load(std::memory_order_relaxed) != 0;
+                const int ext = sh->external_head.load(std::memory_order_relaxed) != 0;
+                X4VR_LOG("decltrace: f=%u %s cam=%.3f,%.3f,%.3f cmd=%.3f,%.3f%s pass=%.1f "
+                         "tick=%.1f ms ago, %u tick(s) since the pass",
+                         (unsigned)f, foot ? "foot" : ext ? "ext" : "seat",
+                         g_firstsnap.cam_yaw, g_firstsnap.cam_pitch, g_firstsnap.cam_roll,
+                         d.snap.yaw_deg, d.snap.pitch_deg, d.snap.valid ? "" : " (idle)",
+                         1000.0 * (now - g_firstsnap.t),
+                         d.snap.raw_ns ? 1000.0 * now - (double)d.snap.raw_ns / 1.0e6 : -1.0,
+                         d.ticks_between);
+            }
         }
     }
     d.res_ok = pose_frame_residual(&d.res_yaw, &d.res_pitch);
@@ -733,39 +780,6 @@ static bool declpair_on() {
     return p % 2 == 1;
 }
 
-// On foot and in the external views: head-look's angle from the frame's first
-// render pass (the default since 2026-11-19), or as read at its present, as
-// before. X4VR_DECLARE_FOOT_AB=<s> alternates them, the present's first.
-static bool foot_first_on() {
-    static const double ab = [] {
-        const char *e = getenv("X4VR_DECLARE_FOOT_AB");
-        return e && *e ? atof(e) : 0.0;
-    }();
-    if (ab <= 0.0) {
-        static bool said = false;
-        if (!said) {
-            said = true;
-            X4VR_LOG("declpair foot: ON — on foot and in the external views, head-look's "
-                     "angle from each frame's first render pass "
-                     "(X4VR_DECLARE_FOOT_AB=<s> alternates it with the present's)");
-        }
-        return true;
-    }
-    static double t0 = 0.0;
-    static long phase = -1;
-    const double now = mono_now();
-    if (t0 == 0.0)
-        t0 = now;
-    const long p = (long)((now - t0) / ab);
-    if (p != phase) {
-        phase = p;
-        X4VR_LOG("declpair foot: phase #%ld — %s (X4VR_DECLARE_FOOT_AB=%g s)", p + 1,
-                 p % 2 ? "FIRST PASS, head-look's angle from the frame's first render pass"
-                       : "CONTROL, head-look's angle as read at the present, as before",
-                 ab);
-    }
-    return p % 2 == 1;
-}
 
 // Task #77: turn the eye disparity by the head's roll.
 //
@@ -14902,11 +14916,6 @@ struct VrState {
     uint64_t pair_frames = 0, pair_differ = 0;
     float pair_max_deg = 0.0f;
     double pair_sum_deg = 0.0;
-    // ...on foot and in the external views: head-look's angle at the first
-    // render pass against the present's (2026-11-19)...
-    uint64_t foot_frames = 0, foot_ticked = 0, foot_differ = 0;
-    float foot_max_deg = 0.0f;
-    double foot_sum_deg = 0.0;
     // ...and the residual's, in every mode where the frame published one.
     uint64_t pair_res_frames = 0, pair_res_differ = 0;
     float pair_res_max_deg = 0.0f;
@@ -16305,31 +16314,10 @@ void vr_thread() {
                             decl_pitch = now_pitch;
                         } else if (paired && pd.snap_ok && pd.snap.valid) {
                             // On foot and in external views: head-look's angle
-                            // as it was when this image was drawn -- from its
-                            // first render pass (2026-11-19), where a tick before
-                            // the present no longer counts.
-                            const bool first_have = pd.first_ok && pd.first_snap.valid;
-                            const bool first = first_have && foot_first_on();
-                            decl_yaw = first ? pd.first_snap.yaw_deg : pd.snap.yaw_deg;
-                            decl_pitch = first ? pd.first_snap.pitch_deg : pd.snap.pitch_deg;
-                            if (first_have) {
-                                float dy = pd.snap.yaw_deg - pd.first_snap.yaw_deg;
-                                while (dy > 180.0f)
-                                    dy -= 360.0f;
-                                while (dy < -180.0f)
-                                    dy += 360.0f;
-                                const float dp = pd.snap.pitch_deg - pd.first_snap.pitch_deg;
-                                const float dd = std::sqrt(dy * dy + dp * dp);
-                                std::lock_guard<std::mutex> fl(g_vrs.mu);
-                                g_vrs.foot_frames++;
-                                if (pd.ticks_between > 0)
-                                    g_vrs.foot_ticked++;
-                                if (dd > 0.01f)
-                                    g_vrs.foot_differ++;
-                                g_vrs.foot_sum_deg += dd;
-                                if (dd > g_vrs.foot_max_deg)
-                                    g_vrs.foot_max_deg = dd;
-                            }
+                            // as it was when this image was drawn. (Take 445: read
+                            // at the first render pass instead, it never differed.)
+                            decl_yaw = pd.snap.yaw_deg;
+                            decl_pitch = pd.snap.pitch_deg;
                         } else {
                             decl_yaw = snap.yaw_deg;
                             decl_pitch = snap.pitch_deg;
@@ -17398,16 +17386,6 @@ void vr_report(const char *when) {
                  (unsigned long long)g_vrs.pair_differ,
                  100.0 * (double)g_vrs.pair_differ / (double)g_vrs.pair_frames,
                  g_vrs.pair_sum_deg / (double)g_vrs.pair_frames, (double)g_vrs.pair_max_deg);
-    if (g_vrs.foot_frames)
-        X4VR_LOG("declpair foot (%s): %llu headset frame(s) on foot or in an external view, "
-                 "%llu (%.1f%%) where head-look ticked between the first render pass and the "
-                 "present, %llu (%.1f%%) where its angle had moved, mean %.3f deg, max %.2f deg",
-                 when, (unsigned long long)g_vrs.foot_frames,
-                 (unsigned long long)g_vrs.foot_ticked,
-                 100.0 * (double)g_vrs.foot_ticked / (double)g_vrs.foot_frames,
-                 (unsigned long long)g_vrs.foot_differ,
-                 100.0 * (double)g_vrs.foot_differ / (double)g_vrs.foot_frames,
-                 g_vrs.foot_sum_deg / (double)g_vrs.foot_frames, (double)g_vrs.foot_max_deg);
     if (g_vrs.pair_res_frames)
         X4VR_LOG("declpair residual (%s): %llu headset frame(s) compared, %llu (%.1f%%) where "
                  "the newest residual was not the submitted image's, mean %.3f deg, max %.2f deg",
