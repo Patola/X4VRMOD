@@ -621,10 +621,15 @@ struct PresentDecl {
     bool cam_ok = false;
     x4vr::CamSnap snap;                     // head-look's angle (on foot, external views)
     bool snap_ok = false;
+    // The residual this frame's images were drawn with (2026-11-19): read at
+    // submission it was the newest instead, in every mode.
+    float res_yaw = 0.0f, res_pitch = 0.0f;
+    bool res_ok = false;
 };
 static PresentDecl g_present_decl; // X4's present thread only
 
 const x4vr::Shared *shared_state();
+bool pose_frame_residual(float *yaw, float *pitch);
 
 static void declpair_capture() {
     PresentDecl d;
@@ -639,6 +644,7 @@ static void declpair_capture() {
         x4vr::share_read_camera(sh, &d.snap);
         d.snap_ok = true;
     }
+    d.res_ok = pose_frame_residual(&d.res_yaw, &d.res_pitch);
     g_present_decl = d;
 }
 
@@ -8140,6 +8146,14 @@ struct PoseChannel {
     uint64_t region_frame[kPoseRegions];
     uint64_t latched_frame = UINT64_MAX;
     x4vr::PoseBlock frame_value = x4vr::pose_identity();
+    // The residual's angles, beside the rotation they make in `value`, and the
+    // ones the frame's images were drawn with: those latched with `frame_value`,
+    // or the last published without the latch. The declaration pairs them
+    // (declpair), like the camera; read with `mu` held.
+    float res_yaw = 0.0f, res_pitch = 0.0f;
+    float frame_res_yaw = 0.0f, frame_res_pitch = 0.0f;
+    float pub_res_yaw = 0.0f, pub_res_pitch = 0.0f;
+    uint64_t pub_frame = UINT64_MAX; // the X4 frame they were published in
     // How soon a region comes back: recordings per frame (max), reuses, the
     // youngest reuse in frames, and reuses younger than 3 frames -- a region
     // that may still be in flight.
@@ -8509,6 +8523,8 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
         // every temporal pass along the head's motion.
         x4vr::pose_roll_frame(g_pose.value);
         x4vr::pose_set_euler(g_pose.value, cy, cp, 0.0f);
+        g_pose.res_yaw = cy;
+        g_pose.res_pitch = cp;
         // **Task #77, and it is NOT the same rotation as the line above.**
         //
         // pose_set_euler's roll argument stays 0: `r` is the residual the
@@ -8630,15 +8646,36 @@ void pose_publish(VkCommandBuffer cb) {
     if (g_pose.region_owner[it->second] != cb)
         g_pose.stolen++;
     const x4vr::PoseBlock *src = &g_pose.value;
+    g_pose.pub_res_yaw = g_pose.res_yaw;
+    g_pose.pub_res_pitch = g_pose.res_pitch;
     if (pose_frame_fix()) {
         if (g_pose.latched_frame != now) {
             g_pose.latched_frame = now;
             g_pose.frame_value = g_pose.value;
+            g_pose.frame_res_yaw = g_pose.res_yaw;
+            g_pose.frame_res_pitch = g_pose.res_pitch;
         }
         src = &g_pose.frame_value;
+        g_pose.pub_res_yaw = g_pose.frame_res_yaw;
+        g_pose.pub_res_pitch = g_pose.frame_res_pitch;
     }
+    g_pose.pub_frame = now;
     memcpy(g_pose.host + g_pose.stride * it->second, src, sizeof(*src));
     g_pose.region_frame[it->second] = now;
+}
+
+// declpair: the residual this X4 frame published, while it's still the frame
+// (called at its present, before the bump). False when the frame published no
+// pose: its draws read none of this frame's.
+bool pose_frame_residual(float *yaw, float *pitch) {
+    if (!g_pose.ready)
+        return false;
+    std::lock_guard<std::mutex> lock(g_pose.mu);
+    if (g_pose.pub_frame != g_pose.frame.load(std::memory_order_relaxed))
+        return false;
+    *yaw = g_pose.pub_res_yaw;
+    *pitch = g_pose.pub_res_pitch;
+    return true;
 }
 
 // Take 402: `cb` gives up the region it holds, if it still holds one.
@@ -14787,6 +14824,10 @@ struct VrState {
     uint64_t pair_frames = 0, pair_differ = 0;
     float pair_max_deg = 0.0f;
     double pair_sum_deg = 0.0;
+    // ...and the residual's, in every mode where the frame published one.
+    uint64_t pair_res_frames = 0, pair_res_differ = 0;
+    float pair_res_max_deg = 0.0f;
+    double pair_res_sum_deg = 0.0;
     std::atomic<uint64_t> acquire_fail{0};
     std::atomic<uint64_t> submitted{0}; // frames that carried a projection layer
     // Set once the VR thread has completed a frame, cleared when the session
@@ -15150,6 +15191,11 @@ static bool loading_panel_build() {
 // Per headset frame that renders: whether the panel stands in for X4's image.
 // From the first such frame until X4's frames come at a pace (LoadingGate), then
 // never again, and its swapchain goes.
+// Bumped when the runtime has moved our space (a recentre) and the frame being
+// drawn is displayed after the change: what was latched in the old space's
+// coordinates re-latches. XR thread only.
+static uint64_t g_space_epoch = 0;
+
 static bool loading_panel_frame(const XrView *views) {
     g_vrs.load_gate.observe(mono_now(), g_vrs.released.load(std::memory_order_relaxed));
     if (g_vrs.load_gone)
@@ -15181,6 +15227,11 @@ static bool loading_panel_frame(const XrView *views) {
     const float q[4] = {views[0].pose.orientation.x, views[0].pose.orientation.y,
                         views[0].pose.orientation.z, views[0].pose.orientation.w};
     const float yaw = x4vr::loading_yaw(q);
+    static uint64_t placed_epoch = 0;
+    if (placed_epoch != g_space_epoch) { // a recentre: placed again, ahead
+        placed_epoch = g_space_epoch;
+        g_vrs.load_placed = false;
+    }
     if (!g_vrs.load_placed ||
         x4vr::loading_yaw_apart(yaw, g_vrs.load_place.yaw) > x4vr::kLoadingRecentreDeg) {
         if (g_vrs.load_placed)
@@ -15539,6 +15590,22 @@ void vr_thread() {
             nanosleep(&nap, nullptr);
             continue;
         }
+        // A recentre (issue #4, 2026-11-19): the runtime moved our space, so
+        // forward is where the head faces now. Counted from the first frame
+        // displayed after the change, which the event dates.
+        {
+            static uint64_t space_seen = 0;
+            if (g_vrs.session.space_changes != space_seen &&
+                g_vrs.session.frame.predictedDisplayTime >= g_vrs.session.space_change_time) {
+                space_seen = g_vrs.session.space_changes;
+                g_space_epoch++;
+                X4VR_LOG("vr: recentred — the runtime moved the %s space (#%llu): forward is "
+                         "where the head faces now, and the head's neutral points re-latch",
+                         g_vrs.session.space_type == XR_REFERENCE_SPACE_TYPE_STAGE ? "STAGE"
+                                                                                  : "LOCAL",
+                         (unsigned long long)g_space_epoch);
+            }
+        }
         XrView views[2] = {};
         XrViewStateFlags flags = 0;
         bool have = false;
@@ -15723,10 +15790,15 @@ void vr_thread() {
                 // the player's offset from the runtime's stage origin, which
                 // is wherever they happened to set their guardian -- a metre
                 // of constant shear before they have moved at all.
+                // Again after a recentre: the old point is in the old space.
                 static bool centred = false;
                 static float ox = 0.0f, oy = 0.0f, oz = 0.0f;
+                static uint64_t centred_epoch = 0;
+                if (centred && centred_epoch != g_space_epoch)
+                    centred = false;
                 if (!centred) {
                     centred = true;
+                    centred_epoch = g_space_epoch;
                     ox = cx;
                     oy = cyp;
                     oz = cz;
@@ -15776,8 +15848,12 @@ void vr_thread() {
                         s6->external_head.load(std::memory_order_relaxed) == 0;
                     static bool n6_set = false;
                     static float n6[3] = {0.f, 0.f, 0.f};
+                    static uint64_t n6_epoch = 0;
+                    if (n6_set && n6_epoch != g_space_epoch)
+                        n6_set = false; // a recentre: latched again in the cockpit
                     if (!n6_set && cockpit6) {
                         n6_set = true;
+                        n6_epoch = g_space_epoch;
                         n6[0] = cx, n6[1] = cyp, n6[2] = cz;
                         X4VR_LOG("head 6dof: neutral latched at (%.3f, %.3f, "
                                  "%.3f) m, the first frame head-look steered "
@@ -16163,8 +16239,31 @@ void vr_thread() {
                 // Not the head pose. What gets declared has to be what the
                 // pixels came from, and past the guard band the conjugation is
                 // clamped, so the head is not it.
-                const float ay = g_residual.applied_yaw.load();
-                const float ap = g_residual.applied_pitch.load();
+                //
+                // declpair (2026-11-19): the residual this image was drawn with,
+                // filed with it, as the camera above is. The newest one is the
+                // next frame's whenever the session thread has moved it since.
+                float ay = g_residual.applied_yaw.load();
+                float ap = g_residual.applied_pitch.load();
+                if (pd.res_ok) {
+                    float dy = ay - pd.res_yaw;
+                    while (dy > 180.0f)
+                        dy -= 360.0f;
+                    while (dy < -180.0f)
+                        dy += 360.0f;
+                    const float dd = std::sqrt(dy * dy + (ap - pd.res_pitch) * (ap - pd.res_pitch));
+                    std::lock_guard<std::mutex> lock(g_vrs.mu);
+                    g_vrs.pair_res_frames++;
+                    if (dd > 0.01f)
+                        g_vrs.pair_res_differ++;
+                    g_vrs.pair_res_sum_deg += dd;
+                    if (dd > g_vrs.pair_res_max_deg)
+                        g_vrs.pair_res_max_deg = dd;
+                    if (paired) {
+                        ay = pd.res_yaw;
+                        ap = pd.res_pitch;
+                    }
+                }
                 decl_yaw += ay;
                 decl_pitch += ap;
                 if (valid || ay != 0.0f || ap != 0.0f)
@@ -17078,6 +17177,12 @@ void vr_session_thread() {
     // (AMD's), VrQueueLock already kept the submissions apart, and still does.
     static std::mutex runtime_queue_mu;
     x4vr::xr::queue_mutex() = &runtime_queue_mu;
+    // The seated space unless the run asks for the play area (X4VR_SPACE=stage,
+    // what every run did until issue #4): x4vr_xr.hpp, session_create.
+    {
+        const char *sp = getenv("X4VR_SPACE");
+        g_vrs.session.want_stage = sp && !strcmp(sp, "stage");
+    }
     const XrResult r =
         x4vr::xr::session_create(g_vrs.session, g_vrs.rt, g_vrs.vk, want,
                                  g_vrs.dev, g_vrs.queue_family,
@@ -17092,6 +17197,15 @@ void vr_session_thread() {
              g_vrs.queue_family, g_vrs.queue_index,
              g_vrs.session.space_type == XR_REFERENCE_SPACE_TYPE_STAGE
                  ? "STAGE" : "LOCAL");
+    X4VR_LOG("vr: forward is %s",
+             g_vrs.session.space_type == XR_REFERENCE_SPACE_TYPE_STAGE
+                 ? "the play area's (X4VR_SPACE=stage), wherever the headset's boundary was "
+                   "set up facing; a recentre doesn't move it"
+                 : g_vrs.session.want_stage
+                       ? "where the head faced as the session began: the play area was asked "
+                         "for (X4VR_SPACE=stage) and the runtime has none"
+                       : "where the head faced as the session began (the seated space); the "
+                         "headset's recentre moves it. X4VR_SPACE=stage puts back the play area");
     g_vrs.session_ok.store(true);
     vr_thread();
 }
@@ -17177,6 +17291,14 @@ void vr_report(const char *when) {
                  (unsigned long long)g_vrs.pair_differ,
                  100.0 * (double)g_vrs.pair_differ / (double)g_vrs.pair_frames,
                  g_vrs.pair_sum_deg / (double)g_vrs.pair_frames, (double)g_vrs.pair_max_deg);
+    if (g_vrs.pair_res_frames)
+        X4VR_LOG("declpair residual (%s): %llu headset frame(s) compared, %llu (%.1f%%) where "
+                 "the newest residual was not the submitted image's, mean %.3f deg, max %.2f deg",
+                 when, (unsigned long long)g_vrs.pair_res_frames,
+                 (unsigned long long)g_vrs.pair_res_differ,
+                 100.0 * (double)g_vrs.pair_res_differ / (double)g_vrs.pair_res_frames,
+                 g_vrs.pair_res_sum_deg / (double)g_vrs.pair_res_frames,
+                 (double)g_vrs.pair_res_max_deg);
     X4VR_LOG("vr summary (%s): runtime=%s session=%d focused=%d frames=%llu "
              "located=%llu submitted=%llu span=%.4f,%.4f,%.4f",
              when, g_vrs.rt.ok() ? g_vrs.rt.runtime_name : "none",

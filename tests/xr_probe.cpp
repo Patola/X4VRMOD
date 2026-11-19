@@ -1232,6 +1232,7 @@ int main(int argc, char **argv) {
     }
 
     printf("KEY_FRAMES=%u\n", frames);
+    printf("KEY_SPACE_CHANGES=%llu\n", (unsigned long long)s.space_changes);
     printf("KEY_LOCATED=%u\n", located);
     printf("KEY_SUBMITTED=%u\n", submitted);
     printf("KEY_IPD_M=%.4f\n", ipd_m);

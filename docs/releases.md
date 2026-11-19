@@ -20,6 +20,20 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
+## Unreleased
+
+* **Forward is where you face, and the headset's recentre works (issue #4).** The mod took
+  "forward" from the headset's play area, which points wherever its boundary was set up: a player
+  sitting the other way round found X4's menus and cockpit behind him, and recentring did
+  nothing. Forward is now where your head faces when X4's VR session starts, and the headset's
+  own recentre (holding a Quest's Meta button, SteamVR's "Reset seated position") moves it, with
+  the head's lean measured again from there. `X4VR_SPACE=stage` puts back the play area.
+* **A smaller correction is paired with its picture too.** Each frame sent to the headset says
+  where it was drawn from; since rc4 that has been X4's camera (or head-look's angle on foot) as
+  it was when the picture was drawn. A small correction added on top, under a degree most of the
+  time, was still read when the frame was sent, in the cockpit and on foot alike. It's now the
+  one the picture was drawn with.
+
 ## v1.0.0-rc6 — 2026-11-19 — Sixth release candidate: VR when X4 is started from Steam, and Monado
 
 The sixth release candidate for 1.0. Packages call it `1.0.0~rc6` (Arch: `1.0.0rc6`), which installs

@@ -1221,6 +1221,32 @@ fi
 want "foot-menu late switch, X4 presenting -> FAIL" /tmp/census-fm-frames.log "FAIL|  - " "1 canvas-arm opening(s) never reached the layer"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" "$(fmcen 999970.100 400)" "$(fmcen 999975.100 510)" "$fmoA" "$(fmcen 999980.100 510)" "$fmcL" "$(printf '%s' "$fmlate" | sed 's/999980\.150/999981.500/')"; } > /tmp/census-fm-stallnever.log
 want "foot-menu stall, switch only after the close -> FAIL" /tmp/census-fm-stallnever.log "FAIL|  - " "1 canvas-arm opening(s) never reached the layer"
+
+# ------------------------------------------ space: a recentre re-latches (issue #4)
+# The seated space's forward moves with the headset's recentre; the head's neutral
+# point, measured in the old space, must latch again. The control: the same
+# recentre with no re-latch FAILs. The format guard first.
+grep -qF '"vr: recentred — the runtime moved the %s space (#%llu): forward is "' layer/x4vr_layer.cpp \
+    && ok "space: the planted recentre matches the layer's format" \
+    || bad "space: the layer's recentre line changed — replant the lines below"
+sprec='[  999980.000] layer   vr: recentred — the runtime moved the LOCAL space (#1): forward is where the head faces now, and the head'"'"'s neutral points re-latch'
+splat='[  999980.001] layer   head translate: neutral point latched at (0.012, -0.004, 0.020) m — every shift below is measured from here, not from the stage origin.'
+plant /tmp/census-sp-ok.log "$sprec" "$splat"
+want "space: a recentre -> listed" /tmp/census-sp-ok.log space "1 recentre(s): t 999980.0"
+if python3 tools/score_run.py /tmp/census-sp-ok.log 2>&1 | grep -q "not followed by the head's neutral"; then
+    bad "space: a recentre that re-latched -> FAILs"
+else
+    ok "space: a recentre that re-latched -> no FAIL"
+fi
+plant /tmp/census-sp-stale.log "$sprec"
+want "space: a recentre with no re-latch -> FAIL" /tmp/census-sp-stale.log "FAIL|  - " "1 recentre(s) not followed by the head's neutral point re-latching"
+
+# ------------------------------------------ declpair: the residual, paired too (2026-11-19)
+grep -qF '"declpair residual (%s): %llu headset frame(s) compared, %llu (%.1f%%) where "' layer/x4vr_layer.cpp \
+    && ok "declpair residual: the planted line matches the layer's format" \
+    || bad "declpair residual: the layer's line changed — replant the line below"
+plant /tmp/census-dpres.log '[  999990.000] layer   declpair residual (final): 5000 headset frame(s) compared, 1200 (24.0%) where the newest residual was not the submitted image'"'"'s, mean 0.031 deg, max 0.84 deg'
+want "declpair residual -> listed" /tmp/census-dpres.log declpair "the newest residual was not the submitted image's in 1200 of 5000 frame(s) (24.0%), mean 0.031 deg, max 0.84 deg"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" '[  999975.000] inject  sdl: relative mouse mode ON (fold stands down)' '[  999976.000] inject  sdl: relative mouse mode off (fold applies)'; } > /tmp/census-fm-old.log
 want "foot-menu pointer freed, nothing logged -> an older build" /tmp/census-fm-old.log foot-menu "X4 freed the pointer 1 time(s) off the seat and no on-foot menu was logged"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" '[  999969.000] inject  sdl: relative mouse mode off (fold applies)' "$fmout"; } > /tmp/census-fm-none.log

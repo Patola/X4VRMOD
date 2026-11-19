@@ -5213,6 +5213,46 @@ def main(path):
         n_, d_, pct, mean, mx = dp_stat[-1]
         print(f"declpair the newest camera was not the submitted image's in {d_} of {n_} "
               f"frame(s) ({pct}%), mean {mean} deg, max {mx} deg")
+    # The residual too, since 2026-11-19: the small turn added on top of every
+    # declaration, in the cockpit and on foot alike, read at submission before.
+    dp_res = re.findall(r"declpair residual \((?:periodic|final)\): (\d+) headset frame\(s\) "
+                        r"compared, (\d+) \(([\d.]+)%\) where the newest residual was not the "
+                        r"submitted image's, mean ([\d.]+) deg, max ([\d.]+) deg", text)
+    if dp_res:
+        n_, d_, pct, mean, mx = dp_res[-1]
+        print(f"declpair the newest residual was not the submitted image's in {d_} of {n_} "
+              f"frame(s) ({pct}%), mean {mean} deg, max {mx} deg")
+    elif dp_stat and dp_mode and dp_mode.group(1) == "ON" and "pose: channel up" in text:
+        print("declpair no residual was paired: no frame published a pose (a build before "
+              "2026-11-19 doesn't pair it)")
+
+    # --- the space forward is measured in (issue #4, 2026-11-19) -------------
+    #
+    # The seated space (LOCAL): forward is where the head faced at the start,
+    # and the headset's recentre moves it. The play area (STAGE), every run's
+    # until then, faced wherever the boundary was set up: issue #4's player sat
+    # the other way round. A recentre must re-latch the head's neutral point,
+    # which was measured in the old space.
+    sp = re.search(r"vr: session created on X4's own device .*?reference space (STAGE|LOCAL)", text)
+    rec = re.findall(r"\[\s*([\d.]+)\]\s+layer\s+vr: recentred — the runtime moved the (\w+) "
+                     r"space \(#(\d+)\)", text)
+    lat = [float(t) for t in re.findall(r"\[\s*([\d.]+)\]\s+layer\s+head translate: neutral "
+                                        r"point latched at", text)]
+    if sp:
+        print(f"space    {sp.group(1)}" + (
+            " — forward is where the head faced at the start; the headset's recentre moves it"
+            if sp.group(1) == "LOCAL" else
+            " — the play area's forward (X4VR_SPACE=stage, or a build before 2026-11-19)"))
+    if rec:
+        print(f"space    {len(rec)} recentre(s): "
+              + ", ".join(f"t {float(t):.1f}" for t, _k, _n in rec[:8])
+              + (" ..." if len(rec) > 8 else ""))
+        missed = [float(t) for t, _k, _n in rec
+                  if not any(float(t) <= x <= float(t) + 1.0 for x in lat)]
+        if lat and missed:
+            fails.append(f"{len(missed)} recentre(s) not followed by the head's neutral point "
+                          f"re-latching (first t={missed[0]:.1f}): the head's shift is measured "
+                          f"from a point in the old space")
 
     # --- the stall watchdog ------------------------------------------------
     #

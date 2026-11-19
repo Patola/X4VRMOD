@@ -747,6 +747,14 @@ struct Session {
     XrSpace space = XR_NULL_HANDLE;     // the reference space we submit against
     XrSpace view_space = XR_NULL_HANDLE; // VIEW, for "where is the head"
     XrReferenceSpaceType space_type = XR_REFERENCE_SPACE_TYPE_LOCAL;
+    // Asked for before session_create: the play area (STAGE) instead of the
+    // seated space (LOCAL). See session_create.
+    bool want_stage = false;
+    // How many times the runtime has moved our space: a recentre (holding a
+    // Quest's Meta button, SteamVR's "reset seated position"). Whatever was
+    // latched in the old space's coordinates is re-latched when it changes.
+    uint64_t space_changes = 0;
+    XrTime space_change_time = 0; // when the latest change takes effect
 
     XrSessionState state = XR_SESSION_STATE_UNKNOWN;
     bool running = false;   // between xrBeginSession and xrEndSession
@@ -843,13 +851,18 @@ inline XrResult session_create(Session &s, Runtime &rt, VkInstance vk,
         return r;
     }
 
-    // STAGE if the runtime has it (a floor-relative origin), LOCAL otherwise.
-    // Which one we get changes what "sitting still" means, so it is recorded
-    // rather than assumed.
+    // The seated space (LOCAL), which every runtime has: its forward is where
+    // the head faced when the session began, and the runtime's recentre moves
+    // it. The play area (STAGE) was the choice until 2026-11-19, as "a
+    // floor-relative origin": its forward is wherever the player set up the
+    // headset's boundary, and issue #4's player sat facing the other way, with
+    // the menus and the cockpit behind him and nothing a recentre could move.
+    // want_stage asks for it again. Which one we get is recorded, not assumed.
     uint32_t n = 0;
     XrReferenceSpaceType avail[8] = {};
     bool stage = false;
-    if (rt.api.EnumerateReferenceSpaces(s.session, 8, &n, avail) == XR_SUCCESS)
+    if (s.want_stage &&
+        rt.api.EnumerateReferenceSpaces(s.session, 8, &n, avail) == XR_SUCCESS)
         for (uint32_t i = 0; i < n; i++)
             if (avail[i] == XR_REFERENCE_SPACE_TYPE_STAGE)
                 stage = true;
@@ -923,6 +936,12 @@ inline bool session_poll(Session &s, void (*on_state)(void *, XrSessionState),
             }
         } else if (ev.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
             s.exit_requested = true;
+        } else if (ev.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
+            const auto *c = (const XrEventDataReferenceSpaceChangePending *)&ev;
+            if (c->referenceSpaceType == s.space_type) {
+                s.space_changes++;
+                s.space_change_time = c->changeTime;
+            }
         }
     }
     return !s.exit_requested;
