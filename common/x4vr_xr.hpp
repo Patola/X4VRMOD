@@ -851,9 +851,9 @@ inline XrResult session_create(Session &s, Runtime &rt, VkInstance vk,
         return r;
     }
 
-    // The seated space (LOCAL), which every runtime has: its forward is where
-    // the head faced when the session began, and the runtime's recentre moves
-    // it. The play area (STAGE) was the choice until 2026-11-19, as "a
+    // The seated space (LOCAL), which every runtime has: the runtime sets its
+    // forward (WiVRn: where the headset was last recentred, take 443), and the
+    // runtime's recentre moves it. The play area (STAGE) was the choice until 2026-11-19, as "a
     // floor-relative origin": its forward is wherever the player set up the
     // headset's boundary, and issue #4's player sat facing the other way, with
     // the menus and the cockpit behind him and nothing a recentre could move.

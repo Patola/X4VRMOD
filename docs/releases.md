@@ -22,12 +22,12 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
-* **Forward is where you face, and the headset's recentre works (issue #4).** The mod took
-  "forward" from the headset's play area, which points wherever its boundary was set up: a player
-  sitting the other way round found X4's menus and cockpit behind him, and recentring did
-  nothing. Forward is now where your head faces when X4's VR session starts, and the headset's
-  own recentre (holding a Quest's Meta button, SteamVR's "Reset seated position") moves it, with
-  the head's lean measured again from there. `X4VR_SPACE=stage` puts back the play area.
+* **The headset's recentre works (issue #4).** The mod took "forward" from the headset's play
+  area, which points wherever its boundary was set up: a player sitting the other way round found
+  X4's menus and cockpit behind him, and recentring did nothing. Forward is now the headset's
+  seated one, which its own recentre moves (holding a Quest's Meta button, SteamVR's "Reset
+  seated position"), with the head's lean measured again from there. `X4VR_SPACE=stage` puts
+  back the play area.
 * **A smaller correction is paired with its picture too.** Each frame sent to the headset says
   where it was drawn from; since rc4 that has been X4's camera (or head-look's angle on foot) as
   it was when the picture was drawn. A small correction added on top, under a degree most of the

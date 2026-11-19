@@ -625,11 +625,47 @@ struct PresentDecl {
     // submission it was the newest instead, in every mode.
     float res_yaw = 0.0f, res_pitch = 0.0f;
     bool res_ok = false;
+    // Head-look's angle at the frame's first render pass, and how many of its
+    // ticks landed between then and the present (2026-11-19).
+    x4vr::CamSnap first_snap;
+    bool first_ok = false;
+    uint32_t ticks_between = 0;
 };
 static PresentDecl g_present_decl; // X4's present thread only
 
 const x4vr::Shared *shared_state();
 bool pose_frame_residual(float *yaw, float *pitch);
+
+// declpair on foot and in the external views (2026-11-19). The cockpit declares
+// X4's own camera as it stood at the frame's first render pass (camstamp), and
+// was smooth on a Quest 3 and a Steam Frame; on foot and in F2-F4, which declare
+// head-look's angle as read at the present, both twitched (takes 443, 444). If
+// head-look ticks for the next frame before this one is presented, the present
+// reads the next frame's angle. This is the angle at the first render pass, and
+// `seq` its publish count then, so the present can say how many ticks landed
+// in between.
+struct FirstPassSnap {
+    uint32_t frame = UINT32_MAX;
+    x4vr::CamSnap snap;
+    uint32_t seq = 0;
+    bool ok = false;
+};
+static std::mutex g_firstsnap_mu;
+static FirstPassSnap g_firstsnap;
+
+// Beside camstamp_at_first_pass, on X4's render thread: once per frame.
+static void firstsnap_at_first_pass() {
+    const x4vr::Shared *sh = shared_state();
+    if (!sh)
+        return;
+    const uint32_t f = g_camstamp.frame.load(std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(g_firstsnap_mu);
+    if (g_firstsnap.frame == f)
+        return;
+    g_firstsnap.frame = f;
+    g_firstsnap.seq = sh->cam_seq.load(std::memory_order_acquire);
+    g_firstsnap.ok = x4vr::share_read_camera(sh, &g_firstsnap.snap);
+}
 
 static void declpair_capture() {
     PresentDecl d;
@@ -643,6 +679,13 @@ static void declpair_capture() {
     if (const x4vr::Shared *sh = shared_state()) {
         x4vr::share_read_camera(sh, &d.snap);
         d.snap_ok = true;
+        const uint32_t seq_now = sh->cam_seq.load(std::memory_order_acquire);
+        std::lock_guard<std::mutex> lock(g_firstsnap_mu);
+        if (g_firstsnap.frame == f && g_firstsnap.ok) {
+            d.first_snap = g_firstsnap.snap;
+            d.first_ok = true;
+            d.ticks_between = (seq_now - g_firstsnap.seq) / 2;
+        }
     }
     d.res_ok = pose_frame_residual(&d.res_yaw, &d.res_pitch);
     g_present_decl = d;
@@ -685,6 +728,40 @@ static bool declpair_on() {
         X4VR_LOG("declpair: phase #%ld — %s (X4VR_DECLARE_PAIRED_AB=%g s)", p + 1,
                  p % 2 ? "PAIRED, each image declared with what it was drawn with"
                        : "CONTROL, the newest values, as before",
+                 ab);
+    }
+    return p % 2 == 1;
+}
+
+// On foot and in the external views: head-look's angle from the frame's first
+// render pass (the default since 2026-11-19), or as read at its present, as
+// before. X4VR_DECLARE_FOOT_AB=<s> alternates them, the present's first.
+static bool foot_first_on() {
+    static const double ab = [] {
+        const char *e = getenv("X4VR_DECLARE_FOOT_AB");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    if (ab <= 0.0) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            X4VR_LOG("declpair foot: ON — on foot and in the external views, head-look's "
+                     "angle from each frame's first render pass "
+                     "(X4VR_DECLARE_FOOT_AB=<s> alternates it with the present's)");
+        }
+        return true;
+    }
+    static double t0 = 0.0;
+    static long phase = -1;
+    const double now = mono_now();
+    if (t0 == 0.0)
+        t0 = now;
+    const long p = (long)((now - t0) / ab);
+    if (p != phase) {
+        phase = p;
+        X4VR_LOG("declpair foot: phase #%ld — %s (X4VR_DECLARE_FOOT_AB=%g s)", p + 1,
+                 p % 2 ? "FIRST PASS, head-look's angle from the frame's first render pass"
+                       : "CONTROL, head-look's angle as read at the present, as before",
                  ab);
     }
     return p % 2 == 1;
@@ -12920,6 +12997,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBeginRenderPass(
     // Cheap (one call, once per frame) and gated, so a run that did not ask for
     // it pays nothing.
     camstamp_at_first_pass();
+    firstsnap_at_first_pass();
     // `|| ui_capture_wanted()`: the capture below needs the same framebuffer
     // record the probe needs, and gating it on the probe's knob would have made
     // layer B silently depend on an unrelated instrument being on. That exact
@@ -14824,6 +14902,11 @@ struct VrState {
     uint64_t pair_frames = 0, pair_differ = 0;
     float pair_max_deg = 0.0f;
     double pair_sum_deg = 0.0;
+    // ...on foot and in the external views: head-look's angle at the first
+    // render pass against the present's (2026-11-19)...
+    uint64_t foot_frames = 0, foot_ticked = 0, foot_differ = 0;
+    float foot_max_deg = 0.0f;
+    double foot_sum_deg = 0.0;
     // ...and the residual's, in every mode where the frame published one.
     uint64_t pair_res_frames = 0, pair_res_differ = 0;
     float pair_res_max_deg = 0.0f;
@@ -16222,9 +16305,31 @@ void vr_thread() {
                             decl_pitch = now_pitch;
                         } else if (paired && pd.snap_ok && pd.snap.valid) {
                             // On foot and in external views: head-look's angle
-                            // as it was when this image was drawn.
-                            decl_yaw = pd.snap.yaw_deg;
-                            decl_pitch = pd.snap.pitch_deg;
+                            // as it was when this image was drawn -- from its
+                            // first render pass (2026-11-19), where a tick before
+                            // the present no longer counts.
+                            const bool first_have = pd.first_ok && pd.first_snap.valid;
+                            const bool first = first_have && foot_first_on();
+                            decl_yaw = first ? pd.first_snap.yaw_deg : pd.snap.yaw_deg;
+                            decl_pitch = first ? pd.first_snap.pitch_deg : pd.snap.pitch_deg;
+                            if (first_have) {
+                                float dy = pd.snap.yaw_deg - pd.first_snap.yaw_deg;
+                                while (dy > 180.0f)
+                                    dy -= 360.0f;
+                                while (dy < -180.0f)
+                                    dy += 360.0f;
+                                const float dp = pd.snap.pitch_deg - pd.first_snap.pitch_deg;
+                                const float dd = std::sqrt(dy * dy + dp * dp);
+                                std::lock_guard<std::mutex> fl(g_vrs.mu);
+                                g_vrs.foot_frames++;
+                                if (pd.ticks_between > 0)
+                                    g_vrs.foot_ticked++;
+                                if (dd > 0.01f)
+                                    g_vrs.foot_differ++;
+                                g_vrs.foot_sum_deg += dd;
+                                if (dd > g_vrs.foot_max_deg)
+                                    g_vrs.foot_max_deg = dd;
+                            }
                         } else {
                             decl_yaw = snap.yaw_deg;
                             decl_pitch = snap.pitch_deg;
@@ -17202,10 +17307,12 @@ void vr_session_thread() {
                  ? "the play area's (X4VR_SPACE=stage), wherever the headset's boundary was "
                    "set up facing; a recentre doesn't move it"
                  : g_vrs.session.want_stage
-                       ? "where the head faced as the session began: the play area was asked "
-                         "for (X4VR_SPACE=stage) and the runtime has none"
-                       : "where the head faced as the session began (the seated space); the "
-                         "headset's recentre moves it. X4VR_SPACE=stage puts back the play area");
+                       ? "the seated space's: the play area was asked for (X4VR_SPACE=stage) "
+                         "and the runtime has none"
+                       : "the seated space's: the runtime sets it (on WiVRn, where the headset "
+                         "was last recentred, not where the head faced as X4 started, take 443), "
+                         "and the headset's recentre moves it. X4VR_SPACE=stage puts back the "
+                         "play area");
     g_vrs.session_ok.store(true);
     vr_thread();
 }
@@ -17291,6 +17398,16 @@ void vr_report(const char *when) {
                  (unsigned long long)g_vrs.pair_differ,
                  100.0 * (double)g_vrs.pair_differ / (double)g_vrs.pair_frames,
                  g_vrs.pair_sum_deg / (double)g_vrs.pair_frames, (double)g_vrs.pair_max_deg);
+    if (g_vrs.foot_frames)
+        X4VR_LOG("declpair foot (%s): %llu headset frame(s) on foot or in an external view, "
+                 "%llu (%.1f%%) where head-look ticked between the first render pass and the "
+                 "present, %llu (%.1f%%) where its angle had moved, mean %.3f deg, max %.2f deg",
+                 when, (unsigned long long)g_vrs.foot_frames,
+                 (unsigned long long)g_vrs.foot_ticked,
+                 100.0 * (double)g_vrs.foot_ticked / (double)g_vrs.foot_frames,
+                 (unsigned long long)g_vrs.foot_differ,
+                 100.0 * (double)g_vrs.foot_differ / (double)g_vrs.foot_frames,
+                 g_vrs.foot_sum_deg / (double)g_vrs.foot_frames, (double)g_vrs.foot_max_deg);
     if (g_vrs.pair_res_frames)
         X4VR_LOG("declpair residual (%s): %llu headset frame(s) compared, %llu (%.1f%%) where "
                  "the newest residual was not the submitted image's, mean %.3f deg, max %.2f deg",
