@@ -250,14 +250,27 @@ static void test_play(Window &w, const QString &shots) {
     check(!w.findChild<QToolButton *>("start-vr")->isVisibleTo(&w), "...the VR row offers nothing");
     check(!debug->isEnabled() && !w.findChild<QComboBox *>("eye")->isEnabled(),
           "...and Debug log and the VR settings grey out");
-    // ...and say why, or a greyed "DLSS Auto" reads as no DLSS (the RTX 5090 player).
+    // ...and say why, or a greyed "DLSS Auto" reads as no DLSS (the RTX 5090 player). DLSS
+    // is named only on a card that has it (Patola's Radeon, 2026-11-19).
     auto *renders = w.findChild<QLabel *>("renders");
-    check(renders && renders->isVisibleTo(&w) && renders->text().contains("mod's VR settings") &&
-              renders->text().contains("X4's graphics settings") &&
-              renders->text().contains("debug log"),
-          "...and say why: the mod's VR settings and its debug log, DLSS in X4's own settings");
+    check(renders && renders->isVisibleTo(&w) && renders->text().contains("only for VR") &&
+              renders->text().contains("X4's own graphics settings") &&
+              renders->text().contains("Debug log"),
+          "...and say why: the settings above and Debug log are only for VR, X4 has its own");
+    check(!renders->text().contains("DLSS"), "...naming no DLSS on a Radeon");
+    {
+        auto rtx = modless;
+        Check rtxRow = row("gpu", Status::Ok, "GPU capable", "NVIDIA GeForce RTX 3070, Vulkan 1.4, DLSS available");
+        rtxRow.dlss = true;
+        replace(rtx, rtxRow);
+        w.showChecks(rtx);
+        check(renders->text().contains("you can also turn on DLSS"),
+              "...and on an RTX card, that DLSS is in X4's own settings");
+        w.showChecks(modless);
+        check(!renders->text().contains("DLSS"), "...gone again with the Radeon");
+    }
     flat->setChecked(false);
-    check(!renders->text().contains("mod's VR settings"), "...unticked, the VR notes come back");
+    check(!renders->text().contains("only for VR"), "...unticked, the VR notes come back");
     flat->setChecked(true);
     debug->setChecked(true);
     w.play();

@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-18 23:02+0100\n"
+"POT-Creation-Date: 2026-11-19 02:49+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -1055,11 +1055,22 @@ msgstr "Ohne VR"
 #: launcher/gui/window.cpp
 #, qt-format
 msgid ""
-"Flatscreen: these are the mod's VR settings, and so is the debug log. A flat "
-"game uses X4's own: choose DLSS in X4's graphics settings."
+"Flatscreen: the settings above and Debug log are only for VR, so they're "
+"greyed out. A flat game uses X4's own graphics settings, where you can also "
+"turn on DLSS."
 msgstr ""
-"Ohne VR: Das sind die VR-Einstellungen der Mod, wie auch das Debug-Log. Ein "
-"Spiel ohne VR nutzt die von X4: Wähle DLSS in den Grafikeinstellungen von X4."
+"Ohne VR: Die Einstellungen oben und das Debug-Log gelten nur für VR, deshalb "
+"sind sie ausgegraut. Ein Spiel ohne VR nutzt die Grafikeinstellungen von X4, "
+"wo du auch DLSS einschalten kannst."
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Flatscreen: the settings above and Debug log are only for VR, so they're "
+"greyed out. A flat game uses X4's own graphics settings."
+msgstr ""
+"Ohne VR: Die Einstellungen oben und das Debug-Log gelten nur für VR, deshalb "
+"sind sie ausgegraut. Ein Spiel ohne VR nutzt die Grafikeinstellungen von X4."
 
 #: launcher/gui/window.cpp
 #, qt-format

@@ -565,11 +565,15 @@ void Window::syncSettings() {
         lines << q(en);
     // Flatscreen greys these out: they're the mod's VR settings, and a flat game runs
     // nothing of the mod's. Say so, or "DLSS" greyed reads as "no DLSS" (the RTX 5090
-    // player, 2026-11-18).
+    // player, 2026-11-18). DLSS is named only where it's on the list above: on a card
+    // without it, the name was one more thing to wonder about (Patola's Radeon, 2026-11-19).
     if (m_flat && m_flat->isChecked())
-        lines = QStringList{qtr("Flatscreen: these are the mod's VR settings, and so is the debug "
-                                "log. A flat game uses X4's own: choose DLSS in X4's graphics "
-                                "settings.")};
+        lines = QStringList{
+            m_rtx ? qtr("Flatscreen: the settings above and Debug log are only for VR, so they're "
+                        "greyed out. A flat game uses X4's own graphics settings, where you can "
+                        "also turn on DLSS.")
+                  : qtr("Flatscreen: the settings above and Debug log are only for VR, so they're "
+                        "greyed out. A flat game uses X4's own graphics settings.")};
     m_renders->setText(lines.join(' '));
     m_renders->setVisible(!lines.isEmpty());
 

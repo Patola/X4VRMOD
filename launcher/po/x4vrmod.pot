@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-18 23:02+0100\n"
+"POT-Creation-Date: 2026-11-19 02:49+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -1151,8 +1151,16 @@ msgstr ""
 #: launcher/gui/window.cpp
 #, qt-format
 msgid ""
-"Flatscreen: these are the mod's VR settings, and so is the debug log. A flat "
-"game uses X4's own: choose DLSS in X4's graphics settings."
+"Flatscreen: the settings above and Debug log are only for VR, so they're "
+"greyed out. A flat game uses X4's own graphics settings, where you can also "
+"turn on DLSS."
+msgstr ""
+
+#: launcher/gui/window.cpp
+#, qt-format
+msgid ""
+"Flatscreen: the settings above and Debug log are only for VR, so they're "
+"greyed out. A flat game uses X4's own graphics settings."
 msgstr ""
 
 #: launcher/gui/window.cpp
