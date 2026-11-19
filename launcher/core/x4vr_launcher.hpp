@@ -220,6 +220,7 @@ struct Layout {
     std::string extension_dir;  // the x4vrmod extension to deploy
     std::string layer_manifest; // where the manifest must be for X4 to find it
     std::string injector;       // the preload library
+    std::string lib_dir;        // the layer's folder, with the mod's own OpenXR loader
     std::string launch_script;  // x4vr-launch.sh, what `run` execs
     std::string deploy_script;  // deploy-extensions.sh, from what ships
     std::string help_dir;       // the window's help and artwork

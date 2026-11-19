@@ -12,7 +12,7 @@ git config --global --add safe.directory "$src" 2>/dev/null || true
 ver=$(git describe --tags --match 'v[0-9]*' | sed -E 's/^v//; s/-([0-9]+)-g/.r\1.g/; s/-(rc[0-9]+)/\1/')
 work=$(mktemp -d)
 sed -E "s|^pkgver=.*|pkgver=$ver|;
-        s|^source=.*|source=(\"x4vrmod::git+file://$src#commit=$(git rev-parse HEAD)\")|" \
+        s|\"x4vrmod::git\\+https://[^\"]*\"|\"x4vrmod::git+file://$src#commit=$(git rev-parse HEAD)\"|" \
     packaging/arch/PKGBUILD > "$work/PKGBUILD"
 mkdir -p "$out"
 if [ "$(id -u)" = 0 ]; then

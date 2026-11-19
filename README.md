@@ -195,6 +195,11 @@ cmake -S . -B build && cmake --build build
 X4VR_H=4224 X4VR_UPSCALE=fsr_quality ./launch/x4vr-launch.sh  # 4224², FSR 1
 ```
 
+The first build fetches Khronos' OpenXR-SDK at a pinned commit (release 1.1.60, with git) to
+build the loader the mod ships. Offline, point it at a checkout of that commit with
+`-DX4VR_OPENXR_SDK_DIR=<path>`, or leave the loader out with `-DX4VR_BUNDLE_OPENXR_LOADER=OFF`
+(X4 started from Steam then gets no VR).
+
 **The shipping settings are the defaults.** The launcher applies
 `launch/defaults.conf` (the take 375 line) to every variable you have not
 set. An explicit setting always wins (`X4VR_MV=0` turns one off), and
@@ -330,6 +335,11 @@ function hooking, and Vulkan layer/overlay mechanisms.
 The exception does not extend to the Windows, macOS or any other
 non-GNU/Linux version of X4, nor to any other GPL-incompatible program, and
 it grants no rights in X4: Foundations, its trademarks, or any Egosoft code.
+
+The packages and the zip also carry Khronos' OpenXR loader, `libopenxr_loader.so.1`, so X4 started
+from Steam finds one inside Steam's runtime container: Apache-2.0, built with its jsoncpp (MIT or
+public domain). Their licences ship beside the mod's, as `OpenXR-loader.LICENSE` and
+`jsoncpp.LICENSE`.
 
 ## Credits
 

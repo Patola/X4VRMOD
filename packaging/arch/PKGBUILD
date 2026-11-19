@@ -12,8 +12,11 @@ makedepends=('cmake' 'gettext' 'git' 'python' 'python-pillow' 'vulkan-headers')
 optdepends=('gamemode: the launcher offers it, for a few more frames per second'
             "qt6-translations: Qt's own buttons in the launcher's language")
 # A release candidate's pkgver is 1.0.0rc1, which pacman sorts before 1.0.0; its tag is v1.0.0-rc1.
-source=("x4vrmod::git+https://github.com/Patola/X4VRMOD.git#tag=v${pkgver/rc/-rc}")
-sha256sums=('SKIP')
+# The OpenXR loader the mod ships, for X4 started from Steam (cmake/x4vr_openxr_loader.cmake):
+# the same commit as X4VR_OPENXR_SDK_COMMIT there, release-1.1.60.
+source=("x4vrmod::git+https://github.com/Patola/X4VRMOD.git#tag=v${pkgver/rc/-rc}"
+        "OpenXR-SDK::git+https://github.com/KhronosGroup/OpenXR-SDK.git#commit=64f2b37c8c6da3d83c9b4d11865ba1fb752cb8ec")
+sha256sums=('SKIP' 'SKIP')
 # A debug package for a game mod nobody debugs from a package, 12 MB beside 7.
 options=('!debug')
 
@@ -21,7 +24,8 @@ build() {
     cmake -S x4vrmod -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
-        -DX4VR_BUILD_TESTS=OFF
+        -DX4VR_BUILD_TESTS=OFF \
+        -DX4VR_OPENXR_SDK_DIR="$srcdir/OpenXR-SDK"
     cmake --build build
 }
 

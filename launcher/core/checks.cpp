@@ -39,6 +39,7 @@ Layout detect_layout(const std::string &home) {
         l.layer_manifest =
             home + "/.local/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json";
         l.injector = in + "/lib/libx4vr_inject.so";
+        l.lib_dir = in + "/lib";
         l.launch_script = in + "/launch/x4vr-launch.sh";
         l.help_dir = zip + "/help";
         l.locale_dir = zip + "/locale";
@@ -50,6 +51,7 @@ Layout detect_layout(const std::string &home) {
         l.extension_dir = X4VRMOD_BUILD_DIR "/extension/x4vrmod";
         l.layer_manifest = X4VRMOD_BUILD_DIR "/layer/VK_LAYER_X4VR_core.json";
         l.injector = X4VRMOD_BUILD_DIR "/injector/libx4vr_inject.so";
+        l.lib_dir = X4VRMOD_BUILD_DIR "/layer";
         l.launch_script = X4VRMOD_SOURCE_DIR "/launch/x4vr-launch.sh";
         l.deploy_script = X4VRMOD_SOURCE_DIR "/launch/deploy-extensions.sh";
         l.help_dir = X4VRMOD_SOURCE_DIR "/launcher/help";
@@ -62,6 +64,7 @@ Layout detect_layout(const std::string &home) {
     l.layer_manifest =
         X4VRMOD_PREFIX "/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json";
     l.injector = X4VRMOD_PREFIX "/lib/x4vrmod/libx4vr_inject.so";
+    l.lib_dir = X4VRMOD_PREFIX "/lib/x4vrmod";
     l.launch_script = l.data_dir + "/launch/x4vr-launch.sh";
     l.deploy_script = l.data_dir + "/launch/deploy-extensions.sh";
     l.help_dir = l.data_dir + "/help";

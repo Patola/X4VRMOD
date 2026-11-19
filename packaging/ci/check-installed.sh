@@ -5,7 +5,9 @@
 # package. No X4 or GPU here, so that's as far as it can go.
 set -euo pipefail
 for f in /usr/bin/x4vrmod /usr/bin/x4vrmod-launcher /usr/lib/x4vrmod/libVkLayer_X4VR_core.so \
-    /usr/lib/x4vrmod/libx4vr_inject.so /usr/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json \
+    /usr/lib/x4vrmod/libx4vr_inject.so /usr/lib/x4vrmod/libopenxr_loader.so.1 \
+    /usr/share/licenses/x4vrmod/OpenXR-loader.LICENSE /usr/share/licenses/x4vrmod/jsoncpp.LICENSE \
+    /usr/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json \
     /usr/share/x4vrmod/launch/x4vr-launch.sh /usr/share/x4vrmod/extension/x4vrmod/content.xml \
     /usr/share/x4vrmod/extension/x4vrmod/ext_01.cat /usr/share/x4vrmod/help/index.html \
     /usr/share/applications/x4vrmod-launcher.desktop; do

@@ -53,6 +53,9 @@ target_include_directories(x4vr_layer PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/genera
 # flatscreen. Nothing is linked here on purpose.
 if(TARGET OpenXR::headers OR OPENXR_HEADER_DIR)
     target_compile_definitions(x4vr_layer PRIVATE X4VR_HAVE_OPENXR=1)
+    # Where a package puts the mod's own OpenXR loader (cmake/x4vr_openxr_loader.cmake).
+    target_compile_definitions(x4vr_layer PRIVATE
+        X4VR_INSTALL_LIBDIR="${CMAKE_INSTALL_PREFIX}/lib/x4vrmod")
     if(TARGET OpenXR::headers)
         target_link_libraries(x4vr_layer PRIVATE OpenXR::headers)
     else()

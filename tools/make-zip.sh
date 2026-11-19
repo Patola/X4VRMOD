@@ -24,6 +24,9 @@ mkdir -p "$D/lib" "$D/launch" "$D/extension"
 cp "$CLI" "$S/"
 [ -x "$BUILD/launcher/x4vrmod-launcher" ] && cp "$BUILD/launcher/x4vrmod-launcher" "$S/"
 cp "$BUILD/layer/libVkLayer_X4VR_core.so" "$BUILD/injector/libx4vr_inject.so" "$D/lib/"
+# The OpenXR loader started from Steam needs (cmake/x4vr_openxr_loader.cmake), and its licences.
+[ -f "$BUILD/layer/libopenxr_loader.so.1" ] && cp "$BUILD/layer/libopenxr_loader.so.1" "$D/lib/"
+[ -d "$BUILD/licenses" ] && cp "$BUILD/licenses/"*.LICENSE "$S/"
 cp "$ROOT/layer/VK_LAYER_X4VR_core.json.in" "$D/lib/"
 cp "$ROOT/launch/x4vr-launch.sh" "$ROOT/launch/x4vr-defaults.sh" \
    "$ROOT/launch/deploy-extensions.sh" "$ROOT/launch/defaults.conf" "$D/launch/"

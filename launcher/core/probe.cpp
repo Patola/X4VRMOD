@@ -81,6 +81,9 @@ static void xr_say(void *, const char *line) { fprintf(stderr, "%s\n", line); }
 
 XrProbe xr_probe_here(bool verbose) {
     XrProbe p;
+    // The mod's own loader is beside the layer, not beside this program: with no system loader
+    // the probe uses it, as X4 will.
+    xr::bundled_loader_dir() = detect_layout(home_dir()).lib_dir;
     xr::Runtime rt;
     const bool ok = xr::runtime_open(rt, verbose ? xr_say : nullptr, nullptr);
     p.runtime = rt.runtime_name;

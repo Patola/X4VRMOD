@@ -54,6 +54,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -99,6 +100,9 @@ inline float deg(float radians) { return radians * 57.29577951308232f; }
 // exists and the rest are not.
 struct Api {
     void *dl = nullptr;
+    // What dlopen was given when it worked: a soname for the system's loader, or the path of the
+    // mod's own copy.
+    std::string loader;
     PFN_xrGetInstanceProcAddr GetInstanceProcAddr = nullptr;
 
     // global (XR_NULL_HANDLE)
@@ -156,25 +160,84 @@ struct Api {
     PFN_xrGetVulkanGraphicsDeviceKHR GetVulkanGraphicsDeviceKHR = nullptr;
 };
 
-// The soname, not the linker name: a machine that has the runtime but not the
-// SDK's -dev package has only libopenxr_loader.so.1.
+// The mod ships its own OpenXR loader (take 441). Steam's runtime container has none, and the
+// host's can't be loaded in it: Arch's needs libjsoncpp.so.27, which the container lacks. Ours is
+// built with its jsoncpp and C++ runtime inside, and sits beside the library this code is built
+// into: the layer, in every package, the zip and the build tree. A program that isn't beside it
+// (the launcher's probe) names the folder.
+inline std::string &bundled_loader_dir() {
+    // Never destroyed: the layer registers no exit-time destructor in X4's process
+    // (tests/run-no-exit-destructors.sh).
+    static std::string &dir = *new std::string;
+    return dir;
+}
+
+// The folder of the library or program this code is in, symlinks resolved.
+inline std::string own_library_dir() {
+    Dl_info info{};
+    std::string path;
+    if (dladdr(reinterpret_cast<void *>(&own_library_dir), &info) && info.dli_fname &&
+        strchr(info.dli_fname, '/'))
+        path = info.dli_fname;
+    else
+        path = "/proc/self/exe"; // the main program: glibc may name it as it was invoked
+    char *real = realpath(path.c_str(), nullptr);
+    if (real) {
+        path = real;
+        free(real);
+    }
+    const size_t slash = path.rfind('/');
+    return slash == std::string::npos || path.rfind("/proc/", 0) == 0 ? std::string()
+                                                                       : path.substr(0, slash);
+}
+
+// The system's loader first, by soname, not the linker name: a machine that has the runtime but
+// not the SDK's -dev package has only libopenxr_loader.so.1. Then the mod's own.
 inline bool api_open(Api &api, std::string *why) {
     if (api.GetInstanceProcAddr)
         return true;
     const char *sonames[] = {"libopenxr_loader.so.1", "libopenxr_loader.so"};
     for (const char *n : sonames) {
         api.dl = dlopen(n, RTLD_NOW | RTLD_LOCAL);
-        if (api.dl)
+        if (api.dl) {
+            api.loader = n;
             break;
+        }
     }
     if (!api.dl) {
         // Read once: dlerror() clears the message, so a second call returns
         // NULL -- and std::string + NULL was X4's crash at start in issue #4,
         // in Steam's runtime container, which has no OpenXR loader.
         const char *err = dlerror();
-        if (why)
-            *why = std::string("dlopen libopenxr_loader.so.1: ") + (err ? err : "?");
-        return false;
+        std::string failed = std::string("dlopen libopenxr_loader.so.1: ") + (err ? err : "?");
+        std::vector<std::string> dirs;
+        if (!bundled_loader_dir().empty())
+            dirs.push_back(bundled_loader_dir());
+        const std::string own = own_library_dir();
+        if (!own.empty() && (dirs.empty() || dirs[0] != own))
+            dirs.push_back(own);
+#ifdef X4VR_INSTALL_LIBDIR
+        // A package's folder as Steam's container shows the host's /usr, in case the layer was
+        // handed over from somewhere else.
+        if (access("/run/host", F_OK) == 0 && std::string(X4VR_INSTALL_LIBDIR).rfind("/usr/", 0) == 0 &&
+            own != "/run/host" X4VR_INSTALL_LIBDIR)
+            dirs.push_back("/run/host" X4VR_INSTALL_LIBDIR);
+#endif
+        for (const std::string &d : dirs) {
+            const std::string p = d + "/libopenxr_loader.so.1";
+            api.dl = dlopen(p.c_str(), RTLD_NOW | RTLD_LOCAL);
+            if (api.dl) {
+                api.loader = p;
+                break;
+            }
+            const char *e = dlerror(); // names the path itself
+            failed += std::string("; the mod's own: ") + (e ? e : p.c_str());
+        }
+        if (!api.dl) {
+            if (why)
+                *why = failed;
+            return false;
+        }
     }
     api.GetInstanceProcAddr =
         (PFN_xrGetInstanceProcAddr)dlsym(api.dl, "xrGetInstanceProcAddr");
@@ -326,15 +389,18 @@ inline void say_to(Sink sink, void *user, const char *fmt, ...) {
 inline bool runtime_open(Runtime &rt, Sink sink, void *user) {
 #define say(...) say_to(sink, user, __VA_ARGS__)
     if (!api_open(rt.api, &rt.last_error)) {
-        // Steam's runtime container (sniper) ships no OpenXR loader, and
-        // issue #4's start from Steam found none there; the launcher's Play
-        // starts X4 outside it.
+        // Steam's runtime container (sniper) ships no OpenXR loader; the mod's own goes in
+        // there with it, so this is a copy without it. The launcher's Play starts X4 outside.
         if (access("/run/host", F_OK) == 0)
             rt.last_error += ". X4 is inside Steam's runtime container: start "
                              "it from the launcher's Play, which runs it outside";
         say("xr: no loader — %s", rt.last_error.c_str());
         return false;
     }
+    if (rt.api.loader[0] == '/')
+        say("xr: the mod's own OpenXR loader, %s: the system's isn't here%s",
+            rt.api.loader.c_str(),
+            access("/run/host", F_OK) == 0 ? " (X4 is inside Steam's runtime container)" : "");
 
     std::vector<XrExtensionProperties> exts;
     XrResult er = enumerate_extensions(rt.api, exts);

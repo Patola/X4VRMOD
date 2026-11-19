@@ -12,7 +12,8 @@ python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(".")' "
 U=$(echo x4vrmod-*)
 chmod +x "$U/x4vrmod"
 for f in x4vrmod x4vrmod-launcher x4vrmod-data/manifest x4vrmod-data/lib/libVkLayer_X4VR_core.so \
-    x4vrmod-data/lib/libx4vr_inject.so x4vrmod-data/launch/x4vr-launch.sh \
+    x4vrmod-data/lib/libx4vr_inject.so x4vrmod-data/lib/libopenxr_loader.so.1 \
+    OpenXR-loader.LICENSE jsoncpp.LICENSE x4vrmod-data/launch/x4vr-launch.sh \
     x4vrmod-data/extension/x4vrmod/ext_01.cat; do
     [ -e "$U/$f" ] || { echo "missing: $f"; exit 1; }
 done

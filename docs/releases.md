@@ -22,6 +22,13 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
+* **VR when X4 is started from Steam.** With the launch options the launcher gives you, Steam
+  starts X4 inside its runtime container, which has no OpenXR loader, so X4 ran flat: the picture
+  for the headset on the monitor, nothing in the headset. The system's loader can't be used in
+  there either (Arch's needs a library the container lacks). The mod now ships Khronos' OpenXR
+  loader (release 1.1.60, built with everything it needs inside) beside its Vulkan layer, and uses
+  it wherever the system has none; everywhere else the system's goes first. Packages and the zip
+  carry it, with its licence and jsoncpp's.
 * **Monado, for wired headsets.** While Monado runs, the launcher finds it and X4 uses it, even
   though Monado never makes itself the system's default VR runtime. When Monado's service is
   installed, the VR row's Start menu can start it. With no headset connected Monado runs a

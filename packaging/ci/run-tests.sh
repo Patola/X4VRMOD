@@ -35,7 +35,7 @@ for t in "$BUILD"/tests/x4vr_test_*; do
         x4vr_test_cursor_render | x4vr_test_menu_warp_render | x4vr_test_sbs_menu_warp | \
             x4vr_test_exit_teardown | x4vr_test_multiview_* | \
             x4vr_test_readback_speed | x4vr_test_spirv_patch | x4vr_test_wgate_patch | \
-            x4vr_test_xr_probe) continue ;;
+            x4vr_test_xr_probe | x4vr_test_xr_bundled) continue ;;
     esac
     run "${t##*/}" timeout 120 "$t"
 done
@@ -51,7 +51,8 @@ fi
 run check-exports tests/check-exports.sh "$BUILD/injector/libx4vr_inject.so"
 for s in census-scorer config-fork content-fork deploy-extensions dither-scorer \
     extension-selectors i18n launch-defaults launch-gamescope-env launcher-install launcher-package launcher-x4-bytes \
-    make-extension pace-scorer plantid-scorer png-reader rfab-scorer watch-relay x4-call-guards; do
+    make-extension pace-scorer plantid-scorer png-reader rfab-scorer watch-relay x4-call-guards \
+    xr-bundled-loader; do
     run "$s" timeout 600 bash "tests/run-$s.sh"
 done
 

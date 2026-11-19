@@ -51,6 +51,7 @@ add_custom_target(x4vr_extension ALL
     VERBATIM)
 
 add_subdirectory(layer)
+include(cmake/x4vr_openxr_loader.cmake)
 add_subdirectory(injector)
 add_subdirectory(launcher)
 option(X4VR_BUILD_TESTS "Build the test programs" ON)
@@ -113,6 +114,9 @@ set(CPACK_RPM_FILE_NAME RPM-DEFAULT)
 set(CPACK_RPM_PACKAGE_LICENSE "GPL-3.0-or-later WITH x4vrmod-linking-exception")
 set(CPACK_RPM_PACKAGE_REQUIRES "bash, gamescope, openxr-libs, vulkan-loader")
 set(CPACK_RPM_PACKAGE_SUGGESTS "gamemode, qt6-qttranslations")
+# The mod's own OpenXR loader is private to it: rpm would otherwise offer this package as one that
+# provides libopenxr_loader.so.1 to the whole system, in openxr-libs' place.
+set(CPACK_RPM_SPEC_MORE_DEFINE "%global __provides_exclude_from ^/usr/lib/x4vrmod/.*$")
 # Not ours to claim: these directories belong to the system's own packages.
 set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
     /usr/share/applications /usr/share/icons /usr/share/icons/hicolor
