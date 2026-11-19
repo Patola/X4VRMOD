@@ -52,9 +52,9 @@ or the zip for anything else.
   the mod; the report window lists that session as flatscreen, and the report's summary says so.
 * **The launcher no longer says DLSS hasn't been played in a headset:** it has, on an RTX 3070
   laptop and an RTX 5090, each under SteamVR with a Steam Frame, in both eyes.
-* **Ticking Flatscreen says why the eye size, the upscaler and Debug log grey out:** they're the
-  mod's VR settings, and a flat game uses X4's own, so DLSS for a flat game is chosen in X4's
-  graphics settings. A greyed "DLSS Auto" had read as DLSS not being available.
+* **Ticking Flatscreen says why the eye size, the upscaler and Debug log grey out:** they're only
+  for VR, and a flat game uses X4's own graphics settings. On an NVIDIA RTX card it adds that DLSS
+  can be turned on there too; a greyed "DLSS Auto" had read as DLSS not being available.
 
 Known: with DLSS on, X4 9.00 can crash while quitting, with or without the mod. It's X4's own:
 started flat without the mod, it crashes when quitting too (an RTX 3070 laptop), and where it was
