@@ -645,6 +645,15 @@ struct PresentDecl {
     x4vr::CamSnap first_snap;
     bool first_ok = false;
     uint32_t ticks_between = 0;
+    // The command captured at the PREVIOUS frame's present: what X4 drew this
+    // frame with. X4 applies head-look's command a frame late, in every view
+    // (X4VR_DECLTRACE, takes 447 and 447b, a Steam Frame and a Quest 3: X4's
+    // camera stepped by the command's step one frame earlier, to 0.000 deg at
+    // p90). The cockpit declares X4's camera, so the delay is in it; on foot and
+    // in F2-F4 the frame declared the current command, a frame ahead of its
+    // picture: the twitch there.
+    x4vr::CamSnap drawn_snap;
+    bool drawn_ok = false;
 };
 
 // X4VR_DECLTRACE=1: one line per X4 frame, at its present -- X4's camera as it
@@ -735,6 +744,13 @@ static void declpair_capture() {
         }
     }
     d.res_ok = pose_frame_residual(&d.res_yaw, &d.res_pitch);
+    // The previous present's command, filed with this frame (X4 draws a frame late).
+    static x4vr::CamSnap prev_snap;
+    static bool prev_ok = false;
+    d.drawn_snap = prev_snap;
+    d.drawn_ok = prev_ok;
+    prev_snap = d.snap;
+    prev_ok = d.snap_ok;
     g_present_decl = d;
 }
 
@@ -776,6 +792,43 @@ static bool declpair_on() {
                  p % 2 ? "PAIRED, each image declared with what it was drawn with"
                        : "CONTROL, the newest values, as before",
                  ab);
+    }
+    return p % 2 == 1;
+}
+
+// On foot and in the external views: the previous frame's command, the one X4
+// drew with (the default since 2026-11-19), or the current one as before.
+// X4VR_DECLARE_FOOT_AB=<s> alternates them, the current one first; each phase
+// line is worded to be relayed to the player (tools/watch_run.sh --relay).
+static bool foot_late_on() {
+    static const double ab = [] {
+        const char *e = getenv("X4VR_DECLARE_FOOT_AB");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    if (ab <= 0.0) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            X4VR_LOG("declpair foot: ON — on foot and in the external views, each frame "
+                     "declares head-look's previous command, the one X4 drew it with "
+                     "(X4VR_DECLARE_FOOT_AB=<s> alternates it with the current one)");
+        }
+        return true;
+    }
+    static double t0 = 0.0;
+    static long phase = -1;
+    const double now = mono_now();
+    if (t0 == 0.0) {
+        t0 = now;
+        // The key, once and not relayed: the phase lines say only A or B, so the
+        // player's eye isn't told which to expect.
+        X4VR_LOG("declpair foot: A/B every %g s from here — A declares the current "
+                 "command (as before), B the previous one, which X4 drew with", ab);
+    }
+    const long p = (long)((now - t0) / ab);
+    if (p != phase) {
+        phase = p;
+        X4VR_LOG("declpair foot: phase #%ld — %s", p + 1, p % 2 ? "B" : "A");
     }
     return p % 2 == 1;
 }
@@ -16314,10 +16367,13 @@ void vr_thread() {
                             decl_pitch = now_pitch;
                         } else if (paired && pd.snap_ok && pd.snap.valid) {
                             // On foot and in external views: head-look's angle
-                            // as it was when this image was drawn. (Take 445: read
-                            // at the first render pass instead, it never differed.)
-                            decl_yaw = pd.snap.yaw_deg;
-                            decl_pitch = pd.snap.pitch_deg;
+                            // this image was drawn with -- the previous frame's
+                            // command, since X4 applies it a frame late (takes
+                            // 447, 447b). The current one was declared until
+                            // 2026-11-19, a frame ahead of the picture.
+                            const bool late = pd.drawn_ok && pd.drawn_snap.valid && foot_late_on();
+                            decl_yaw = late ? pd.drawn_snap.yaw_deg : pd.snap.yaw_deg;
+                            decl_pitch = late ? pd.drawn_snap.pitch_deg : pd.snap.pitch_deg;
                         } else {
                             decl_yaw = snap.yaw_deg;
                             decl_pitch = snap.pitch_deg;

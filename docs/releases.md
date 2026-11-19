@@ -28,6 +28,12 @@ on the remote beside their `take-NNN-name` twins.
   seated one, which its own recentre moves (holding a Quest's Meta button, SteamVR's "Reset
   seated position"), with the head's lean measured again from there. `X4VR_SPACE=stage` puts
   back the play area.
+* **On foot and in F2-F4, each frame tells the headset the angle its picture was drawn with.**
+  Turning the head while walking or in an external view made the whole view twitch, on a Quest 3
+  and a Steam Frame alike, while the cockpit was smooth. X4 applies head-look a frame late in
+  every view; the cockpit already told the headset X4's own camera, delay included, but on foot
+  and in the external views each frame told it the newest head-look angle, a frame ahead of its
+  picture (takes 447 and 447b).
 * **A smaller correction is paired with its picture too.** Each frame sent to the headset says
   where it was drawn from; since rc4 that has been X4's camera (or head-look's angle on foot) as
   it was when the picture was drawn. A small correction added on top, under a degree most of the

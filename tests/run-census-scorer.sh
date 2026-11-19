@@ -1257,6 +1257,16 @@ plant /tmp/census-dt.log \
     '[  999990.016] layer   decltrace: f=11 foot cam=8.000,2.000,0.100 cmd=1.200,2.100 pass=3.1 tick=5.2 ms ago, 0 tick(s) since the pass' \
     '[  999990.033] layer   decltrace: f=12 ext cam=1.300,2.200,0.000 cmd=1.300,2.200 pass=2.9 tick=4.9 ms ago, 0 tick(s) since the pass'
 want "decltrace -> counted by view" /tmp/census-dt.log decltrace "3 frame(s): cockpit 1, on foot 1, external 1"
+
+# ------------------------------------------ declfoot: the walking A/B, blind (A, B only)
+grep -qF 'X4VR_LOG("declpair foot: phase #%ld — %s", p + 1, p % 2 ? "B" : "A");' layer/x4vr_layer.cpp \
+    && ok "declfoot: the planted phases match the layer's format" \
+    || bad "declfoot: the layer's phase line changed — replant the lines below"
+sed 's/env: run = /env: run = X4VR_DECLARE_FOOT_AB=25 /' "$BASE" > /tmp/census-df-base.log
+{ cat /tmp/census-df-base.log; printf '%s\n' '[  999980.000] layer   declpair foot: phase #1 — A' '[  999995.000] layer   declpair foot: phase #2 — B'; } > /tmp/census-df.log
+want "declfoot A/B -> phases listed" /tmp/census-df.log declfoot "2 phase(s): #1 A at +0 s, #2 B at +15 s"
+want "declfoot A/B -> the key said" /tmp/census-df.log declfoot "A = the current command (as before), B = the previous one"
+want "declfoot A/B asked, never reached -> FAIL" /tmp/census-df-base.log "FAIL|  - " "X4VR_DECLARE_FOOT_AB was asked for and no phase began"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" '[  999975.000] inject  sdl: relative mouse mode ON (fold stands down)' '[  999976.000] inject  sdl: relative mouse mode off (fold applies)'; } > /tmp/census-fm-old.log
 want "foot-menu pointer freed, nothing logged -> an older build" /tmp/census-fm-old.log foot-menu "X4 freed the pointer 1 time(s) off the seat and no on-foot menu was logged"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" '[  999969.000] inject  sdl: relative mouse mode off (fold applies)' "$fmout"; } > /tmp/census-fm-none.log

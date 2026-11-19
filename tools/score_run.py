@@ -5241,6 +5241,24 @@ def main(path):
               f"external {n['ext']}")
     elif dt_asked:
         fails.append("X4VR_DECLTRACE=1 was asked for and no decltrace line was written")
+    # The fix that trace led to: on foot and in F2-F4, the previous frame's
+    # command, which X4 drew with. With X4VR_DECLARE_FOOT_AB the phase lines say
+    # only A or B (they are relayed to the player); the key is logged once.
+    df_ab = bool(re.search(r"\bX4VR_DECLARE_FOOT_AB=\S+", run or ""))
+    df_phases = re.findall(r"\[\s*([\d.]+)\]\s+layer\s+declpair foot: phase #(\d+) — ([AB])\b", text)
+    if df_phases:
+        t0 = float(df_phases[0][0])
+        print("declfoot A = the current command (as before), B = the previous one, which X4 "
+              "drew with")
+        print(f"declfoot {len(df_phases)} phase(s): " + ", ".join(
+            f"#{n} {k} at +{float(t) - t0:.0f} s" for t, n, k in df_phases[:16])
+              + (" ..." if len(df_phases) > 16 else ""))
+    elif df_ab:
+        fails.append("X4VR_DECLARE_FOOT_AB was asked for and no phase began: the run never "
+                     "reached a view it changes (on foot, or F2-F4)")
+    elif "declpair foot: ON" in text:
+        print("declfoot on foot and in F2-F4, the previous command, which X4 drew with (the "
+              "default since 2026-11-19)")
 
     # --- the space forward is measured in (issue #4, 2026-11-19) -------------
     #
