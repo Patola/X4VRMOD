@@ -20,14 +20,22 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
-## Unreleased
+## v1.0.0-rc7 — 2026-11-19 — Seventh release candidate: a working recentre (issue #4), and no twitch on foot or in F2-F4
+
+The seventh release candidate for 1.0. Packages call it `1.0.0~rc7` (Arch: `1.0.0rc7`), which
+installs over rc1 to rc6 as an upgrade and sorts before 1.0.0.
+
+Take the package named for your system: Arch, Ubuntu 24.04, Ubuntu 26.04, Debian 13 or Fedora,
+or the zip for anything else.
 
 * **The headset's recentre works (issue #4).** The mod took "forward" from the headset's play
   area, which points wherever its boundary was set up: a player sitting the other way round found
   X4's menus and cockpit behind him, and recentring did nothing. Forward is now the headset's
-  seated one, which its own recentre moves (holding a Quest's Meta button, SteamVR's "Reset
-  seated position"), with the head's lean measured again from there. `X4VR_SPACE=stage` puts
-  back the play area.
+  seated one, which its own recentre moves (holding a Quest's Meta button; in SteamVR, "Reset
+  seated position"), with the head's lean measured again from there. Tried on a Quest 3 through
+  WiVRn, where it recentres exactly. The help says what to do when the scene isn't in front of
+  you, in every language; **Where forward is** in Advanced puts back the play area
+  (`X4VR_SPACE=stage`).
 * **No more twitch on foot and in F2-F4.** Turning the head while walking or in an external view
   made the whole view twitch, on a Quest 3 and a Steam Frame alike, while the cockpit was smooth.
   X4 applies head-look a frame late in every view; the cockpit already told the headset X4's own
@@ -42,9 +50,14 @@ on the remote beside their `take-NNN-name` twins.
   behind a variable aren't offered. The help says so in every language.
 * **A smaller correction is paired with its picture too.** Each frame sent to the headset says
   where it was drawn from; since rc4 that has been X4's camera (or head-look's angle on foot) as
-  it was when the picture was drawn. A small correction added on top, under a degree most of the
-  time, was still read when the frame was sent, in the cockpit and on foot alike. It's now the
-  one the picture was drawn with.
+  it was when the picture was drawn. A small correction added on top was still read when the frame
+  was sent. It's now the one the picture was drawn with. On the setups tried that correction is
+  always zero, so nothing changes there.
+
+Known: through WiVRn, the Steam Frame's recentre turns the scene too far, whichever way **Where
+forward is** is set; it moves even the play area, which a Quest's recentre doesn't. The Frame's
+software is new (a SteamOS beta), and so is WiVRn's support for it. On it, choose `stage` and
+don't recentre.
 
 ## v1.0.0-rc6 — 2026-11-19 — Sixth release candidate: VR when X4 is started from Steam, and Monado
 
