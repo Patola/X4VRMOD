@@ -20,7 +20,13 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
-## Unreleased
+## v1.0.0-rc6 — 2026-11-19 — Sixth release candidate: VR when X4 is started from Steam, and Monado
+
+The sixth release candidate for 1.0. Packages call it `1.0.0~rc6` (Arch: `1.0.0rc6`), which installs
+over rc1 to rc5 as an upgrade and sorts before 1.0.0.
+
+Take the package named for your system: Arch, Ubuntu 24.04, Ubuntu 26.04, Debian 13 or Fedora,
+or the zip for anything else.
 
 * **VR when X4 is started from Steam.** With the launch options the launcher gives you, Steam
   starts X4 inside its runtime container, which has no OpenXR loader, so X4 ran flat: the picture
@@ -28,7 +34,7 @@ on the remote beside their `take-NNN-name` twins.
   there either (Arch's needs a library the container lacks). The mod now ships Khronos' OpenXR
   loader (release 1.1.60, built with everything it needs inside) beside its Vulkan layer, and uses
   it wherever the system has none; everywhere else the system's goes first. Packages and the zip
-  carry it, with its licence and jsoncpp's.
+  carry it, with its licence and jsoncpp's. Played that way with WiVRn and a Steam Frame.
 * **Monado, for wired headsets.** While Monado runs, the launcher finds it and X4 uses it, even
   though Monado never makes itself the system's default VR runtime. When Monado's service is
   installed, the VR row's Start menu can start it. With no headset connected Monado runs a
