@@ -514,6 +514,40 @@ static void test_advanced() {
     env->setPlainText("1BAD=x");
     check(!d.apply(p).isEmpty(), "a bad name is refused");
     check(p.get("env.X4VR_BAZ") == "3", "...and a refusal changes nothing");
+
+    // The named switches (2026-11-19): each is a line of the field, both ways.
+    Profile q;
+    q.values["env.X4VR_FOO"] = "1";
+    gui::AdvancedDialog e(q, nullptr);
+    auto *env2 = e.findChild<QPlainTextEdit *>("env");
+    auto *panel = e.findChild<QCheckBox *>("switch-X4VR_LOADING_PANEL");
+    auto *space = e.findChild<QCheckBox *>("switch-X4VR_SPACE");
+    auto *foot = e.findChild<QCheckBox *>("switch-X4VR_HEADLOOK_FOOT");
+    check(panel && space && foot && e.findChild<QCheckBox *>("switch-X4VR_HEADLOOK_EXTERNAL") &&
+              e.findChild<QCheckBox *>("switch-X4VR_HEADLOOK_MENU_CENTRE") &&
+              e.findChild<QCheckBox *>("switch-X4VR_DECLARE_PAIRED"),
+          "advanced: the six switches are there");
+    check(panel->isChecked() && !space->isChecked() && foot->isChecked(),
+          "...each at its default with no line for it");
+    check(panel->text().contains("X4VR_LOADING_PANEL") && !panel->toolTip().isEmpty(),
+          "...naming its variable, and saying what it does on hover");
+    panel->setChecked(false);
+    check(env2->toPlainText().split('\n').contains("X4VR_LOADING_PANEL=0") &&
+              env2->toPlainText().split('\n').contains("X4VR_FOO=1"),
+          "unticking one writes its line, and the other lines stay");
+    space->setChecked(true);
+    check(env2->toPlainText().split('\n').contains("X4VR_SPACE=stage"), "ticking the play area writes X4VR_SPACE=stage");
+    space->setChecked(false);
+    check(!env2->toPlainText().contains("X4VR_SPACE"), "...and unticking it takes the line away");
+    panel->setChecked(true);
+    check(!env2->toPlainText().contains("X4VR_LOADING_PANEL"), "back to its default: no line");
+    env2->setPlainText("X4VR_FOO=1\nX4VR_HEADLOOK_FOOT=0");
+    check(!foot->isChecked(), "a line typed in the field moves its box");
+    env2->setPlainText("X4VR_FOO=1");
+    check(foot->isChecked(), "...and taking it out moves it back");
+    foot->setChecked(false);
+    check(e.apply(q).isEmpty() && q.get("env.X4VR_HEADLOOK_FOOT") == "0" && q.get("env.X4VR_FOO") == "1",
+          "a switch's line is saved like any other");
 }
 
 // Every link goes somewhere, every picture exists, and every row has its section.

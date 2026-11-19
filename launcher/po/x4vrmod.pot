@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-19 02:49+0100\n"
+"POT-Creation-Date: 2026-11-19 16:10+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -460,12 +460,12 @@ msgstr ""
 msgid "Head tracking in the cockpit"
 msgstr ""
 
-#: launcher/core/patches.cpp
+#: launcher/core/patches.cpp launcher/gui/dialogs.cpp
 #, qt-format
 msgid "Looking around while walking"
 msgstr ""
 
-#: launcher/core/patches.cpp
+#: launcher/core/patches.cpp launcher/gui/dialogs.cpp
 #, qt-format
 msgid "Head tracking in the external views (F2, F3, F4)"
 msgstr ""
@@ -807,6 +807,68 @@ msgstr ""
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
+msgid "Loading panel in the headset"
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"While X4 starts, the headset shows the mod's panel until X4 draws steadily. "
+"Unticked, the headset shows nothing meanwhile."
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"Off the pilot seat, turning your head turns X4's view. Unticked, only the "
+"mouse and keys turn it."
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"In X4's external views, turning your head turns the view. Unticked, they "
+"stay where X4 points them."
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Menus in front when the HUD goes down off the seat"
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"Off the pilot seat, X4's view turns straight ahead when the HUD goes down, "
+"so its menus are in front of you."
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Forward from the headset's play area, as older versions did"
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"Forward comes from where the headset's boundary was set up, and recentring "
+"doesn't move it. Only for a headset whose recentring misbehaves."
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Each frame paired with the view it was drawn from"
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"For comparisons only: unticked, turning your head makes the view jitter, as "
+"it did before 1.0.0-rc4."
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
 msgid "Field of view"
 msgstr ""
 
@@ -830,8 +892,9 @@ msgstr ""
 #: launcher/gui/dialogs.cpp
 #, qt-format
 msgid ""
-"Extra environment variables, one <tt>NAME=value</tt> per line. They go to "
-"the game and the mod, for trying things a bug report asks for."
+"Extra environment variables, one <tt>NAME=value</tt> per line; the switches "
+"above write theirs here. They go to the game and the mod, for trying things "
+"a bug report asks for."
 msgstr ""
 
 #: launcher/gui/dialogs.cpp

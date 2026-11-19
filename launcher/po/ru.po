@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-19 02:49+0100\n"
+"POT-Creation-Date: 2026-11-19 16:10+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -494,12 +494,12 @@ msgstr "DLSS для обоих глаз"
 msgid "Head tracking in the cockpit"
 msgstr "Отслеживание головы в кабине"
 
-#: launcher/core/patches.cpp
+#: launcher/core/patches.cpp launcher/gui/dialogs.cpp
 #, qt-format
 msgid "Head tracking in the external views (F2, F3, F4)"
 msgstr "Отслеживание головы во внешних видах (F2, F3, F4)"
 
-#: launcher/core/patches.cpp
+#: launcher/core/patches.cpp launcher/gui/dialogs.cpp
 #, qt-format
 msgid "Looking around while walking"
 msgstr "Обзор головой при ходьбе"
@@ -748,13 +748,19 @@ msgstr "Создать отчёт"
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
+msgid "Each frame paired with the view it was drawn from"
+msgstr "Каждый кадр в паре с видом, из которого он нарисован"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
 msgid ""
-"Extra environment variables, one <tt>NAME=value</tt> per line. They go to "
-"the game and the mod, for trying things a bug report asks for."
+"Extra environment variables, one <tt>NAME=value</tt> per line; the switches "
+"above write theirs here. They go to the game and the mod, for trying things "
+"a bug report asks for."
 msgstr ""
-"Дополнительные переменные окружения, по одной <tt>NAME=value</tt> в строке. "
-"Они передаются игре и моду, чтобы проверить то, о чём просят в отчёте об "
-"ошибке."
+"Дополнительные переменные окружения, по одной <tt>NAME=value</tt> в строке; "
+"переключатели выше записывают свои сюда. Они передаются игре и моду, чтобы "
+"проверить то, о чём просят в отчёте об ошибке."
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
@@ -763,8 +769,41 @@ msgstr "Поле зрения"
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
+msgid ""
+"For comparisons only: unticked, turning your head makes the view jitter, as "
+"it did before 1.0.0-rc4."
+msgstr ""
+"Только для сравнения: если снять отметку, поворот головы заставляет вид "
+"дрожать, как до 1.0.0-rc4."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"Forward comes from where the headset's boundary was set up, and recentring "
+"doesn't move it. Only for a headset whose recentring misbehaves."
+msgstr ""
+"«Вперёд» берётся из того, как была настроена граница шлема, и перецентровка "
+"его не сдвигает. Только для шлема, у которого перецентровка работает "
+"неправильно."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Forward from the headset's play area, as older versions did"
+msgstr "«Вперёд» по игровой зоне шлема, как в прежних версиях"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
 msgid "Help isn't installed with this copy of the mod."
 msgstr "Справка не установлена вместе с этой копией мода."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"In X4's external views, turning your head turns the view. Unticked, they "
+"stay where X4 points them."
+msgstr ""
+"Во внешних видах X4 поворот головы поворачивает вид. Если снять отметку, они "
+"остаются там, куда их направляет X4."
 
 #: launcher/gui/dialogs.cpp launcher/gui/window.cpp
 #, qt-format
@@ -782,8 +821,18 @@ msgstr ""
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
+msgid "Loading panel in the headset"
+msgstr "Панель загрузки в шлеме"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
 msgid "Making the report..."
 msgstr "Создаём отчёт..."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Menus in front when the HUD goes down off the seat"
+msgstr "Меню перед вами, когда HUD скрывается вне кресла"
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
@@ -804,6 +853,24 @@ msgstr "Не в формате NAME=value: %1"
 #, qt-format
 msgid "Nothing of the mod's is installed."
 msgstr "Ничего из мода не установлено."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"Off the pilot seat, X4's view turns straight ahead when the HUD goes down, "
+"so its menus are in front of you."
+msgstr ""
+"Вне кресла пилота вид X4 поворачивается прямо вперёд, когда HUD скрывается, "
+"чтобы его меню были перед вами."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"Off the pilot seat, turning your head turns X4's view. Unticked, only the "
+"mouse and keys turn it."
+msgstr ""
+"Вне кресла пилота поворот головы поворачивает вид X4. Если снять отметку, "
+"его поворачивают только мышь и клавиши."
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
@@ -872,6 +939,15 @@ msgstr "Удалить мод"
 #, qt-format
 msgid "What you saw, and what you expected instead."
 msgstr "Что вы увидели и что ожидали увидеть вместо этого."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"While X4 starts, the headset shows the mod's panel until X4 draws steadily. "
+"Unticked, the headset shows nothing meanwhile."
+msgstr ""
+"Пока X4 запускается, шлем показывает панель мода, пока X4 не начнёт рисовать "
+"ровно. Если снять отметку, шлем в это время ничего не показывает."
 
 #: launcher/gui/dialogs.cpp
 #, qt-format

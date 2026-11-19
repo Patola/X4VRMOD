@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-19 02:49+0100\n"
+"POT-Creation-Date: 2026-11-19 16:10+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -500,12 +500,12 @@ msgstr "DLSS auf beiden Augen"
 msgid "Head tracking in the cockpit"
 msgstr "Headtracking im Cockpit"
 
-#: launcher/core/patches.cpp
+#: launcher/core/patches.cpp launcher/gui/dialogs.cpp
 #, qt-format
 msgid "Head tracking in the external views (F2, F3, F4)"
 msgstr "Headtracking in den Außenansichten (F2, F3, F4)"
 
-#: launcher/core/patches.cpp
+#: launcher/core/patches.cpp launcher/gui/dialogs.cpp
 #, qt-format
 msgid "Looking around while walking"
 msgstr "Umschauen beim Gehen"
@@ -752,13 +752,19 @@ msgstr "Bericht erstellen"
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
+msgid "Each frame paired with the view it was drawn from"
+msgstr "Jedes Bild mit der Sicht gepaart, aus der es gezeichnet wurde"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
 msgid ""
-"Extra environment variables, one <tt>NAME=value</tt> per line. They go to "
-"the game and the mod, for trying things a bug report asks for."
+"Extra environment variables, one <tt>NAME=value</tt> per line; the switches "
+"above write theirs here. They go to the game and the mod, for trying things "
+"a bug report asks for."
 msgstr ""
-"Zusätzliche Umgebungsvariablen, eine <tt>NAME=value</tt> pro Zeile. Sie "
-"gehen an das Spiel und die Mod, um auszuprobieren, worum ein Fehlerbericht "
-"bittet."
+"Zusätzliche Umgebungsvariablen, eine <tt>NAME=value</tt> pro Zeile; die "
+"Schalter oben schreiben ihre hierher. Sie gehen an das Spiel und die Mod, um "
+"auszuprobieren, worum ein Fehlerbericht bittet."
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
@@ -767,8 +773,41 @@ msgstr "Sichtfeld"
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
+msgid ""
+"For comparisons only: unticked, turning your head makes the view jitter, as "
+"it did before 1.0.0-rc4."
+msgstr ""
+"Nur zum Vergleichen: abgewählt lässt eine Kopfdrehung die Sicht zittern, wie "
+"vor 1.0.0-rc4."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"Forward comes from where the headset's boundary was set up, and recentring "
+"doesn't move it. Only for a headset whose recentring misbehaves."
+msgstr ""
+"Vorne kommt daher, wie die Begrenzung des Headsets eingerichtet wurde, und "
+"Neuzentrieren verschiebt es nicht. Nur für ein Headset, dessen Neuzentrieren "
+"falsch arbeitet."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Forward from the headset's play area, as older versions did"
+msgstr "Vorne aus dem Spielbereich des Headsets, wie frühere Versionen"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
 msgid "Help isn't installed with this copy of the mod."
 msgstr "Mit dieser Kopie der Mod ist keine Hilfe installiert."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"In X4's external views, turning your head turns the view. Unticked, they "
+"stay where X4 points them."
+msgstr ""
+"In den Außenansichten von X4 dreht dein Kopf die Sicht. Abgewählt bleiben "
+"sie, wohin X4 sie richtet."
 
 #: launcher/gui/dialogs.cpp launcher/gui/window.cpp
 #, qt-format
@@ -786,8 +825,18 @@ msgstr ""
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
+msgid "Loading panel in the headset"
+msgstr "Ladefenster im Headset"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
 msgid "Making the report..."
 msgstr "Bericht wird erstellt..."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Menus in front when the HUD goes down off the seat"
+msgstr "Menüs vor dir, wenn das HUD außerhalb des Sitzes verschwindet"
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
@@ -808,6 +857,24 @@ msgstr "Nicht im Format NAME=value: %1"
 #, qt-format
 msgid "Nothing of the mod's is installed."
 msgstr "Von der Mod ist nichts installiert."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"Off the pilot seat, X4's view turns straight ahead when the HUD goes down, "
+"so its menus are in front of you."
+msgstr ""
+"Außerhalb des Pilotensitzes dreht sich die Sicht von X4 geradeaus, wenn das "
+"HUD verschwindet, damit seine Menüs vor dir sind."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"Off the pilot seat, turning your head turns X4's view. Unticked, only the "
+"mouse and keys turn it."
+msgstr ""
+"Außerhalb des Pilotensitzes dreht dein Kopf die Sicht von X4. Abgewählt "
+"drehen sie nur Maus und Tasten."
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
@@ -877,6 +944,15 @@ msgstr "Mod deinstallieren"
 #, qt-format
 msgid "What you saw, and what you expected instead."
 msgstr "Was du gesehen hast und was du stattdessen erwartet hast."
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid ""
+"While X4 starts, the headset shows the mod's panel until X4 draws steadily. "
+"Unticked, the headset shows nothing meanwhile."
+msgstr ""
+"Während X4 startet, zeigt das Headset das Fenster der Mod, bis X4 "
+"gleichmäßig zeichnet. Abgewählt zeigt das Headset in der Zeit nichts."
 
 #: launcher/gui/dialogs.cpp
 #, qt-format

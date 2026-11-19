@@ -8,6 +8,8 @@
 #include <QPointer>
 #include <QString>
 
+#include <vector>
+
 #include "x4vr_launcher.hpp"
 
 class QCheckBox;
@@ -78,6 +80,12 @@ private:
     QDoubleSpinBox *m_fov;
     QCheckBox *m_fovSet;
     QPlainTextEdit *m_env;
+    // The named switches above the field, one per variable in its table
+    // (dialogs.cpp, kSwitches): each writes or removes its line there.
+    std::vector<QCheckBox *> m_switches;
+    bool m_syncing = false;
+    void switchToggled(size_t i, bool on);
+    void syncSwitches();
 };
 
 } // namespace x4vr::launcher::gui
