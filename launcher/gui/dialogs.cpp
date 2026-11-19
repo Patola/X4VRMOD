@@ -321,82 +321,78 @@ void ReportDialog::create() {
 }
 
 // ------------------------------------------------------------------- advanced
-// The switches a player might flip (Patola, 2026-11-19: the free-text field is
-// useful, but nobody can tell what goes in it). Each is a line of that field:
-// ticking or unticking one writes or removes its NAME=value there, and editing
-// the field moves the box, so the field stays the one place they live. Each
-// says what it does, with its variable in brackets. Measurement knobs stay out.
+// The choices a player might need (Patola, 2026-11-19: the free-text field is
+// useful, but nobody can tell what goes in it, or what values a variable takes).
+// Only what a player may really want to change: a fix behind a variable is not a
+// choice. Each row names its variable and lists its values, saying what each does,
+// the default marked. It is a line of that field: the default writes none, another
+// value writes NAME=value, and a line typed there moves the row -- read the way the
+// mod reads it -- so the field stays the one place they live.
 namespace {
-struct EnvSwitch {
-    const char *name;  // the variable
-    const char *label; // what it does
-    const char *tip;
-    bool dflt;         // ticked with no line for it
-    const char *value; // the line's value when the box differs from dflt
+struct EnvValue {
+    const char *value;
+    const char *desc;
 };
-const EnvSwitch kSwitches[] = {
-    {"X4VR_LOADING_PANEL", N_("Loading panel in the headset"),
-     N_("While X4 starts, the headset shows the mod's panel until X4 draws steadily. "
-        "Unticked, the headset shows nothing meanwhile."),
-     true, "0"},
-    {"X4VR_HEADLOOK_FOOT", N_("Looking around while walking"),
-     N_("Off the pilot seat, turning your head turns X4's view. Unticked, only the mouse "
-        "and keys turn it."),
-     true, "0"},
-    {"X4VR_HEADLOOK_EXTERNAL", N_("Head tracking in the external views (F2, F3, F4)"),
-     N_("In X4's external views, turning your head turns the view. Unticked, they stay "
-        "where X4 points them."),
-     true, "0"},
-    {"X4VR_HEADLOOK_MENU_CENTRE", N_("Menus in front when the HUD goes down off the seat"),
-     N_("Off the pilot seat, X4's view turns straight ahead when the HUD goes down, so its "
-        "menus are in front of you."),
-     true, "0"},
-    {"X4VR_SPACE", N_("Forward from the headset's play area, as older versions did"),
-     N_("Forward comes from where the headset's boundary was set up, and recentring doesn't "
-        "move it. Only for a headset whose recentring misbehaves."),
-     false, "stage"},
-    {"X4VR_DECLARE_PAIRED", N_("Each frame paired with the view it was drawn from"),
-     N_("For comparisons only: unticked, turning your head makes the view jitter, as it did "
-        "before 1.0.0-rc4."),
-     true, "0"},
+struct EnvChoice {
+    const char *name;  // the variable
+    const char *label; // what it is about
+    bool zero_off;     // read as the mod reads it: "0..." is the second value, else the
+                       // first; otherwise only an exact value counts
+    EnvValue values[2];
+};
+const EnvChoice kChoices[] = {
+    {"X4VR_SPACE", N_("Where forward is"), false,
+     {{"local", N_("the headset's seated forward, which its recentre moves")},
+      {"stage", N_("the play area's, which recentring doesn't move (up to 1.0.0-rc6)")}}},
+    {"X4VR_LOADING_PANEL", N_("Loading panel in the headset"), true,
+     {{"1", N_("shown while X4 starts")}, {"0", N_("nothing in the headset while X4 starts")}}},
+    {"X4VR_HEADLOOK_FOOT", N_("Looking around while walking"), true,
+     {{"1", N_("turning your head turns the view")},
+      {"0", N_("only the mouse and keys turn it")}}},
+    {"X4VR_HEADLOOK_EXTERNAL", N_("Head tracking in the external views (F2, F3, F4)"), true,
+     {{"1", N_("turning your head turns the view")},
+      {"0", N_("the views stay where X4 points them")}}},
 };
 
-// A line's value read as the box's state.
-bool switch_state(const EnvSwitch &s, const QString &value) {
-    if (s.dflt)
-        return !value.startsWith('0');
-    return value == QLatin1String(s.value);
+// Which of a choice's values a line's value is, as the mod would read it.
+int choice_index(const EnvChoice &c, const QString &value) {
+    if (c.zero_off)
+        return value.startsWith('0') ? 1 : 0;
+    for (int i = 0; i < 2; i++)
+        if (value == QLatin1String(c.values[i].value))
+            return i;
+    return 0; // the mod reads anything else as the first
 }
 } // namespace
 
-void AdvancedDialog::syncSwitches() {
+void AdvancedDialog::syncChoices() {
     m_syncing = true;
     const QStringList lines = m_env->toPlainText().split('\n');
-    for (size_t i = 0; i < m_switches.size(); i++) {
-        const EnvSwitch &s = kSwitches[i];
-        const QString prefix = QString::fromLatin1(s.name) + "=";
-        bool on = s.dflt;
+    for (size_t i = 0; i < m_choices.size(); i++) {
+        const EnvChoice &c = kChoices[i];
+        const QString prefix = QString::fromLatin1(c.name) + "=";
+        int at = 0;
         for (const QString &raw : lines) {
             const QString l = raw.trimmed();
             if (l.startsWith(prefix))
-                on = switch_state(s, l.mid(prefix.size()));
+                at = choice_index(c, l.mid(prefix.size()));
         }
-        m_switches[i]->setChecked(on);
+        m_choices[i]->setCurrentIndex(at);
     }
     m_syncing = false;
 }
 
-void AdvancedDialog::switchToggled(size_t i, bool on) {
-    if (m_syncing)
+void AdvancedDialog::choiceChanged(size_t i, int at) {
+    if (m_syncing || at < 0)
         return;
-    const EnvSwitch &s = kSwitches[i];
-    const QString prefix = QString::fromLatin1(s.name) + "=";
+    const EnvChoice &c = kChoices[i];
+    const QString prefix = QString::fromLatin1(c.name) + "=";
     QStringList keep;
     for (const QString &raw : m_env->toPlainText().split('\n', Qt::SkipEmptyParts))
         if (!raw.trimmed().startsWith(prefix))
             keep << raw;
-    if (on != s.dflt)
-        keep << prefix + QString::fromLatin1(s.value);
+    if (at != 0)
+        keep << prefix + QString::fromLatin1(c.values[at].value);
     m_syncing = true;
     m_env->setPlainText(keep.join('\n'));
     m_syncing = false;
@@ -428,20 +424,31 @@ AdvancedDialog::AdvancedDialog(const Profile &profile, QWidget *parent)
     fovWhy->setWordWrap(true);
     box->addWidget(fovWhy);
     box->addSpacing(8);
-    for (size_t i = 0; i < std::size(kSwitches); i++) {
-        const EnvSwitch &s = kSwitches[i];
-        auto *c = new QCheckBox(qtr(s.label) + QString(" (%1)").arg(QString::fromLatin1(s.name)),
+    auto *form = new QFormLayout;
+    for (size_t i = 0; i < std::size(kChoices); i++) {
+        const EnvChoice &c = kChoices[i];
+        auto *name = new QLabel(QString("%1<br><tt>%2</tt>")
+                                    .arg(qtr(c.label).toHtmlEscaped(), QString::fromLatin1(c.name)),
                                 this);
-        c->setObjectName(QString("switch-%1").arg(QString::fromLatin1(s.name)));
-        c->setToolTip(qtr(s.tip));
-        connect(c, &QCheckBox::toggled, this, [this, i](bool on) { switchToggled(i, on); });
-        m_switches.push_back(c);
-        box->addWidget(c);
+        auto *combo = new QComboBox(this);
+        combo->setObjectName(QString("choice-%1").arg(QString::fromLatin1(c.name)));
+        for (int v = 0; v < 2; v++) {
+            const QString text = QString("%1 — %2").arg(QString::fromLatin1(c.values[v].value),
+                                                        qtr(c.values[v].desc));
+            combo->addItem(v == 0 ? qtr("%1 (default)").arg(text) : text,
+                           QString::fromLatin1(c.values[v].value));
+        }
+        connect(combo, qOverload<int>(&QComboBox::currentIndexChanged), this,
+                [this, i](int at) { choiceChanged(i, at); });
+        m_choices.push_back(combo);
+        form->addRow(name, combo);
     }
+    box->addLayout(form);
     box->addSpacing(8);
     auto *envWhy = new QLabel(qtr("Extra environment variables, one <tt>NAME=value</tt> per line; "
-                                  "the switches above write theirs here. They go to the game and "
-                                  "the mod, for trying things a bug report asks for."),
+                                  "a choice above other than its default writes its line here. "
+                                  "They go to the game and the mod, for trying things a bug "
+                                  "report asks for."),
                               this);
     envWhy->setWordWrap(true);
     box->addWidget(envWhy);
@@ -452,10 +459,10 @@ AdvancedDialog::AdvancedDialog(const Profile &profile, QWidget *parent)
     m_env->setPlainText(lines.join('\n'));
     m_env->setObjectName("env");
     box->addWidget(m_env);
-    syncSwitches();
+    syncChoices();
     connect(m_env, &QPlainTextEdit::textChanged, this, [this] {
         if (!m_syncing)
-            syncSwitches();
+            syncChoices();
     });
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-19 16:10+0100\n"
+"POT-Creation-Date: 2026-11-19 16:22+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -807,64 +807,47 @@ msgstr ""
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
+msgid "Where forward is"
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "the headset's seated forward, which its recentre moves"
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "the play area's, which recentring doesn't move (up to 1.0.0-rc6)"
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
 msgid "Loading panel in the headset"
 msgstr ""
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
-msgid ""
-"While X4 starts, the headset shows the mod's panel until X4 draws steadily. "
-"Unticked, the headset shows nothing meanwhile."
+msgid "nothing in the headset while X4 starts"
 msgstr ""
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
-msgid ""
-"Off the pilot seat, turning your head turns X4's view. Unticked, only the "
-"mouse and keys turn it."
+msgid "shown while X4 starts"
 msgstr ""
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
-msgid ""
-"In X4's external views, turning your head turns the view. Unticked, they "
-"stay where X4 points them."
+msgid "turning your head turns the view"
 msgstr ""
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
-msgid "Menus in front when the HUD goes down off the seat"
+msgid "only the mouse and keys turn it"
 msgstr ""
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
-msgid ""
-"Off the pilot seat, X4's view turns straight ahead when the HUD goes down, "
-"so its menus are in front of you."
-msgstr ""
-
-#: launcher/gui/dialogs.cpp
-#, qt-format
-msgid "Forward from the headset's play area, as older versions did"
-msgstr ""
-
-#: launcher/gui/dialogs.cpp
-#, qt-format
-msgid ""
-"Forward comes from where the headset's boundary was set up, and recentring "
-"doesn't move it. Only for a headset whose recentring misbehaves."
-msgstr ""
-
-#: launcher/gui/dialogs.cpp
-#, qt-format
-msgid "Each frame paired with the view it was drawn from"
-msgstr ""
-
-#: launcher/gui/dialogs.cpp
-#, qt-format
-msgid ""
-"For comparisons only: unticked, turning your head makes the view jitter, as "
-"it did before 1.0.0-rc4."
+msgid "the views stay where X4 points them"
 msgstr ""
 
 #: launcher/gui/dialogs.cpp
@@ -889,12 +872,17 @@ msgid ""
 "headsets it was tried with."
 msgstr ""
 
+#: launcher/gui/dialogs.cpp launcher/gui/window.cpp
+#, qt-format
+msgid "%1 (default)"
+msgstr ""
+
 #: launcher/gui/dialogs.cpp
 #, qt-format
 msgid ""
-"Extra environment variables, one <tt>NAME=value</tt> per line; the switches "
-"above write theirs here. They go to the game and the mod, for trying things "
-"a bug report asks for."
+"Extra environment variables, one <tt>NAME=value</tt> per line; a choice "
+"above other than its default writes its line here. They go to the game and "
+"the mod, for trying things a bug report asks for."
 msgstr ""
 
 #: launcher/gui/dialogs.cpp
@@ -1189,11 +1177,6 @@ msgstr ""
 #: launcher/gui/window.cpp
 #, qt-format
 msgid "Find the program called X4"
-msgstr ""
-
-#: launcher/gui/window.cpp
-#, qt-format
-msgid "%1 (default)"
 msgstr ""
 
 #: launcher/gui/window.cpp

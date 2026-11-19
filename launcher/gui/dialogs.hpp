@@ -4,6 +4,7 @@
 // the player's VR settings go only if asked, and it says that can't be undone.
 #pragma once
 
+#include <QComboBox>
 #include <QDialog>
 #include <QPointer>
 #include <QString>
@@ -80,12 +81,12 @@ private:
     QDoubleSpinBox *m_fov;
     QCheckBox *m_fovSet;
     QPlainTextEdit *m_env;
-    // The named switches above the field, one per variable in its table
-    // (dialogs.cpp, kSwitches): each writes or removes its line there.
-    std::vector<QCheckBox *> m_switches;
+    // The choices above the field, one per variable in its table (dialogs.cpp,
+    // kChoices): each writes or removes its line there.
+    std::vector<QComboBox *> m_choices;
     bool m_syncing = false;
-    void switchToggled(size_t i, bool on);
-    void syncSwitches();
+    void choiceChanged(size_t i, int at);
+    void syncChoices();
 };
 
 } // namespace x4vr::launcher::gui

@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-19 16:10+0100\n"
+"POT-Creation-Date: 2026-11-19 16:22+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -653,6 +653,11 @@ msgstr "Le premier démarrage peut prendre une ou deux minutes."
 msgid "X4 is loading"
 msgstr "X4 se charge"
 
+#: launcher/gui/dialogs.cpp launcher/gui/window.cpp
+#, qt-format
+msgid "%1 (default)"
+msgstr "%1 (par défaut)"
+
 #: launcher/gui/dialogs.cpp
 #, qt-format
 msgid "%1, %2 MB"
@@ -758,19 +763,15 @@ msgstr "Créer le rapport"
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
-msgid "Each frame paired with the view it was drawn from"
-msgstr "Chaque image associée à la vue d'où elle a été dessinée"
-
-#: launcher/gui/dialogs.cpp
-#, qt-format
 msgid ""
-"Extra environment variables, one <tt>NAME=value</tt> per line; the switches "
-"above write theirs here. They go to the game and the mod, for trying things "
-"a bug report asks for."
+"Extra environment variables, one <tt>NAME=value</tt> per line; a choice "
+"above other than its default writes its line here. They go to the game and "
+"the mod, for trying things a bug report asks for."
 msgstr ""
 "Variables d'environnement supplémentaires, une <tt>NAME=value</tt> par "
-"ligne ; les interrupteurs ci-dessus y écrivent les leurs. Elles sont "
-"transmises au jeu et au mod, pour essayer ce que demande un rapport de bug."
+"ligne ; un choix ci-dessus autre que sa valeur par défaut y écrit sa ligne. "
+"Elles sont transmises au jeu et au mod, pour essayer ce que demande un "
+"rapport de bug."
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
@@ -779,42 +780,8 @@ msgstr "Champ de vision"
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
-msgid ""
-"For comparisons only: unticked, turning your head makes the view jitter, as "
-"it did before 1.0.0-rc4."
-msgstr ""
-"Pour comparer seulement : décoché, tourner la tête fait trembler la vue, "
-"comme avant la 1.0.0-rc4."
-
-#: launcher/gui/dialogs.cpp
-#, qt-format
-msgid ""
-"Forward comes from where the headset's boundary was set up, and recentring "
-"doesn't move it. Only for a headset whose recentring misbehaves."
-msgstr ""
-"L'avant vient de l'orientation de la limite du casque lors de sa "
-"configuration, et le recentrage ne le déplace pas. Seulement pour un casque "
-"dont le recentrage fonctionne mal."
-
-#: launcher/gui/dialogs.cpp
-#, qt-format
-msgid "Forward from the headset's play area, as older versions did"
-msgstr ""
-"L'avant pris dans l'aire de jeu du casque, comme les versions précédentes"
-
-#: launcher/gui/dialogs.cpp
-#, qt-format
 msgid "Help isn't installed with this copy of the mod."
 msgstr "L'aide n'est pas installée avec cette copie du mod."
-
-#: launcher/gui/dialogs.cpp
-#, qt-format
-msgid ""
-"In X4's external views, turning your head turns the view. Unticked, they "
-"stay where X4 points them."
-msgstr ""
-"Dans les vues externes de X4, tourner la tête tourne la vue. Décoché, elles "
-"restent là où X4 les oriente."
 
 #: launcher/gui/dialogs.cpp launcher/gui/window.cpp
 #, qt-format
@@ -842,11 +809,6 @@ msgstr "Création du rapport..."
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
-msgid "Menus in front when the HUD goes down off the seat"
-msgstr "Menus devant vous quand le HUD disparaît hors du siège"
-
-#: launcher/gui/dialogs.cpp
-#, qt-format
 msgid "No VR settings were found."
 msgstr "Aucun réglage VR trouvé."
 
@@ -864,24 +826,6 @@ msgstr "Pas au format NAME=value : %1"
 #, qt-format
 msgid "Nothing of the mod's is installed."
 msgstr "Rien du mod n'est installé."
-
-#: launcher/gui/dialogs.cpp
-#, qt-format
-msgid ""
-"Off the pilot seat, X4's view turns straight ahead when the HUD goes down, "
-"so its menus are in front of you."
-msgstr ""
-"Hors du siège du pilote, la vue de X4 se tourne droit devant quand le HUD "
-"disparaît, pour que ses menus soient devant vous."
-
-#: launcher/gui/dialogs.cpp
-#, qt-format
-msgid ""
-"Off the pilot seat, turning your head turns X4's view. Unticked, only the "
-"mouse and keys turn it."
-msgstr ""
-"Hors du siège du pilote, tourner la tête tourne la vue de X4. Décoché, seuls "
-"la souris et les touches la tournent."
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
@@ -953,12 +897,8 @@ msgstr "Ce que vous avez vu, et ce que vous attendiez à la place."
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
-msgid ""
-"While X4 starts, the headset shows the mod's panel until X4 draws steadily. "
-"Unticked, the headset shows nothing meanwhile."
-msgstr ""
-"Pendant le démarrage de X4, le casque affiche le panneau du mod jusqu'à ce "
-"que X4 dessine régulièrement. Décoché, le casque n'affiche rien entre-temps."
+msgid "Where forward is"
+msgstr "Où est l'avant"
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
@@ -972,18 +912,50 @@ msgstr "Les sauvegardes de X4 et ses propres réglages ne sont jamais touchés."
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
+msgid "nothing in the headset while X4 starts"
+msgstr "rien dans le casque pendant le démarrage de X4"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "only the mouse and keys turn it"
+msgstr "seuls la souris et les touches la tournent"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
 msgid "radians"
 msgstr "radians"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "shown while X4 starts"
+msgstr "affiché pendant le démarrage de X4"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "the headset's seated forward, which its recentre moves"
+msgstr "l'avant assis du casque, que son recentrage déplace"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "the play area's, which recentring doesn't move (up to 1.0.0-rc6)"
+msgstr ""
+"celui de l'aire de jeu, que le recentrage ne déplace pas (jusqu'à la 1.0.0-"
+"rc6)"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "the views stay where X4 points them"
+msgstr "les vues restent là où X4 les oriente"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "turning your head turns the view"
+msgstr "tourner la tête tourne la vue"
 
 #: launcher/gui/window.cpp
 #, qt-format
 msgid "%1 (Windows version)"
 msgstr "%1 (version Windows)"
-
-#: launcher/gui/window.cpp
-#, qt-format
-msgid "%1 (default)"
-msgstr "%1 (par défaut)"
 
 #: launcher/gui/window.cpp
 #, qt-format

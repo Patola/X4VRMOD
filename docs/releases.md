@@ -34,12 +34,12 @@ on the remote beside their `take-NNN-name` twins.
   camera, delay included, but on foot and in the external views each frame told it the newest
   head-look angle, a frame ahead of its picture. They now tell it the angle the picture was drawn
   with: in a blind A/B, smooth with it and twitching without it, every time.
-* **Switches in the launcher's Advanced window** for what the mod does: the loading panel in the
-  headset, looking around on foot and in the external views, the menus centred when the HUD goes
-  down off the seat, forward from the play area as before, and the frame pairing (for
-  comparisons). Each names its variable and says what it does when you hover over it, and writes
-  its line in the list of extra variables below, which still takes anything else. The help says
-  so in every language.
+* **Choices in the launcher's Advanced window**, for what a player may want to change: where
+  forward is (the seated forward, or the play area's as before), the loading panel in the
+  headset, and looking around on foot and in the external views. Each names its variable and
+  lists its values, saying what each does, the default marked; a value other than the default
+  writes its line in the list of extra variables below, which still takes anything else. Fixes
+  behind a variable aren't offered. The help says so in every language.
 * **A smaller correction is paired with its picture too.** Each frame sent to the headset says
   where it was drawn from; since rc4 that has been X4's camera (or head-look's angle on foot) as
   it was when the picture was drawn. A small correction added on top, under a degree most of the
