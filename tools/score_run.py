@@ -5288,6 +5288,33 @@ def main(path):
             fails.append(f"{len(missed)} recentre(s) not followed by the head's neutral point "
                           f"re-latching (first t={missed[0]:.1f}): the head's shift is measured "
                           f"from a point in the old space")
+    # The mod's own forward (2026-11-20): latched where the loading panel was once
+    # X4 draws steadily, and at each recentre, in the seated space unless
+    # X4VR_FORWARD_LATCH=0. A run that got that far there and never latched left
+    # forward to the runtime: Frazzle402's menu behind him with rc7.
+    fl = re.findall(r"\[\s*([\d.]+)\]\s+layer\s+vr: forward latched \(#(\d+)\), (.*?): "
+                    r"([+-][\d.]+) deg from the runtime's seated forward, the head at "
+                    r"([+-][\d.]+) deg", text)
+    fl_not = re.findall(r"vr: forward NOT latched \(([^)]*)\) — (.*?); forward", text)
+    fl_off = bool(re.search(r"\bX4VR_FORWARD_LATCH=0\b", run or ""))
+    for t, n, why, yaw, head in fl:
+        print(f"forward  #{n} t {float(t):10.1f}  {why}: {yaw} deg from the runtime's, the head "
+              f"at {head} deg")
+    for why, err in fl_not:
+        fails.append(f"forward was not latched ({why}): {err}")
+    fl_built = "vr: forward is the mod's: latched" in text  # builds from 2026-11-20
+    if sp and sp.group(1) == "LOCAL" and fl_built:
+        if "loading panel: down" in text and not fl and not fl_not:
+            fails.append("the loading panel went down in the seated space and forward was never "
+                         "latched: it stayed the runtime's, wherever the headset was last "
+                         "recentred")
+        late = [float(t) for t, _k, _n in rec
+                if not any(float(t) <= float(x) <= float(t) + 1.0 for x, *_r in fl)]
+        if fl and late:
+            fails.append(f"{len(late)} recentre(s) not followed by forward latching again (first "
+                          f"t={late[0]:.1f})")
+    elif fl_off and sp and sp.group(1) == "LOCAL":
+        print("forward  left to the runtime (X4VR_FORWARD_LATCH=0), as rc7 did")
 
     # --- the stall watchdog ------------------------------------------------
     #

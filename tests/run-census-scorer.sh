@@ -1241,6 +1241,35 @@ fi
 plant /tmp/census-sp-stale.log "$sprec"
 want "space: a recentre with no re-latch -> FAIL" /tmp/census-sp-stale.log "FAIL|  - " "1 recentre(s) not followed by the head's neutral point re-latching"
 
+# ------------------------------------------ forward: the mod latches it (issue #4, 2026-11-20)
+for frag in '"vr: forward latched (#%llu), %s: %+.1f deg from the runtime'"'"'s seated forward, "' \
+            '"the mod'"'"'s: latched where the loading panel was once X4 draws "'; do
+    grep -qF -- "$frag" layer/x4vr_layer.cpp || bad "forward: the layer's format changed — replant below ($frag)"
+done
+sed 's/reference space STAGE/reference space LOCAL/' "$BASE" > /tmp/census-fw-base.log
+fwis='[  999960.000] layer   vr: forward is the mod'"'"'s: latched where the loading panel was once X4 draws steadily, and again where the head faces at each recentre of the headset (X4VR_FORWARD_LATCH=0 leaves it to the runtime). X4VR_SPACE=stage puts back the play area'
+fwdown='[  999970.000] layer   loading panel: down — X4 is drawing steadily; it stood 9.0 s, moved 2 time(s)'
+fwlat='[  999970.020] layer   vr: forward latched (#1), where the loading panel was: +90.0 deg from the runtime'"'"'s seated forward, the head at +88.5 deg; the head'"'"'s neutral points re-latch'
+fwrec='[  999980.000] layer   vr: recentred — the runtime moved the LOCAL space (#2): forward is where the head faces now, and the head'"'"'s neutral points re-latch'
+fwlat2='[  999980.010] layer   vr: forward latched (#2), at the headset'"'"'s recentre, where the head faces: -3.0 deg from the runtime'"'"'s seated forward, the head at -3.0 deg; the head'"'"'s neutral points re-latch'
+{ cat /tmp/census-fw-base.log; printf '%s\n' "$fwis" "$fwdown" "$fwlat" "$fwrec" "$fwlat2"; } > /tmp/census-fw-ok.log
+want "forward: latched -> listed" /tmp/census-fw-ok.log forward "#1 t   999970.0  where the loading panel was: +90.0 deg"
+if python3 tools/score_run.py /tmp/census-fw-ok.log 2>&1 | grep -qE "forward was never latched|not followed by forward"; then
+    bad "forward: latched, and again at the recentre -> FAILs"
+else
+    ok "forward: latched, and again at the recentre -> no FAIL"
+fi
+{ cat /tmp/census-fw-base.log; printf '%s\n' "$fwis" "$fwdown"; } > /tmp/census-fw-never.log
+want "forward: a build with the latch, never latched -> FAIL" /tmp/census-fw-never.log "FAIL|  - " "forward was never latched"
+{ cat /tmp/census-fw-base.log; printf '%s\n' "$fwdown"; } > /tmp/census-fw-old.log
+if python3 tools/score_run.py /tmp/census-fw-old.log 2>&1 | grep -q "forward was never latched"; then
+    bad "forward: a build before the latch -> FAILs"
+else
+    ok "forward: a build before the latch -> no FAIL"
+fi
+{ cat /tmp/census-fw-base.log; printf '%s\n' "$fwis" "$fwdown" "$fwlat" "$fwrec"; } > /tmp/census-fw-norelatch.log
+want "forward: a recentre not followed by a latch -> FAIL" /tmp/census-fw-norelatch.log "FAIL|  - " "1 recentre(s) not followed by forward latching again"
+
 # ------------------------------------------ declpair: the residual, paired too (2026-11-19)
 grep -qF '"declpair residual (%s): %llu headset frame(s) compared, %llu (%.1f%%) where "' layer/x4vr_layer.cpp \
     && ok "declpair residual: the planted line matches the layer's format" \

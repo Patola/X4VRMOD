@@ -15341,6 +15341,57 @@ static bool loading_panel_build() {
 // coordinates re-latches. XR thread only.
 static uint64_t g_space_epoch = 0;
 
+// Forward, latched by the mod itself (issue #4, 2026-11-20). The seated space's
+// forward is the runtime's: on WiVRn, wherever the headset was last recentred
+// (take 443), which put Frazzle402's menu behind him again with rc7, and a
+// recentre that never reached the mod left it there. So when the loading panel
+// goes away, X4's forward becomes where the panel was (it follows the gaze), and
+// at each recentre the runtime does send, where the head then faces -- which
+// also undoes a recentre that turns too far (the Steam Frame's, takes 444 and
+// 446). Only in the seated space: X4VR_SPACE=stage stays as it was.
+// X4VR_FORWARD_LATCH=0 leaves forward to the runtime, as rc7 did.
+struct ForwardLatch {
+    bool pending = false;
+    bool use_yaw = false; // false: the head's yaw when it is applied
+    float yaw = 0.f;      // radians, in the current space
+    const char *why = "";
+    float cur_yaw = 0.f;  // the turn now in force, radians, of the base space
+    uint64_t latches = 0;
+};
+static ForwardLatch g_fwd;
+
+static bool forward_latch_on() {
+    static const bool on = x4vr::env_on("X4VR_FORWARD_LATCH", true);
+    return on && g_vrs.session.space_type == XR_REFERENCE_SPACE_TYPE_LOCAL;
+}
+
+// At the start of a frame, on the XR thread: the latch asked for, if the head
+// can be located in the base space now. Otherwise it waits for a later frame.
+static void forward_latch_apply(XrTime t) {
+    if (!g_fwd.pending)
+        return;
+    XrPosef h{};
+    if (!x4vr::xr::head_in_base(g_vrs.session, t, &h))
+        return;
+    const float hq[4] = {h.orientation.x, h.orientation.y, h.orientation.z, h.orientation.w};
+    const float head_yaw = x4vr::loading_yaw(hq);
+    const float yaw = g_fwd.use_yaw ? g_fwd.cur_yaw + g_fwd.yaw : head_yaw;
+    const XrResult r = x4vr::xr::space_turn(g_vrs.session, yaw, h.position.x, h.position.z);
+    g_fwd.pending = false;
+    if (r != XR_SUCCESS) {
+        X4VR_LOG("vr: forward NOT latched (%s) — xrCreateReferenceSpace: %s; forward stays "
+                 "the runtime's", g_fwd.why, x4vr::xr::result_name(r));
+        return;
+    }
+    g_fwd.cur_yaw = yaw;
+    g_fwd.latches++;
+    g_space_epoch++;
+    constexpr float kDeg = 57.2957795f;
+    X4VR_LOG("vr: forward latched (#%llu), %s: %+.1f deg from the runtime's seated forward, "
+             "the head at %+.1f deg; the head's neutral points re-latch",
+             (unsigned long long)g_fwd.latches, g_fwd.why, kDeg * yaw, kDeg * head_yaw);
+}
+
 static bool loading_panel_frame(const XrView *views) {
     g_vrs.load_gate.observe(mono_now(), g_vrs.released.load(std::memory_order_relaxed));
     if (g_vrs.load_gone)
@@ -15353,6 +15404,14 @@ static bool loading_panel_frame(const XrView *views) {
             x4vr::xr::swapchain_destroy(g_vrs.load_sc);
         }
         g_vrs.load_gone = true;
+        // X4 appears where the panel was, or with no panel, where the head faces.
+        if (forward_latch_on()) {
+            g_fwd.pending = true;
+            g_fwd.use_yaw = g_vrs.load_ok && g_vrs.load_placed;
+            g_fwd.yaw = g_vrs.load_place.yaw;
+            g_fwd.why = g_fwd.use_yaw ? "where the loading panel was"
+                                      : "where the head faces as X4 draws steadily";
+        }
         return false;
     }
     if (!g_vrs.load_tried) {
@@ -15749,7 +15808,15 @@ void vr_thread() {
                          g_vrs.session.space_type == XR_REFERENCE_SPACE_TYPE_STAGE ? "STAGE"
                                                                                   : "LOCAL",
                          (unsigned long long)g_space_epoch);
+                // Where the head faces, by the mod's own measure, whatever the
+                // runtime turned: a recentre that over-turns is put right.
+                if (forward_latch_on()) {
+                    g_fwd.pending = true;
+                    g_fwd.use_yaw = false;
+                    g_fwd.why = "at the headset's recentre, where the head faces";
+                }
             }
+            forward_latch_apply(g_vrs.session.frame.predictedDisplayTime);
         }
         XrView views[2] = {};
         XrViewStateFlags flags = 0;
@@ -17353,10 +17420,15 @@ void vr_session_thread() {
                  : g_vrs.session.want_stage
                        ? "the seated space's: the play area was asked for (X4VR_SPACE=stage) "
                          "and the runtime has none"
-                       : "the seated space's: the runtime sets it (on WiVRn, where the headset "
-                         "was last recentred, not where the head faced as X4 started, take 443), "
-                         "and the headset's recentre moves it. X4VR_SPACE=stage puts back the "
-                         "play area");
+                       : forward_latch_on()
+                             ? "the mod's: latched where the loading panel was once X4 draws "
+                               "steadily, and again where the head faces at each recentre of "
+                               "the headset (X4VR_FORWARD_LATCH=0 leaves it to the runtime). "
+                               "X4VR_SPACE=stage puts back the play area"
+                             : "the seated space's: the runtime sets it (on WiVRn, where the "
+                               "headset was last recentred, not where the head faced as X4 "
+                               "started, take 443), and the headset's recentre moves it. "
+                               "X4VR_SPACE=stage puts back the play area");
     g_vrs.session_ok.store(true);
     vr_thread();
 }

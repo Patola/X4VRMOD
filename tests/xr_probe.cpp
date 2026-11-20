@@ -38,6 +38,7 @@
 // bring-up failure.
 #include "../common/x4vr_xr.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -994,6 +995,46 @@ int main(int argc, char **argv) {
             struct timespec nap = {0, 2 * 1000 * 1000};
             nanosleep(&nap, nullptr);
             continue;
+        }
+
+        // X4VR_PROBE_TURN=1: once, the session's space turned by 1 rad with its
+        // origin moved -- space_turn, the layer's forward latch. In the turned
+        // space the head's yaw must be its base yaw minus 1 rad, and its position
+        // the base position less the origin, turned back. Checked against a
+        // runtime, because the sign of a turn is the easy thing to get backwards.
+        static bool turned = false;
+        if (!turned && frames == 60 && getenv("X4VR_PROBE_TURN")) {
+            turned = true;
+            auto heading = [](const XrQuaternionf &q) {
+                const float fx = -(2.f * (q.x * q.z + q.w * q.y));
+                const float fz = -(1.f - 2.f * (q.x * q.x + q.y * q.y));
+                return std::atan2(-fx, -fz);
+            };
+            XrPosef b{};
+            const bool hb = xr::head_in_base(s, s.frame.predictedDisplayTime, &b);
+            const XrResult tr = hb ? xr::space_turn(s, 1.0f, 0.1f, 0.2f) : XR_ERROR_RUNTIME_FAILURE;
+            XrSpaceLocation l{};
+            l.type = XR_TYPE_SPACE_LOCATION;
+            if (tr == XR_SUCCESS &&
+                s.rt->api.LocateSpace(s.view_space, s.space, s.frame.predictedDisplayTime, &l) ==
+                    XR_SUCCESS) {
+                float d = heading(b.orientation) - heading(l.pose.orientation);
+                while (d > 3.14159265f)
+                    d -= 6.2831853f;
+                while (d < -3.14159265f)
+                    d += 6.2831853f;
+                const float px = b.position.x - 0.1f, pz = b.position.z - 0.2f;
+                const float ex = px * std::cos(1.f) - pz * std::sin(1.f);
+                const float ez = px * std::sin(1.f) + pz * std::cos(1.f);
+                const float err = std::sqrt((ex - l.pose.position.x) * (ex - l.pose.position.x) +
+                                            (b.position.y - l.pose.position.y) *
+                                                (b.position.y - l.pose.position.y) +
+                                            (ez - l.pose.position.z) * (ez - l.pose.position.z));
+                printf("KEY_TURN_YAW_DIFF=%.4f\n", d);
+                printf("KEY_TURN_POS_ERR=%.5f\n", err);
+            } else {
+                printf("KEY_TURN_FAILED=%s\n", hb ? xr::result_name(tr) : "head not located");
+            }
         }
 
         XrView views[2] = {};

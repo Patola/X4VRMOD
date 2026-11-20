@@ -746,6 +746,9 @@ struct Session {
     XrSession session = XR_NULL_HANDLE;
     XrSpace space = XR_NULL_HANDLE;     // the reference space we submit against
     XrSpace view_space = XR_NULL_HANDLE; // VIEW, for "where is the head"
+    // The reference space as the session began, before space_turn: `space` is
+    // either this or a turned copy of it.
+    XrSpace base_space = XR_NULL_HANDLE;
     XrReferenceSpaceType space_type = XR_REFERENCE_SPACE_TYPE_LOCAL;
     // Asked for before session_create: the play area (STAGE) instead of the
     // seated space (LOCAL). See session_create.
@@ -878,6 +881,7 @@ inline XrResult session_create(Session &s, Runtime &rt, VkInstance vk,
         s.last_error = std::string("xrCreateReferenceSpace: ") + result_name(r);
         return r;
     }
+    s.base_space = s.space;
     rsi.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
     rt.api.CreateReferenceSpace(s.session, &rsi, &s.view_space);
     return XR_SUCCESS;
@@ -890,10 +894,47 @@ inline void session_destroy(Session &s) {
         s.rt->api.DestroySpace(s.view_space);
     if (s.space != XR_NULL_HANDLE)
         s.rt->api.DestroySpace(s.space);
+    if (s.base_space != XR_NULL_HANDLE && s.base_space != s.space)
+        s.rt->api.DestroySpace(s.base_space);
     if (s.session != XR_NULL_HANDLE)
         s.rt->api.DestroySession(s.session);
-    s.view_space = s.space = XR_NULL_HANDLE;
+    s.view_space = s.space = s.base_space = XR_NULL_HANDLE;
     s.session = XR_NULL_HANDLE;
+}
+
+// The head's pose in the space the session began with, at time t: false
+// unless the runtime knows both its orientation and its position.
+inline bool head_in_base(Session &s, XrTime t, XrPosef *out) {
+    XrSpaceLocation loc{};
+    loc.type = XR_TYPE_SPACE_LOCATION;
+    if (s.rt->api.LocateSpace(s.view_space, s.base_space, t, &loc) != XR_SUCCESS)
+        return false;
+    const XrSpaceLocationFlags need =
+        XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;
+    if ((loc.locationFlags & need) != need)
+        return false;
+    *out = loc.pose;
+    return true;
+}
+
+// From now on the session submits against a copy of the base space turned by
+// `yaw` radians about +Y, its origin moved to (x, 0, z) of the base: forward is
+// then the base's direction `yaw`, level. The previous turned copy is destroyed;
+// the base never is, until the session ends.
+inline XrResult space_turn(Session &s, float yaw, float x, float z) {
+    XrReferenceSpaceCreateInfo rsi{};
+    rsi.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO;
+    rsi.referenceSpaceType = s.space_type;
+    rsi.poseInReferenceSpace.orientation = {0.f, std::sin(0.5f * yaw), 0.f, std::cos(0.5f * yaw)};
+    rsi.poseInReferenceSpace.position = {x, 0.f, z};
+    XrSpace turned = XR_NULL_HANDLE;
+    const XrResult r = s.rt->api.CreateReferenceSpace(s.session, &rsi, &turned);
+    if (r != XR_SUCCESS)
+        return r;
+    if (s.space != s.base_space)
+        s.rt->api.DestroySpace(s.space);
+    s.space = turned;
+    return XR_SUCCESS;
 }
 
 // Drain the event queue and drive the session state machine. Returns false
