@@ -5280,11 +5280,34 @@ def main(path):
         t0 = float(dt_phases[0][0])
         print("declturn A = each declaration left as built, B = the newer image's pose when one "
               "was handed over in between")
+        if re.search(r"declpair turn: A/B at each recentre from here", text):
+            print("declturn the phase changed at each recentre (X4VR_DECLARE_TURN_AB=recentre), "
+                  "and phase #1's letter was drawn at random: Patola's stretch N is phase #N")
         print(f"declturn {len(dt_phases)} phase(s): " + ", ".join(
             f"#{n} {k} at +{float(t) - t0:.0f} s" for t, n, k in dt_phases[:16])
               + (" ..." if len(dt_phases) > 16 else ""))
     elif dt_ab and dt_turn:
         fails.append("X4VR_DECLARE_TURN_AB was asked for and no phase began")
+    # Each phase's own account (2026-11-21, take 455c/d): the A/B is read by
+    # phase, and in A how far off the frames left as built were.
+    dt_ends = re.findall(r"declpair turn: phase #(\d+) \(([AB])\) (?:ended|was running at the end) "
+                         r"after (\d+) s: (\d+) frame\(s\) checked, (\d+) race\(s\) \(([\d.]+)%\), "
+                         r"(\d+) declared with the newer image's pose \(moved mean ([\d.]+) deg, "
+                         r"max ([\d.]+) deg\), (\d+) left as built \(off by mean ([\d.]+) deg, "
+                         r"max ([\d.]+) deg\)", text)
+    for (n, k, secs, chk, rc, pct, pat, pmean, pmax, left, lmean, lmax) in dt_ends:
+        if k == "B":
+            what = f"{pat} corrected, moved mean {pmean} max {pmax} deg"
+        else:
+            what = f"{left} left as built, off by mean {lmean} max {lmax} deg"
+        print(f"declturn   #{int(n):<3} {k}  {int(secs):5d} s  {int(rc):5d} race(s) of "
+              f"{int(chk):6d} ({pct}%)  {what}")
+        if k == "A" and int(pat) > 0:
+            fails.append(f"declpair turn: phase #{n} is A and corrected {pat} frame(s) — the A/B "
+                         f"did not hold its phase")
+        if k == "B" and int(left) > 0:
+            fails.append(f"declpair turn: phase #{n} is B and left {left} race(s) as built — the "
+                         f"A/B did not hold its phase")
 
     # --- the space forward is measured in (issue #4, 2026-11-19) -------------
     #

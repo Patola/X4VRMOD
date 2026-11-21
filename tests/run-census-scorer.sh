@@ -1306,6 +1306,31 @@ plant /tmp/census-dt-ok.log "$(dtl 200 200)"
 want "declturn: races caught and corrected -> listed" /tmp/census-dt-ok.log declturn "200 of 10000 frame(s) (2.00%) had a newer image handed over"
 plant /tmp/census-dt-bad.log "$(dtl 200 0)"
 want "declturn: races caught, none corrected -> FAIL" /tmp/census-dt-bad.log "FAIL|  - " "200 race(s) caught inside the queue turn and none declared"
+# Each phase's own account, and the A/B switched by recentres (take 455c/d: no
+# notification reached the laptop's headset).
+dtpfmt=1
+for frag in '"declpair turn: phase #%ld (%s) %s after %.0f s: %llu frame(s) checked, %llu "' \
+            '"race(s) (%.2f%%), %llu declared with the newer image'"'"'s pose (moved mean %.3f "' \
+            '"deg, max %.2f deg), %llu left as built (off by mean %.3f deg, max %.2f deg)",' \
+            'turn_phase_report("ended");' 'turn_phase_report("was running at the end");' \
+            '"declpair turn: A/B at each recentre from here, phase #1 is %s — A leaves "'; do
+    grep -qF -- "$frag" layer/x4vr_layer.cpp || { dtpfmt=0; echo "        missing: $frag"; }
+done
+[ $dtpfmt -eq 1 ] && ok "declturn phases: the planted lines match the layer's formats" \
+    || bad "declturn phases: the layer's lines changed — replant the lines below"
+dtp() { printf '[  99998%s.000] layer   declpair turn: phase #%s (%s) %s after 40 s: 5760 frame(s) checked, 52 race(s) (0.90%%), %s declared with the newer image'"'"'s pose (moved mean 0.250 deg, max 2.10 deg), %s left as built (off by mean 0.310 deg, max 3.00 deg)' "$1" "$1" "$2" "$3" "$4" "$5"; }
+dtrec='[  999979.000] layer   declpair turn: A/B at each recentre from here, phase #1 is B — A leaves each declaration as built, B declares the newer image'"'"'s pose when X4 handed one over in between'
+dtph() { printf '[  99997%s.500] layer   declpair turn: phase #%s — %s, after recentre %s' "$1" "$1" "$2" "$(( $1 - 1 ))"; }
+plant /tmp/census-dtp-ok.log "$(dtl 104 52)" "$dtrec" "$(dtph 1 B)" "$(dtph 2 A)" "$(dtp 1 B ended 52 0)" "$(dtp 2 A 'was running at the end' 0 52)"
+want "declturn phases: B corrected -> its row" /tmp/census-dtp-ok.log "declturn   #1" "B     40 s     52 race(s) of   5760 (0.90%)  52 corrected, moved mean 0.250 max 2.10 deg"
+want "declturn phases: A left, the last one too -> its row" /tmp/census-dtp-ok.log "declturn   #2" "A     40 s     52 race(s) of   5760 (0.90%)  52 left as built, off by mean 0.310 max 3.00 deg"
+want "declturn phases: by recentre -> said, with the random first letter" /tmp/census-dtp-ok.log declturn "phase #1's letter was drawn at random: Patola's stretch N is phase #N"
+absent "declturn phases: a clean A/B -> no phase FAIL" /tmp/census-dtp-ok.log "FAIL  declpair turn: phase"
+plant /tmp/census-dtp-abad.log "$(dtl 104 52)" "$(dtph 1 A)" "$(dtp 1 A ended 3 49)"
+want "declturn phases: A corrected some -> FAIL" /tmp/census-dtp-abad.log "FAIL|  - " "phase #1 is A and corrected 3 frame(s)"
+plant /tmp/census-dtp-bbad.log "$(dtl 104 52)" "$(dtph 1 B)" "$(dtp 1 B ended 50 2)"
+want "declturn phases: B left some -> FAIL" /tmp/census-dtp-bbad.log "FAIL|  - " "phase #1 is B and left 2 race(s) as built"
+absent "declturn phases: a timed A/B from before -> no per-phase rows" /tmp/census-dt-ok.log "declturn   #"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" '[  999975.000] inject  sdl: relative mouse mode ON (fold stands down)' '[  999976.000] inject  sdl: relative mouse mode off (fold applies)'; } > /tmp/census-fm-old.log
 want "foot-menu pointer freed, nothing logged -> an older build" /tmp/census-fm-old.log foot-menu "X4 freed the pointer 1 time(s) off the seat and no on-foot menu was logged"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" '[  999969.000] inject  sdl: relative mouse mode off (fold applies)' "$fmout"; } > /tmp/census-fm-none.log

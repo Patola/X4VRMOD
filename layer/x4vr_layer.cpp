@@ -29,6 +29,7 @@
 #include <cmath>
 #include <ctime>
 #include <cstring>
+#include <sys/random.h>
 #include <map>
 #include <mutex>
 #include <unordered_map>
@@ -15344,6 +15345,10 @@ static bool loading_panel_build() {
 // drawn is displayed after the change: what was latched in the old space's
 // coordinates re-latches. XR thread only.
 static uint64_t g_space_epoch = 0;
+// The recentres the runtime sent, counted where g_space_epoch counts them
+// (never the mod's own forward latches): X4VR_DECLARE_TURN_AB=recentre turns
+// its phase at each. XR thread only.
+static uint64_t g_recentres = 0;
 
 // Forward, latched by the mod itself (issue #4, 2026-11-20). The seated space's
 // forward is the runtime's: on WiVRn, wherever the headset was last recentred
@@ -15420,11 +15425,16 @@ static bool loading_panel_frame(const XrView *views) {
     }
     if (!g_vrs.load_tried) {
         g_vrs.load_tried = true;
-        if (!loading_panel_enabled())
+        // Braced since 2026-11-21: e1fa5f2 put the watchdog's guard in front
+        // of the build, which made the guard the else's only statement, so
+        // the panel was built even with X4VR_LOADING_PANEL=0 (the launcher's
+        // Advanced choice) and the guard never covered the build.
+        if (!loading_panel_enabled()) {
             X4VR_LOG("loading panel: off (X4VR_LOADING_PANEL=0)");
-        else
+        } else {
             const InCall in_build(g_spot_xr, "building the loading panel");
             g_vrs.load_ok = loading_panel_build();
+        }
         g_vrs.load_up_at = mono_now();
     }
     if (!g_vrs.load_ok)
@@ -15837,18 +15847,29 @@ static struct {
     double sum_deg = 0.0;
     float max_deg = 0.f;
 } g_turnstat; // the XR thread's own
+// The same, for the A/B phase in force (X4VR_DECLARE_TURN_AB), and in its A
+// phases what B would have moved: how far off the frames left as built were.
+struct TurnPhaseStat {
+    uint64_t checked = 0, raced = 0, patched = 0, left = 0;
+    double patched_sum = 0.0, left_sum = 0.0;
+    float patched_max = 0.f, left_max = 0.f;
+};
+static TurnPhaseStat g_turnphase; // the XR thread's own
+static long g_turnphase_n = -1;   // the phase in force, from 0; -1 before the A/B
+static bool g_turnphase_b = false;
+static double g_turnphase_t0 = 0.0;
 
 static void declpair_in_turn(void *) {
     TurnFix &t = g_turnfix;
     if (!t.armed)
         return;
     g_turnstat.checked++;
+    g_turnphase.checked++;
     const uint64_t rel = g_vrs.released.load(std::memory_order_acquire);
     if (rel == t.built_rel)
         return;
     g_turnstat.raced++;
-    if (!t.fix)
-        return; // the A phase of X4VR_DECLARE_TURN_AB: counted, left as built
+    g_turnphase.raced++;
     const PresentDecl &pd = g_vrs.pair[rel & 1];
     float y = t.base_yaw, p = t.base_pitch;
     switch (t.src) {
@@ -15876,6 +15897,22 @@ static void declpair_in_turn(void *) {
     if (t.valid || ay != 0.0f || ap != 0.0f)
         x4vr::quat_of_angles(y + ay, p + ap, q);
     const XrQuaternionf was = t.pv[0].pose.orientation;
+    auto turned = [&was](const XrQuaternionf &now) {
+        const float dot = std::fabs(was.x * now.x + was.y * now.y + was.z * now.z + was.w * now.w);
+        return 2.f * std::acos(std::fmin(1.f, dot)) * 57.2957795f;
+    };
+    if (!t.fix) {
+        // The A phase of X4VR_DECLARE_TURN_AB: left as built, and how far off.
+        const XrQuaternionf would = pd.warp_live
+            ? XrQuaternionf{pd.warp_q[0], pd.warp_q[1], pd.warp_q[2], pd.warp_q[3]}
+            : XrQuaternionf{q[0], q[1], q[2], q[3]};
+        const float deg = turned(would);
+        g_turnphase.left++;
+        g_turnphase.left_sum += deg;
+        if (deg > g_turnphase.left_max)
+            g_turnphase.left_max = deg;
+        return;
+    }
     for (uint32_t e = 0; e < 2; e++) {
         t.pv[e].pose.position = declared_eye_position(q, e, t.views[e]);
         if (pd.warp_live)
@@ -15887,40 +15924,101 @@ static void declpair_in_turn(void *) {
         t.quad->pose.orientation = {q[0], q[1], q[2], q[3]};
         t.quad->pose.position = quad_centre(q, t.zm);
     }
-    const XrQuaternionf &now = t.pv[0].pose.orientation;
-    const float dot = std::fabs(was.x * now.x + was.y * now.y + was.z * now.z + was.w * now.w);
-    const float deg = 2.f * std::acos(std::fmin(1.f, dot)) * 57.2957795f;
+    const float deg = turned(t.pv[0].pose.orientation);
     g_turnstat.patched++;
     g_turnstat.sum_deg += deg;
     if (deg > g_turnstat.max_deg)
         g_turnstat.max_deg = deg;
+    g_turnphase.patched++;
+    g_turnphase.patched_sum += deg;
+    if (deg > g_turnphase.patched_max)
+        g_turnphase.patched_max = deg;
+}
+
+// One phase of X4VR_DECLARE_TURN_AB, for the scorer: what it caught, what it
+// corrected (B), and how far off it left the rest (A).
+static void turn_phase_report(const char *how) {
+    if (g_turnphase_n < 0)
+        return;
+    const TurnPhaseStat &s = g_turnphase;
+    X4VR_LOG("declpair turn: phase #%ld (%s) %s after %.0f s: %llu frame(s) checked, %llu "
+             "race(s) (%.2f%%), %llu declared with the newer image's pose (moved mean %.3f "
+             "deg, max %.2f deg), %llu left as built (off by mean %.3f deg, max %.2f deg)",
+             g_turnphase_n + 1, g_turnphase_b ? "B" : "A", how, mono_now() - g_turnphase_t0,
+             (unsigned long long)s.checked, (unsigned long long)s.raced,
+             s.checked ? 100.0 * (double)s.raced / (double)s.checked : 0.0,
+             (unsigned long long)s.patched, s.patched ? s.patched_sum / (double)s.patched : 0.0,
+             (double)s.patched_max, (unsigned long long)s.left,
+             s.left ? s.left_sum / (double)s.left : 0.0, (double)s.left_max);
 }
 
 // X4VR_DECLARE_TURN_AB=<s>: the in-turn correction alternated with leaving the
 // declaration as built, blind -- the phase lines say only A or B (relayed to the
 // player), the key is logged once. Decided before the turn, never inside it.
+// X4VR_DECLARE_TURN_AB=recentre: the phase changes at each recentre the runtime
+// sends instead, for a headset no notification reaches (SteamVR, and the RTX
+// 3070 laptop under WiVRn, take 455c/d): the player counts the stretches between
+// his own recentres. Which letter the first stretch gets is drawn at random,
+// because the player has been told what A and B mean.
 static bool turn_fix_on() {
-    static const double ab = [] {
+    struct Mode {
+        bool on = false, recentre = false;
+        double s = 0.0;
+    };
+    static const Mode m = [] {
+        Mode r;
         const char *e = getenv("X4VR_DECLARE_TURN_AB");
-        return e && *e ? atof(e) : 0.0;
+        if (!e || !*e)
+            return r;
+        if (!strcmp(e, "recentre") || !strcmp(e, "recenter")) {
+            r.on = r.recentre = true;
+            return r;
+        }
+        r.s = atof(e);
+        r.on = r.s > 0.0;
+        return r;
     }();
-    if (ab <= 0.0)
+    if (!m.on)
         return true;
     static double t0 = 0.0;
-    static long phase = -1;
+    static uint64_t rec0 = 0;
+    static long first_b = 0; // 1: the first phase is B
     const double now = mono_now();
     if (t0 == 0.0) {
         t0 = now;
-        X4VR_LOG("declpair turn: A/B every %g s from here — A leaves each declaration as "
-                 "built, B declares the newer image's pose when X4 handed one over in between",
-                 ab);
+        if (m.recentre) {
+            rec0 = g_recentres;
+            unsigned char bit = 0;
+            if (getrandom(&bit, 1, 0) != 1) {
+                timespec ts{};
+                clock_gettime(CLOCK_REALTIME, &ts);
+                bit = (unsigned char)(ts.tv_nsec >> 10);
+            }
+            first_b = bit & 1;
+            X4VR_LOG("declpair turn: A/B at each recentre from here, phase #1 is %s — A leaves "
+                     "each declaration as built, B declares the newer image's pose when X4 "
+                     "handed one over in between",
+                     first_b ? "B" : "A");
+        } else {
+            X4VR_LOG("declpair turn: A/B every %g s from here — A leaves each declaration as "
+                     "built, B declares the newer image's pose when X4 handed one over in between",
+                     m.s);
+        }
     }
-    const long p = (long)((now - t0) / ab);
-    if (p != phase) {
-        phase = p;
-        X4VR_LOG("declpair turn: phase #%ld — %s", p + 1, p % 2 ? "B" : "A");
+    const long p = m.recentre ? (long)(g_recentres - rec0) : (long)((now - t0) / m.s);
+    if (p != g_turnphase_n) {
+        turn_phase_report("ended");
+        g_turnphase = TurnPhaseStat{};
+        g_turnphase_n = p;
+        g_turnphase_b = (p + first_b) % 2 == 1;
+        g_turnphase_t0 = now;
+        if (m.recentre)
+            X4VR_LOG("declpair turn: phase #%ld — %s, after recentre %ld", p + 1,
+                     g_turnphase_b ? "B" : "A", p);
+        else
+            X4VR_LOG("declpair turn: phase #%ld — %s", p + 1, g_turnphase_b ? "B" : "A");
     }
-    return p % 2 == 1;
+    return g_turnphase_b;
 }
 
 void vr_thread() {
@@ -15971,6 +16069,7 @@ void vr_thread() {
                 g_vrs.session.frame.predictedDisplayTime >= g_vrs.session.space_change_time) {
                 space_seen = g_vrs.session.space_changes;
                 g_space_epoch++;
+                g_recentres++;
                 X4VR_LOG("vr: recentred — the runtime moved the %s space (#%llu): forward is "
                          "where the head faces now, and the head's neutral points re-latch",
                          g_vrs.session.space_type == XR_REFERENCE_SPACE_TYPE_STAGE ? "STAGE"
@@ -17692,6 +17791,8 @@ void vr_report(const char *when) {
                  (unsigned long long)g_turnstat.patched,
                  g_turnstat.patched ? g_turnstat.sum_deg / (double)g_turnstat.patched : 0.0,
                  (double)g_turnstat.max_deg);
+    if (!strcmp(when, "final"))
+        turn_phase_report("was running at the end");
     if (g_vrs.pair_res_frames)
         X4VR_LOG("declpair residual (%s): %llu headset frame(s) compared, %llu (%.1f%%) where "
                  "the newest residual was not the submitted image's, mean %.3f deg, max %.2f deg",
