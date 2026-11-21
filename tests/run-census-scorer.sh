@@ -1296,6 +1296,16 @@ sed 's/env: run = /env: run = X4VR_DECLARE_FOOT_AB=25 /' "$BASE" > /tmp/census-d
 want "declfoot A/B -> phases listed" /tmp/census-df.log declfoot "2 phase(s): #1 A at +0 s, #2 B at +15 s"
 want "declfoot A/B -> the key said" /tmp/census-df.log declfoot "A = the current command (as before), B = the previous one"
 want "declfoot A/B asked, never reached -> FAIL" /tmp/census-df-base.log "FAIL|  - " "X4VR_DECLARE_FOOT_AB was asked for and no phase began"
+
+# ------------------------------------------ declturn: races caught inside the queue turn
+grep -qF '"declpair turn (%s): %llu frame(s) checked inside the queue turn, %llu "' layer/x4vr_layer.cpp \
+    && ok "declturn: the planted line matches the layer's format" \
+    || bad "declturn: the layer's line changed — replant the lines below"
+dtl() { printf '[  999990.000] layer   declpair turn (final): 10000 frame(s) checked inside the queue turn, %s (2.00%%) where X4 handed over a newer image after the declaration was built, %s of them declared with that image'"'"'s pose instead, moved mean 0.210 deg, max 1.40 deg' "$1" "$2"; }
+plant /tmp/census-dt-ok.log "$(dtl 200 200)"
+want "declturn: races caught and corrected -> listed" /tmp/census-dt-ok.log declturn "200 of 10000 frame(s) (2.00%) had a newer image handed over"
+plant /tmp/census-dt-bad.log "$(dtl 200 0)"
+want "declturn: races caught, none corrected -> FAIL" /tmp/census-dt-bad.log "FAIL|  - " "200 race(s) caught inside the queue turn and none declared"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" '[  999975.000] inject  sdl: relative mouse mode ON (fold stands down)' '[  999976.000] inject  sdl: relative mouse mode off (fold applies)'; } > /tmp/census-fm-old.log
 want "foot-menu pointer freed, nothing logged -> an older build" /tmp/census-fm-old.log foot-menu "X4 freed the pointer 1 time(s) off the seat and no on-foot menu was logged"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" '[  999969.000] inject  sdl: relative mouse mode off (fold applies)' "$fmout"; } > /tmp/census-fm-none.log

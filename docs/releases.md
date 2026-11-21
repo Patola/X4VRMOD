@@ -22,6 +22,11 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
+* **A frame's pose always belongs to its picture.** When X4 handed a new picture to the headset
+  just as a frame was being sent, the frame could go out with the new picture and the previous
+  picture's pose: about 2% of frames on an RTX 5090 at 144 Hz, 0.36% on a Radeon. The mod now
+  checks at the last moment, where no picture can be handed over, and sends the pose of the
+  picture actually going out. It costs one check per frame.
 * **X4 appears where you're looking, whatever the headset thinks is forward (issue #4).** With
   rc7, forward was the headset's seated forward, which WiVRn sets wherever the headset was last
   recentred: behind issue #4's player again. The mod now sets it itself. When the loading panel

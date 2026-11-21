@@ -654,6 +654,10 @@ struct PresentDecl {
     // picture: the twitch there.
     x4vr::CamSnap drawn_snap;
     bool drawn_ok = false;
+    // The menu warp's turn, if this image carries it: filed at its release with
+    // the rest, so whatever reads the slot reads the image's own (2026-11-21).
+    bool warp_live = false;
+    float warp_q[4] = {0.f, 0.f, 0.f, 1.f};
 };
 
 // X4VR_DECLTRACE=1: one line per X4 frame, at its present -- X4's camera as it
@@ -15634,33 +15638,46 @@ void vr_finish_blit() {
     const x4vr::xr::InRuntime in_runtime; // as in vr_begin_blit
     std::lock_guard<std::mutex> lock(g_vrs.sc_mu);
     const uint32_t tc = g_trace_copies.fetch_add(1, std::memory_order_relaxed);
+    // The menu warp: the image about to be released carries the turn only if the
+    // composite recorded it. Otherwise it was copied still, and declaring the
+    // turn over it would swing the window by the head's angle. Decided before the
+    // release (the composite is recorded by now) so it goes in the slot below.
+    const bool warp_done_now = g_sbs.vr_last_warped();
+    bool live = false;
+    float live_q[4] = {0.f, 0.f, 0.f, 1.f};
+    {
+        std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
+        live = g_vrs.warp_pending && warp_done_now;
+        if (live)
+            std::memcpy(live_q, g_vrs.warp_pending_q, sizeof live_q);
+    }
     // declpair: filed under the release count this release will make, before
-    // the release, so an XR frame that sees the new count finds its inputs.
+    // the release, so an XR frame that sees the new count finds its inputs. The
+    // count goes up inside the release's queue turn (2026-11-21): it used to go
+    // up after, so for a moment the runtime held the new image while the count
+    // still named the old one, and a frame built then declared the old image's
+    // pose over the new image -- 2% of frames on an RTX 5090 at 144 Hz.
     {
         std::lock_guard<std::mutex> pl(g_vrs.pair_mu);
-        g_vrs.pair[(g_vrs.released.load(std::memory_order_relaxed) + 1) & 1] =
-            g_present_decl;
+        PresentDecl &slot =
+            g_vrs.pair[(g_vrs.released.load(std::memory_order_relaxed) + 1) & 1];
+        slot = g_present_decl;
+        slot.warp_live = live;
+        std::memcpy(slot.warp_q, live_q, sizeof live_q);
     }
     if (tc < kTraceCopies)
         X4VR_LOG("trace: X4's copy %u: calling xrReleaseSwapchainImage", tc + 1);
     {
         const InCall in_release(g_spot_x4, "xrReleaseSwapchainImage");
-        x4vr::xr::swapchain_release(g_vrs.sc);
+        x4vr::xr::swapchain_release(g_vrs.sc, &g_vrs.released);
     }
     if (tc < kTraceCopies)
         X4VR_LOG("trace: X4's copy %u: xrReleaseSwapchainImage returned", tc + 1);
-    g_vrs.released.fetch_add(1, std::memory_order_relaxed);
-    // The menu warp: the image just released carries the turn only if the
-    // composite recorded it. Otherwise it was copied still, and declaring the
-    // turn over it would swing the window by the head's angle.
     {
-        const bool done = g_sbs.vr_last_warped();
         std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
-        const bool live = g_vrs.warp_pending && done;
         g_vrs.warp_live = live;
         if (live) {
-            std::memcpy(g_vrs.warp_live_q, g_vrs.warp_pending_q,
-                        sizeof g_vrs.warp_live_q);
+            std::memcpy(g_vrs.warp_live_q, live_q, sizeof g_vrs.warp_live_q);
             g_vrs.warp_done.fetch_add(1, std::memory_order_relaxed);
         }
         g_vrs.warp_live_seq = g_vrs.released.load(std::memory_order_relaxed);
@@ -15753,6 +15770,157 @@ static void ipd_from_headset(float meas) {
                  "shaders' %.4f scaled by %.4f through the pose block)",
                  cur, baked, cur / baked);
     }
+}
+
+// Where an eye is declared to have rendered from, for the declared orientation
+// q (#75's position half; see the eye loop in vr_thread): the neutral point
+// plus our own eye offset turned by q, plus the head's offset in the room --
+// or, without that, the runtime's own eye position.
+static XrVector3f declared_eye_position(const float q[4], uint32_t e, const XrView &view) {
+    XrVector3f p = view.pose.position;
+    if (declare_rendered_pos() && g_reye.valid.load(std::memory_order_acquire)) {
+        const float half = 0.5f * scene_ipd();
+        const x4vr::HeadShift off = x4vr::head_to_world(
+            q[0], q[1], q[2], q[3],
+            (e == 0 ? -half : half) + g_reye.sx.load(std::memory_order_relaxed),
+            g_reye.sy.load(std::memory_order_relaxed), 0.0f);
+        float a6[3] = {0.f, 0.f, 0.f};
+        if (g_head6.on.load(std::memory_order_acquire)) {
+            a6[0] = g_head6.rx.load(std::memory_order_relaxed);
+            a6[1] = g_head6.ry.load(std::memory_order_relaxed);
+            a6[2] = g_head6.rz.load(std::memory_order_relaxed);
+        }
+        p.x = g_reye.nx.load(std::memory_order_relaxed) + off.x + a6[0];
+        p.y = g_reye.ny.load(std::memory_order_relaxed) + off.y + a6[1];
+        p.z = g_reye.nz.load(std::memory_order_relaxed) + off.z + a6[2];
+    }
+    return p;
+}
+
+// The UI quad's centre for the declared orientation q (task #57): the neutral
+// point plus q applied to (0, 0, -zm), so it orbits with the camera.
+static XrVector3f quad_centre(const float q[4], float zm) {
+    const x4vr::HeadShift off = x4vr::head_to_world(q[0], q[1], q[2], q[3], 0.0f, 0.0f, -zm);
+    return {g_reye.nx.load(std::memory_order_relaxed) + off.x,
+            g_reye.ny.load(std::memory_order_relaxed) + off.y,
+            g_reye.nz.load(std::memory_order_relaxed) + off.z};
+}
+
+// **declpair inside the queue turn (2026-11-21).** A frame's declaration is
+// built from the slot of the latest released image; xrEndFrame then takes
+// whatever image is latest when it runs. An image released in between got the
+// previous image's pose: 2% of frames on the friend's RTX 5090 at 144 Hz, 0.36%
+// on Patola's Radeon (take 449), and the shaking he saw everywhere is the
+// candidate. Inside the turn that frame_end holds, no image can be released, so
+// this re-reads the count there; when it moved, it declares the new image's pose
+// from its slot, by the same source the frame chose. The slot needs no lock:
+// the next filing goes to the other slot, and this one is filed again only
+// after a release that the turn holds off. Usually it costs one atomic read.
+struct TurnFix {
+    bool armed = false;        // this frame submits X4's image
+    uint64_t built_rel = 0;    // the release its declaration was built for
+    int src = 0;               // 0 nothing paired, 1 X4's camera, 2 head-look's previous
+                               // command, 3 head-look's current command
+    bool valid = false;        // head-look was driving when it was built
+    float base_yaw = 0.f, base_pitch = 0.f; // the built angle, before the residual
+    bool res_paired = false;   // the residual came from the slot
+    float live_ay = 0.f, live_ap = 0.f;     // the residual otherwise
+    XrView views[2] = {};
+    XrCompositionLayerProjectionView *pv = nullptr;
+    XrCompositionLayerQuad *quad = nullptr; // the UI quad, when it is in the frame
+    float zm = 0.f;
+    bool fix = true;           // decided before the turn (X4VR_DECLARE_TURN_AB)
+};
+static TurnFix g_turnfix; // the XR thread's own
+static struct {
+    uint64_t checked = 0, raced = 0, patched = 0;
+    double sum_deg = 0.0;
+    float max_deg = 0.f;
+} g_turnstat; // the XR thread's own
+
+static void declpair_in_turn(void *) {
+    TurnFix &t = g_turnfix;
+    if (!t.armed)
+        return;
+    g_turnstat.checked++;
+    const uint64_t rel = g_vrs.released.load(std::memory_order_acquire);
+    if (rel == t.built_rel)
+        return;
+    g_turnstat.raced++;
+    if (!t.fix)
+        return; // the A phase of X4VR_DECLARE_TURN_AB: counted, left as built
+    const PresentDecl &pd = g_vrs.pair[rel & 1];
+    float y = t.base_yaw, p = t.base_pitch;
+    switch (t.src) {
+    case 1:
+        if (!pd.cam_ok)
+            return;
+        y = pd.cam_yaw, p = pd.cam_pitch;
+        break;
+    case 2:
+        if (!pd.drawn_ok || !pd.drawn_snap.valid)
+            return;
+        y = pd.drawn_snap.yaw_deg, p = pd.drawn_snap.pitch_deg;
+        break;
+    case 3:
+        if (!pd.snap_ok || !pd.snap.valid)
+            return;
+        y = pd.snap.yaw_deg, p = pd.snap.pitch_deg;
+        break;
+    default:
+        break;
+    }
+    const float ay = t.res_paired && pd.res_ok ? pd.res_yaw : t.live_ay;
+    const float ap = t.res_paired && pd.res_ok ? pd.res_pitch : t.live_ap;
+    float q[4] = {0.f, 0.f, 0.f, 1.f};
+    if (t.valid || ay != 0.0f || ap != 0.0f)
+        x4vr::quat_of_angles(y + ay, p + ap, q);
+    const XrQuaternionf was = t.pv[0].pose.orientation;
+    for (uint32_t e = 0; e < 2; e++) {
+        t.pv[e].pose.position = declared_eye_position(q, e, t.views[e]);
+        if (pd.warp_live)
+            t.pv[e].pose.orientation = {pd.warp_q[0], pd.warp_q[1], pd.warp_q[2], pd.warp_q[3]};
+        else
+            t.pv[e].pose.orientation = {q[0], q[1], q[2], q[3]};
+    }
+    if (t.quad) {
+        t.quad->pose.orientation = {q[0], q[1], q[2], q[3]};
+        t.quad->pose.position = quad_centre(q, t.zm);
+    }
+    const XrQuaternionf &now = t.pv[0].pose.orientation;
+    const float dot = std::fabs(was.x * now.x + was.y * now.y + was.z * now.z + was.w * now.w);
+    const float deg = 2.f * std::acos(std::fmin(1.f, dot)) * 57.2957795f;
+    g_turnstat.patched++;
+    g_turnstat.sum_deg += deg;
+    if (deg > g_turnstat.max_deg)
+        g_turnstat.max_deg = deg;
+}
+
+// X4VR_DECLARE_TURN_AB=<s>: the in-turn correction alternated with leaving the
+// declaration as built, blind -- the phase lines say only A or B (relayed to the
+// player), the key is logged once. Decided before the turn, never inside it.
+static bool turn_fix_on() {
+    static const double ab = [] {
+        const char *e = getenv("X4VR_DECLARE_TURN_AB");
+        return e && *e ? atof(e) : 0.0;
+    }();
+    if (ab <= 0.0)
+        return true;
+    static double t0 = 0.0;
+    static long phase = -1;
+    const double now = mono_now();
+    if (t0 == 0.0) {
+        t0 = now;
+        X4VR_LOG("declpair turn: A/B every %g s from here — A leaves each declaration as "
+                 "built, B declares the newer image's pose when X4 handed one over in between",
+                 ab);
+    }
+    const long p = (long)((now - t0) / ab);
+    if (p != phase) {
+        phase = p;
+        X4VR_LOG("declpair turn: phase #%ld — %s", p + 1, p % 2 ? "B" : "A");
+    }
+    return p % 2 == 1;
 }
 
 void vr_thread() {
@@ -16207,6 +16375,7 @@ void vr_thread() {
         XrCompositionLayerQuad quad_ui = {};
         const XrCompositionLayerBaseHeader *layers[2] = {nullptr, nullptr};
         uint32_t layer_count = 0;
+        g_turnfix = TurnFix{}; // armed below when this frame submits X4's image
         // The loading panel, instead of X4's image until X4 draws steadily.
         XrCompositionLayerQuad quad_load = {};
         const bool show_panel = have && should_render && loading_panel_frame(views);
@@ -16299,6 +16468,11 @@ void vr_thread() {
                 std::lock_guard<std::mutex> pl(g_vrs.pair_mu);
                 pd = g_vrs.pair[pair_rel & 1];
             }
+            // The warp's turn from the same slot as everything else: the
+            // image's own (2026-11-21). It was read from the latest release
+            // separately, which could be a different image.
+            warp_live = pd.warp_live;
+            std::memcpy(warp_q, pd.warp_q, sizeof warp_q);
             if (declare_rendered_rot() && !on_foot && !ext_head && pd.cam_ok &&
                 g_camstamp.seq.load(std::memory_order_acquire)) {
                 const float ny = g_camstamp.yaw.load(std::memory_order_relaxed);
@@ -16432,6 +16606,7 @@ void vr_thread() {
                         if (now_ok) {
                             decl_yaw = now_yaw;
                             decl_pitch = now_pitch;
+                            g_turnfix.src = rot_used == 3 ? 1 : 0;
                         } else if (paired && pd.snap_ok && pd.snap.valid) {
                             // On foot and in external views: head-look's angle
                             // this image was drawn with -- the previous frame's
@@ -16441,6 +16616,7 @@ void vr_thread() {
                             const bool late = pd.drawn_ok && pd.drawn_snap.valid && foot_late_on();
                             decl_yaw = late ? pd.drawn_snap.yaw_deg : pd.snap.yaw_deg;
                             decl_pitch = late ? pd.drawn_snap.pitch_deg : pd.snap.pitch_deg;
+                            g_turnfix.src = late ? 2 : 3;
                         } else {
                             decl_yaw = snap.yaw_deg;
                             decl_pitch = snap.pitch_deg;
@@ -16480,6 +16656,12 @@ void vr_thread() {
                         ap = pd.res_pitch;
                     }
                 }
+                g_turnfix.valid = valid != 0;
+                g_turnfix.base_yaw = decl_yaw;
+                g_turnfix.base_pitch = decl_pitch;
+                g_turnfix.res_paired = paired && pd.res_ok;
+                g_turnfix.live_ay = g_residual.applied_yaw.load();
+                g_turnfix.live_ap = g_residual.applied_pitch.load();
                 decl_yaw += ay;
                 decl_pitch += ap;
                 if (valid || ay != 0.0f || ap != 0.0f)
@@ -16640,33 +16822,17 @@ void vr_thread() {
                 pv[e].pose.orientation.y = q[1];
                 pv[e].pose.orientation.z = q[2];
                 pv[e].pose.orientation.w = q[3];
-                pv[e].pose.position = views[e].pose.position;
                 // #75's position half. The pixels came from the NEUTRAL point
                 // plus our own eye offset -- never from the orbiting point the
                 // runtime reports -- so declaring the latter asks the
                 // compositor to correct a difference that is not in the image.
+                // X4VR_HEAD_6DOF: plus the head's offset in the room, the eye
+                // the world shaders drew from (unrotated: no lever arm). One
+                // function, which declpair_in_turn uses too.
+                pv[e].pose.position = declared_eye_position(q, e, views[e]);
                 if (declare_rendered_pos() &&
                     g_reye.valid.load(std::memory_order_acquire)) {
                     const float half = 0.5f * scene_ipd();
-                    const x4vr::HeadShift off = x4vr::head_to_world(
-                        q[0], q[1], q[2], q[3],
-                        (e == 0 ? -half : half) +
-                            g_reye.sx.load(std::memory_order_relaxed),
-                        g_reye.sy.load(std::memory_order_relaxed), 0.0f);
-                    // X4VR_HEAD_6DOF: plus the head's offset in the room, the
-                    // eye the world shaders drew from (unrotated: no lever arm).
-                    float a6[3] = {0.f, 0.f, 0.f};
-                    if (g_head6.on.load(std::memory_order_acquire)) {
-                        a6[0] = g_head6.rx.load(std::memory_order_relaxed);
-                        a6[1] = g_head6.ry.load(std::memory_order_relaxed);
-                        a6[2] = g_head6.rz.load(std::memory_order_relaxed);
-                    }
-                    pv[e].pose.position.x =
-                        g_reye.nx.load(std::memory_order_relaxed) + off.x + a6[0];
-                    pv[e].pose.position.y =
-                        g_reye.ny.load(std::memory_order_relaxed) + off.y + a6[1];
-                    pv[e].pose.position.z =
-                        g_reye.nz.load(std::memory_order_relaxed) + off.z + a6[2];
                     static bool said_rp = false;
                     if (!said_rp) {
                         said_rp = true;
@@ -16732,6 +16898,12 @@ void vr_thread() {
             proj.views = pv;
             layers[0] = (const XrCompositionLayerBaseHeader *)&proj;
             layer_count = 1;
+            g_turnfix.armed = true;
+            g_turnfix.fix = turn_fix_on();
+            g_turnfix.built_rel = pair_rel;
+            g_turnfix.pv = pv;
+            g_turnfix.views[0] = views[0];
+            g_turnfix.views[1] = views[1];
 
             // ---- task #57: the UI, on a finite canvas in the SHIP's frame
             //
@@ -16807,10 +16979,7 @@ void vr_thread() {
                 // move together. Declaring one without the other is what 243a
                 // was, and it is a half-transform: it rotated the frame the
                 // content is drawn in without moving the frame's origin.
-                const x4vr::HeadShift off = x4vr::head_to_world(
-                    g_vrs.last_decl_q[0], g_vrs.last_decl_q[1],
-                    g_vrs.last_decl_q[2], g_vrs.last_decl_q[3], 0.0f, 0.0f,
-                    -zm);
+                // (quad_centre: the same in declpair_in_turn.)
                 // **The NEUTRAL point, and take 247 is why it is not the live
                 // head centre.**
                 //
@@ -16831,12 +17000,9 @@ void vr_thread() {
                 // separation gone. Take 247 broke the match again from the
                 // other side. Whether either is "correct in itself" is not the
                 // question the evidence answers; agreeing is.
-                quad_ui.pose.position.x =
-                    g_reye.nx.load(std::memory_order_relaxed) + off.x;
-                quad_ui.pose.position.y =
-                    g_reye.ny.load(std::memory_order_relaxed) + off.y;
-                quad_ui.pose.position.z =
-                    g_reye.nz.load(std::memory_order_relaxed) + off.z;
+                quad_ui.pose.position = quad_centre(g_vrs.last_decl_q, zm);
+                g_turnfix.quad = &quad_ui;
+                g_turnfix.zm = zm;
                 // Sized to subtend the SAME field the scene layer declares, at
                 // the canvas distance. Any other size would put a HUD element
                 // at a different angle from the world feature it labels, which
@@ -16962,7 +17128,8 @@ void vr_thread() {
         {
             const InCall in_end(g_spot_xr, show_panel ? "xrEndFrame, with the loading panel"
                                                       : "xrEndFrame");
-            x4vr::xr::frame_end(g_vrs.session, layers, layer_count);
+            x4vr::xr::frame_end(g_vrs.session, layers, layer_count,
+                                layer_count ? declpair_in_turn : nullptr, nullptr);
         }
         g_last_headset_frame.store(mono_now(), std::memory_order_relaxed);
         if (tr)
@@ -17514,6 +17681,17 @@ void vr_report(const char *when) {
                  (unsigned long long)g_vrs.pair_differ,
                  100.0 * (double)g_vrs.pair_differ / (double)g_vrs.pair_frames,
                  g_vrs.pair_sum_deg / (double)g_vrs.pair_frames, (double)g_vrs.pair_max_deg);
+    if (g_turnstat.checked)
+        X4VR_LOG("declpair turn (%s): %llu frame(s) checked inside the queue turn, %llu "
+                 "(%.2f%%) where X4 handed over a newer image after the declaration was "
+                 "built, %llu of them declared with that image's pose instead, moved mean "
+                 "%.3f deg, max %.2f deg",
+                 when, (unsigned long long)g_turnstat.checked,
+                 (unsigned long long)g_turnstat.raced,
+                 100.0 * (double)g_turnstat.raced / (double)g_turnstat.checked,
+                 (unsigned long long)g_turnstat.patched,
+                 g_turnstat.patched ? g_turnstat.sum_deg / (double)g_turnstat.patched : 0.0,
+                 (double)g_turnstat.max_deg);
     if (g_vrs.pair_res_frames)
         X4VR_LOG("declpair residual (%s): %llu headset frame(s) compared, %llu (%.1f%%) where "
                  "the newest residual was not the submitted image's, mean %.3f deg, max %.2f deg",

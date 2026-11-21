@@ -50,6 +50,7 @@
 #include <dlfcn.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cmath>
 #include <cstdarg>
 #include <cstdint>
@@ -1055,8 +1056,13 @@ inline bool locate_views(Session &s, XrView *out, uint32_t count,
            (vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0;
 }
 
+// `in_turn`, if given, runs inside the queue turn just before xrEndFrame: while
+// it holds, no swapchain image can be released, so what it reads of the latest
+// release is what the runtime takes (the layer's declpair, 2026-11-21). It must
+// be quick and take no lock: this turn takes none but the runtime's own.
 inline XrResult frame_end(Session &s, const XrCompositionLayerBaseHeader *const *layers,
-                          uint32_t layer_count) {
+                          uint32_t layer_count, void (*in_turn)(void *) = nullptr,
+                          void *user = nullptr) {
     XrFrameEndInfo fei{};
     fei.type = XR_TYPE_FRAME_END_INFO;
     fei.displayTime = s.frame.predictedDisplayTime;
@@ -1064,6 +1070,8 @@ inline XrResult frame_end(Session &s, const XrCompositionLayerBaseHeader *const 
     fei.layerCount = layer_count;
     fei.layers = layers;
     const QueueTurn turn;
+    if (in_turn)
+        in_turn(user);
     return s.rt->api.EndFrame(s.session, &fei);
 }
 
@@ -1212,11 +1220,16 @@ inline bool swapchain_acquire(Swapchain &sc, uint32_t *index) {
     return sc.s->rt->api.WaitSwapchainImage(sc.handle, &wi) == XR_SUCCESS;
 }
 
-inline void swapchain_release(Swapchain &sc) {
+// `count`, if given, goes up inside the same queue turn as the release, so a
+// thread holding the turn never sees the runtime's latest image and the count
+// disagree (frame_end's `in_turn`).
+inline void swapchain_release(Swapchain &sc, std::atomic<uint64_t> *count = nullptr) {
     XrSwapchainImageReleaseInfo ri{};
     ri.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO;
     const QueueTurn turn;
     sc.s->rt->api.ReleaseSwapchainImage(sc.handle, &ri);
+    if (count)
+        count->fetch_add(1, std::memory_order_release);
 }
 
 inline void swapchain_destroy(Swapchain &sc) {

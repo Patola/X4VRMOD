@@ -5259,6 +5259,32 @@ def main(path):
     elif "declpair foot: ON" in text:
         print("declfoot on foot and in F2-F4, the previous command, which X4 drew with (the "
               "default since 2026-11-19)")
+    # Inside the queue turn (2026-11-21): a newer image handed over between building
+    # the declaration and xrEndFrame is declared with its own pose. 2% of frames
+    # on the friend's RTX 5090 at 144 Hz, 0.36% on Patola's Radeon (take 449).
+    dt_turn = re.findall(r"declpair turn \((?:periodic|final)\): (\d+) frame\(s\) checked inside the "
+                         r"queue turn, (\d+) \(([\d.]+)%\) where X4 handed over a newer image after "
+                         r"the declaration was built, (\d+) of them declared with that image's pose "
+                         r"instead, moved mean ([\d.]+) deg, max ([\d.]+) deg", text)
+    dt_ab = bool(re.search(r"\bX4VR_DECLARE_TURN_AB=\S+", run or ""))
+    dt_phases = re.findall(r"\[\s*([\d.]+)\]\s+layer\s+declpair turn: phase #(\d+) — ([AB])\b", text)
+    if dt_turn:
+        n_, rc, pct, pat, mean, mx = dt_turn[-1]
+        print(f"declturn {rc} of {n_} frame(s) ({pct}%) had a newer image handed over after the "
+              f"declaration was built; {pat} declared with that image's pose, moved mean {mean} "
+              f"deg, max {mx} deg")
+        if not dt_ab and int(rc) > 0 and int(pat) == 0:
+            fails.append(f"declpair turn: {rc} race(s) caught inside the queue turn and none "
+                         f"declared with the newer image's pose")
+    if dt_phases:
+        t0 = float(dt_phases[0][0])
+        print("declturn A = each declaration left as built, B = the newer image's pose when one "
+              "was handed over in between")
+        print(f"declturn {len(dt_phases)} phase(s): " + ", ".join(
+            f"#{n} {k} at +{float(t) - t0:.0f} s" for t, n, k in dt_phases[:16])
+              + (" ..." if len(dt_phases) > 16 else ""))
+    elif dt_ab and dt_turn:
+        fails.append("X4VR_DECLARE_TURN_AB was asked for and no phase began")
 
     # --- the space forward is measured in (issue #4, 2026-11-19) -------------
     #
