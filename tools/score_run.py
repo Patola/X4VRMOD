@@ -5288,6 +5288,9 @@ def main(path):
               + (" ..." if len(dt_phases) > 16 else ""))
     elif dt_ab and dt_turn:
         fails.append("X4VR_DECLARE_TURN_AB was asked for and no phase began")
+    if dt_ab and not dt_turn and "declpair turn:" not in text:
+        fails.append("X4VR_DECLARE_TURN_AB was asked for and the layer never mentioned the turn "
+                     "correction: a build from before it (6b9eabb) ignored the variable")
     # Each phase's own account (2026-11-21, take 455c/d): the A/B is read by
     # phase, and in A how far off the frames left as built were.
     dt_ends = re.findall(r"declpair turn: phase #(\d+) \(([AB])\) (?:ended|was running at the end) "
@@ -5355,6 +5358,11 @@ def main(path):
               + (" ..." if len(cs_phases) > 16 else ""))
     elif cs_ab and cs_tot:
         fails.append("X4VR_COPY_SYNC_AB was asked for and no phase began")
+    # Take 455g: the variable reached a build from before copysync, which
+    # ignored it -- nothing switched, and the stretches were judged anyway.
+    if cs_ab and "copysync" not in text:
+        fails.append("X4VR_COPY_SYNC_AB was asked for and the layer never mentioned copysync: "
+                     "a build from before it (ce9c070) ignored the variable, so nothing switched")
     for (n, k, secs, copies, waited, images, running, pct, unord, endms) in re.findall(
             r"copysync: phase #(\d+) \(([AB])\) (?:ended|was running at the end) after (\d+) "
             r"s: " + cs_stats, text):

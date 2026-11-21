@@ -1380,7 +1380,11 @@ want "copysync phases: A waited for some -> FAIL" /tmp/census-cs-abad.log "FAIL"
 want "copysync phases: B waited for none -> FAIL" /tmp/census-cs-bbad.log "FAIL" "phase #1 is B and none of its 600 copies was waited for"
 { cat /tmp/census-cs-base.log; printf '%s\n' "$(cst 1200 0 30)"; } > /tmp/census-cs-nophase.log
 want "copysync: A/B asked, never began -> FAIL" /tmp/census-cs-nophase.log "FAIL" "X4VR_COPY_SYNC_AB was asked for and no phase began"
-absent "copysync: A/B asked, no copy at all -> no such FAIL" /tmp/census-cs-base.log "FAIL  X4VR_COPY_SYNC_AB"
+want "copysync: A/B asked of a build without it (take 455g) -> FAIL" /tmp/census-cs-base.log "FAIL" "the layer never mentioned copysync"
+{ cat /tmp/census-cs-base.log; printf '%s\n' "$csshared"; } > /tmp/census-cs-abshared.log
+absent "copysync: A/B asked on a shared queue -> no FAIL" /tmp/census-cs-abshared.log "FAIL  X4VR_COPY_SYNC_AB"
+sed 's/env: run = /env: run = X4VR_DECLARE_TURN_AB=recentre /' "$BASE" > /tmp/census-dt-old.log
+want "declturn: A/B asked of a build without it -> FAIL" /tmp/census-dt-old.log "FAIL" "the layer never mentioned the turn correction"
 absent "copysync: an older build -> silent" "$BASE" copysync
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" '[  999975.000] inject  sdl: relative mouse mode ON (fold stands down)' '[  999976.000] inject  sdl: relative mouse mode off (fold applies)'; } > /tmp/census-fm-old.log
 want "foot-menu pointer freed, nothing logged -> an older build" /tmp/census-fm-old.log foot-menu "X4 freed the pointer 1 time(s) off the seat and no on-foot menu was logged"
