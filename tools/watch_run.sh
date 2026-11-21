@@ -85,15 +85,32 @@ done
 # one worth interrupting for, and marking everything critical would train it to
 # be ignored. -t 0 lets a critical one persist until dismissed; the successes
 # time out on their own.
+#
+# Take 455 (the RTX 3070 laptop): no notification reached the headset and
+# nothing said so, because a missing notify-send returned quietly and a failing
+# one had its error thrown away. A blind A/B is unreadable without them, so the
+# first failure is said once, loudly, on the terminal.
+notify_warned=0
+notify_warn() {
+    (( notify_warned )) && return 0
+    notify_warned=1
+    printf '[watch_run] WARNING: %s — no notification will reach the headset this run\n' "$1" >&2
+}
 notify() {
-    local urgency="$1" body="$2"
+    local urgency="$1" body="$2" err
     printf '[watch_run] %s: %s\n' "$urgency" "$body"
-    command -v notify-send >/dev/null || return 0
-    if [[ $urgency == critical ]]; then
-        notify-send -u critical -t 0 -a x4vr "X4VR take" "$body" 2>/dev/null
-    else
-        notify-send -u normal -t 8000 -a x4vr "X4VR take" "$body" 2>/dev/null
+    if ! command -v notify-send >/dev/null; then
+        notify_warn "notify-send is not installed (it comes with libnotify)"
+        return 0
     fi
+    if [[ $urgency == critical ]]; then
+        err=$(notify-send -u critical -t 0 -a x4vr "X4VR take" "$body" 2>&1) ||
+            notify_warn "notify-send failed: ${err:-no message}"
+    else
+        err=$(notify-send -u normal -t 8000 -a x4vr "X4VR take" "$body" 2>&1) ||
+            notify_warn "notify-send failed: ${err:-no message}"
+    fi
+    return 0
 }
 
 # X4's process is "Main()", so `pkill -x X4` never matches it.
