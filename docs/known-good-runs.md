@@ -1371,3 +1371,19 @@ copies were never shown, against 0.7% in A).
 ```
 X4VR_LANGUAGE=en X4VR_TAKE=455G2 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2016 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=4032 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_NEEDS_STEAM=1 X4VR_RES=2016x2016 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=none X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_GAME='/games/SteamLibrary/steamapps/common/X4 Foundations/X4' X4VR_STEER_PICK=1 X4VR_INJECTOR=/usr/lib/x4vrmod/libx4vr_inject.so X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOADING_ART=1 X4VR_LAYER_MANIFEST=/usr/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json X4VR_PROJ_INVPROJ=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take455g2.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 X4VR_COPY_SYNC_AB=recentre ./launch/x4vr-launch.sh
 ```
+
+**Take 455h, laptop, SteamVR (code ce9c070), `X4VR_COPY_SYNC_AB=recentre`, blind (phase #1 drawn
+B):** Patola recentred during the loading panel (phase #1 then held 4 copies), and from there:
+rough through the menu and into the cockpit, then smooth, rough, smooth, "even more extreme than
+under WiVRn": A, B, A, B. `score_run.py` PASS.
+
+| stretch | | still being copied at xrEndFrame, not waited for | xrEndFrame | headset frames | X4 | copies never shown |
+|---|---|---|---|---|---|---|
+| 2 (98 s, menu and loading included) | A | 2196 of 4488 (49%) | 3.0 ms | 104-144 Hz | 34-51 fps | 0.9% |
+| 3 (19 s) | B | 0 (739 waited) | 20.3 ms | 40-48 Hz | 39-45 fps | 6.1% |
+| 4 (13 s) | A | 437 of 437 | 6.1 ms | 104-105 Hz | 34 fps | 0% |
+| 5 (32 s) | B | 0 (890 waited) | 11.2 ms | 33-42 Hz | 41-45 fps | 13.6% |
+
+SteamVR halved its display rate in both (period changes 125-355 per 5 s), down to a quarter in B.
+The mod sent fewer headset frames than X4 drew in B, so some of X4's pictures were never shown:
+the cost the backlog's "release only finished copies" would remove.

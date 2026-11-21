@@ -20,15 +20,21 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
-## Unreleased
+## v1.0.0-rc8 — 2026-11-21 — Eighth release candidate: no more shaking on NVIDIA, and X4 in front of you (issue #4)
+
+The eighth release candidate for 1.0. Packages call it `1.0.0~rc8` (Arch: `1.0.0rc8`), which
+installs over rc1 to rc7 as an upgrade and sorts before 1.0.0.
+
+Take the package named for your system: Arch, Ubuntu 24.04, Ubuntu 26.04, Debian 13 or Fedora,
+or the zip for anything else.
 
 * **No more shaking on NVIDIA cards.** On NVIDIA the headset's runtime gets a queue of its own on
   the graphics card, and nothing made it wait for the mod's copy of X4's picture: it was often
   handed a picture still being copied, and could show what that image held before. That's an
   older picture under the new one's pose, which shakes whenever you move your head. Its queue now
   waits for each copy. On an RTX 3070 laptop with a Steam Frame, switching it on and off at each
-  recentre was "night and day". X4's frame rate doesn't change. AMD cards never had it: there the
-  runtime shares X4's queue.
+  recentre was "night and day" through WiVRn, and even clearer through SteamVR. X4's frame rate
+  doesn't change. AMD cards never had it: there the runtime shares X4's queue.
 * **A frame's pose always belongs to its picture.** When X4 handed a new picture to the headset
   just as a frame was being sent, the frame could go out with the new picture and the previous
   picture's pose: about 2% of frames on an RTX 5090 at 144 Hz, 0.36% on a Radeon. The mod now
@@ -44,6 +50,11 @@ on the remote beside their `take-NNN-name` twins.
   stage** in Advanced keeps the play area, as before.
 * **"Nothing in the headset while X4 starts" works.** In rc7, Advanced's **Loading panel in
   the headset** set to that choice still showed the panel.
+
+Known: on NVIDIA, waiting for each copy means the mod now sends the headset fewer frames, and the
+runtime fills in the rest; on the laptop, about 65 a second through WiVRn and about 40 through
+SteamVR, where a few of X4's pictures were never shown. It still looked much smoother. Handing the
+runtime only finished copies, so it never waits, is the next step.
 
 ## v1.0.0-rc7 — 2026-11-19 — Seventh release candidate: a working recentre (issue #4), and no twitch on foot or in F2-F4
 
