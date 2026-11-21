@@ -659,6 +659,10 @@ struct PresentDecl {
     // the rest, so whatever reads the slot reads the image's own (2026-11-21).
     bool warp_live = false;
     float warp_q[4] = {0.f, 0.f, 0.f, 1.f};
+    // copysync (2026-11-21): the fence of the composite that copied this image
+    // into the runtime's, and whether the runtime's queue was made to wait for it.
+    VkFence copy_fence = VK_NULL_HANDLE;
+    bool copy_ordered = false;
 };
 
 // X4VR_DECLTRACE=1: one line per X4 frame, at its present -- X4's camera as it
@@ -15346,9 +15350,10 @@ static bool loading_panel_build() {
 // coordinates re-latches. XR thread only.
 static uint64_t g_space_epoch = 0;
 // The recentres the runtime sent, counted where g_space_epoch counts them
-// (never the mod's own forward latches): X4VR_DECLARE_TURN_AB=recentre turns
-// its phase at each. XR thread only.
-static uint64_t g_recentres = 0;
+// (never the mod's own forward latches): X4VR_DECLARE_TURN_AB=recentre and
+// X4VR_COPY_SYNC_AB=recentre turn their phase at each. Written by the XR
+// thread, read by X4's present thread too.
+static std::atomic<uint64_t> g_recentres{0};
 
 // Forward, latched by the mod itself (issue #4, 2026-11-20). The seated space's
 // forward is the runtime's: on WiVRn, wherever the headset was last recentred
@@ -15458,6 +15463,191 @@ static bool loading_panel_frame(const XrView *views) {
         g_vrs.load_placed = true;
     }
     return true;
+}
+
+// **copysync (2026-11-21).** The copy into the runtime's images goes on X4's
+// queue (the composite, at X4's present). Where the runtime shares that queue
+// (every AMD device: one graphics queue), its own work comes after the copy by
+// queue order. Where it has its own (every NVIDIA device here: index 1 of
+// X4's family), nothing ordered the two: the runtime could read an image the
+// copy had not written yet and show what it held before -- an older picture
+// under the new picture's pose, and so a twitch only on NVIDIA, only while the
+// head moves, everywhere (the friend's RTX 5090; the RTX 3070 laptop, takes
+// 455-455f). Now the copy also signals a semaphore, and inside the release's
+// queue turn one empty submission makes the runtime's queue wait for it: no CPU
+// wait, and X4's frame is untouched. X4VR_COPY_SYNC=0 leaves it as it was;
+// X4VR_COPY_SYNC_AB=<s>|recentre alternates the two, blind.
+struct CopyStat {
+    std::atomic<uint64_t> copies{0};   // copies into the runtime's eye images
+    std::atomic<uint64_t> ordered{0};  // ...that the runtime's queue waited for
+    std::atomic<uint64_t> images{0};   // new images handed over at xrEndFrame
+    std::atomic<uint64_t> running{0};  // ...whose copy had not finished then
+    std::atomic<uint64_t> running_unordered{0}; // ...and was not waited for
+    std::atomic<uint64_t> end_n{0};    // xrEndFrame calls timed
+    std::atomic<uint64_t> end_us{0};   // ...and their total, microseconds
+    void clear() {
+        copies = 0, ordered = 0, images = 0, running = 0, running_unordered = 0;
+        end_n = 0, end_us = 0;
+    }
+};
+static CopyStat g_copystat;  // the session's
+static CopyStat g_copyphase; // the A/B phase in force
+static long g_copyphase_n = -1; // X4's present thread
+static bool g_copyphase_b = false;
+static double g_copyphase_t0 = 0.0;
+
+static void copy_stat_line(const char *head, const CopyStat &c) {
+    const uint64_t copies = c.copies.load(), ordered = c.ordered.load();
+    const uint64_t images = c.images.load(), running = c.running.load();
+    const uint64_t ru = c.running_unordered.load(), en = c.end_n.load();
+    X4VR_LOG("%s: %llu copies into the runtime's images, %llu waited for on the runtime's "
+             "queue; of %llu new image(s) handed over at xrEndFrame, %llu (%.2f%%) still "
+             "being copied, %llu of them not waited for; xrEndFrame took %.3f ms on average",
+             head, (unsigned long long)copies, (unsigned long long)ordered,
+             (unsigned long long)images, (unsigned long long)running,
+             images ? 100.0 * (double)running / (double)images : 0.0,
+             (unsigned long long)ru, en ? (double)c.end_us.load() / (double)en / 1000.0 : 0.0);
+}
+
+static void copy_phase_report(const char *how) {
+    if (g_copyphase_n < 0)
+        return;
+    char head[160];
+    snprintf(head, sizeof head, "copysync: phase #%ld (%s) %s after %.0f s",
+             g_copyphase_n + 1, g_copyphase_b ? "B" : "A", how,
+             mono_now() - g_copyphase_t0);
+    copy_stat_line(head, g_copyphase);
+}
+
+// Per X4 frame, on X4's present thread, before the composite.
+static bool copy_sync_on() {
+    if (g_vr_share_queue) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            X4VR_LOG("copysync: not needed — the runtime shares X4's queue, so its work "
+                     "already comes after each copy");
+        }
+        return false;
+    }
+    struct Mode {
+        bool off = false, ab = false, recentre = false;
+        double s = 0.0;
+    };
+    static const Mode m = [] {
+        Mode r;
+        if (!x4vr::env_on("X4VR_COPY_SYNC", true)) {
+            r.off = true;
+            return r;
+        }
+        const char *e = getenv("X4VR_COPY_SYNC_AB");
+        if (e && *e) {
+            if (!strcmp(e, "recentre") || !strcmp(e, "recenter")) {
+                r.ab = r.recentre = true;
+            } else {
+                r.s = atof(e);
+                r.ab = r.s > 0.0;
+            }
+        }
+        return r;
+    }();
+    static bool said = false;
+    if (m.off || !m.ab) {
+        if (!said) {
+            said = true;
+            X4VR_LOG(m.off ? "copysync: OFF (X4VR_COPY_SYNC=0) — the runtime has its own "
+                             "queue and nothing makes it wait for the copies into its images"
+                           : "copysync: ON — the runtime has its own queue, and waits for "
+                             "each copy into its images before its own work");
+        }
+        return !m.off;
+    }
+    static double t0 = 0.0;
+    static uint64_t rec0 = 0;
+    static long first_b = 0;
+    const double now = mono_now();
+    if (t0 == 0.0) {
+        t0 = now;
+        if (m.recentre) {
+            rec0 = g_recentres.load(std::memory_order_relaxed);
+            unsigned char bit = 0;
+            if (getrandom(&bit, 1, 0) != 1) {
+                timespec ts{};
+                clock_gettime(CLOCK_REALTIME, &ts);
+                bit = (unsigned char)(ts.tv_nsec >> 10);
+            }
+            first_b = bit & 1;
+            X4VR_LOG("copysync: A/B at each recentre from here, phase #1 is %s — A leaves "
+                     "the runtime's queue unordered with the copies, as before; B makes it "
+                     "wait for each",
+                     first_b ? "B" : "A");
+        } else {
+            X4VR_LOG("copysync: A/B every %g s from here — A leaves the runtime's queue "
+                     "unordered with the copies, as before; B makes it wait for each",
+                     m.s);
+        }
+    }
+    const long p = m.recentre ? (long)(g_recentres.load(std::memory_order_relaxed) - rec0)
+                              : (long)((now - t0) / m.s);
+    if (p != g_copyphase_n) {
+        copy_phase_report("ended");
+        g_copyphase.clear();
+        g_copyphase_n = p;
+        g_copyphase_b = (p + first_b) % 2 == 1;
+        g_copyphase_t0 = now;
+        if (m.recentre)
+            X4VR_LOG("copysync: phase #%ld — %s, after recentre %ld", p + 1,
+                     g_copyphase_b ? "B" : "A", p);
+        else
+            X4VR_LOG("copysync: phase #%ld — %s", p + 1, g_copyphase_b ? "B" : "A");
+    }
+    return g_copyphase_b;
+}
+
+// The runtime's queue, as the session was given it.
+static VkQueue runtime_queue() {
+    static VkQueue q = VK_NULL_HANDLE;
+    if (q == VK_NULL_HANDLE && g_loading_fns.GetDeviceQueue && g_vrs.dev)
+        g_loading_fns.GetDeviceQueue(g_vrs.dev, g_vrs.queue_family, g_vrs.queue_index, &q);
+    return q;
+}
+
+// Inside the release's queue turn: the runtime's queue waits for the copy.
+struct CopyWait {
+    VkSemaphore sync = VK_NULL_HANDLE;
+    bool ok = false;
+};
+static void copy_wait_before_release(void *user) {
+    CopyWait &w = *static_cast<CopyWait *>(user);
+    const VkQueue q = runtime_queue();
+    if (w.sync == VK_NULL_HANDLE || q == VK_NULL_HANDLE || !g_loading_fns.QueueSubmit)
+        return;
+    const VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkSubmitInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.waitSemaphoreCount = 1;
+    si.pWaitSemaphores = &w.sync;
+    si.pWaitDstStageMask = &stage;
+    w.ok = g_loading_fns.QueueSubmit(q, 1, &si, VK_NULL_HANDLE) == VK_SUCCESS;
+}
+
+// At xrEndFrame, inside its queue turn: had the copy of the image it hands over
+// finished? Once per new image; the runtime's later read is what could see it
+// unwritten, so this is the exposure, and B is what closes it.
+static void copy_check_in_turn(uint64_t rel, const PresentDecl &pd) {
+    static uint64_t last = UINT64_MAX;
+    if (rel == last || pd.copy_fence == VK_NULL_HANDLE)
+        return;
+    last = rel;
+    const bool running = !g_sbs.copy_done(pd.copy_fence);
+    for (CopyStat *c : {&g_copystat, &g_copyphase}) {
+        c->images.fetch_add(1, std::memory_order_relaxed);
+        if (running) {
+            c->running.fetch_add(1, std::memory_order_relaxed);
+            if (!pd.copy_ordered)
+                c->running_unordered.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
 }
 
 bool vr_begin_blit(VkSwapchainKHR x4sc) {
@@ -15587,6 +15777,7 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
     const bool want_warp = menu_warp_request(&warp);
     g_sbs.request_vr_blit(g_vrs.sc.images[idx], eye, 2, g_vrs.sc.format,
                           want_warp ? &warp : nullptr);
+    g_sbs.request_runtime_order(copy_sync_on());
 
     // ---- task #57 layer B ---------------------------------------------------
     //
@@ -15667,6 +15858,11 @@ void vr_finish_blit() {
     // up after, so for a moment the runtime held the new image while the count
     // still named the old one, and a frame built then declared the old image's
     // pose over the new image -- 2% of frames on an RTX 5090 at 144 Hz.
+    // copysync: the copy's fence for the count at xrEndFrame, and its
+    // semaphore for the runtime's queue to wait on before the release.
+    CopyWait cw;
+    VkFence copy_fence = VK_NULL_HANDLE;
+    g_sbs.take_runtime_sync(&cw.sync, &copy_fence);
     {
         std::lock_guard<std::mutex> pl(g_vrs.pair_mu);
         PresentDecl &slot =
@@ -15674,12 +15870,34 @@ void vr_finish_blit() {
         slot = g_present_decl;
         slot.warp_live = live;
         std::memcpy(slot.warp_q, live_q, sizeof live_q);
+        slot.copy_fence = copy_fence;
+        slot.copy_ordered = cw.sync != VK_NULL_HANDLE;
     }
     if (tc < kTraceCopies)
         X4VR_LOG("trace: X4's copy %u: calling xrReleaseSwapchainImage", tc + 1);
     {
         const InCall in_release(g_spot_x4, "xrReleaseSwapchainImage");
-        x4vr::xr::swapchain_release(g_vrs.sc, &g_vrs.released);
+        x4vr::xr::swapchain_release(g_vrs.sc, &g_vrs.released,
+                                    cw.sync != VK_NULL_HANDLE ? copy_wait_before_release
+                                                              : nullptr,
+                                    &cw);
+    }
+    if (copy_fence != VK_NULL_HANDLE)
+        for (CopyStat *c : {&g_copystat, &g_copyphase})
+            c->copies.fetch_add(1, std::memory_order_relaxed);
+    if (cw.sync != VK_NULL_HANDLE) {
+        if (cw.ok) {
+            for (CopyStat *c : {&g_copystat, &g_copyphase})
+                c->ordered.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            g_sbs.runtime_sync_broken();
+            static bool said = false;
+            if (!said) {
+                said = true;
+                X4VR_LOG("copysync: the wait on the runtime's queue could not be submitted "
+                         "— no more copies ordered this session");
+            }
+        }
     }
     if (tc < kTraceCopies)
         X4VR_LOG("trace: X4's copy %u: xrReleaseSwapchainImage returned", tc + 1);
@@ -15866,6 +16084,7 @@ static void declpair_in_turn(void *) {
     g_turnstat.checked++;
     g_turnphase.checked++;
     const uint64_t rel = g_vrs.released.load(std::memory_order_acquire);
+    copy_check_in_turn(rel, g_vrs.pair[rel & 1]);
     if (rel == t.built_rel)
         return;
     g_turnstat.raced++;
@@ -15987,7 +16206,7 @@ static bool turn_fix_on() {
     if (t0 == 0.0) {
         t0 = now;
         if (m.recentre) {
-            rec0 = g_recentres;
+            rec0 = g_recentres.load(std::memory_order_relaxed);
             unsigned char bit = 0;
             if (getrandom(&bit, 1, 0) != 1) {
                 timespec ts{};
@@ -16005,7 +16224,8 @@ static bool turn_fix_on() {
                      m.s);
         }
     }
-    const long p = m.recentre ? (long)(g_recentres - rec0) : (long)((now - t0) / m.s);
+    const long p = m.recentre ? (long)(g_recentres.load(std::memory_order_relaxed) - rec0)
+                              : (long)((now - t0) / m.s);
     if (p != g_turnphase_n) {
         turn_phase_report("ended");
         g_turnphase = TurnPhaseStat{};
@@ -16069,7 +16289,7 @@ void vr_thread() {
                 g_vrs.session.frame.predictedDisplayTime >= g_vrs.session.space_change_time) {
                 space_seen = g_vrs.session.space_changes;
                 g_space_epoch++;
-                g_recentres++;
+                g_recentres.fetch_add(1, std::memory_order_relaxed);
                 X4VR_LOG("vr: recentred — the runtime moved the %s space (#%llu): forward is "
                          "where the head faces now, and the head's neutral points re-latch",
                          g_vrs.session.space_type == XR_REFERENCE_SPACE_TYPE_STAGE ? "STAGE"
@@ -17227,8 +17447,16 @@ void vr_thread() {
         {
             const InCall in_end(g_spot_xr, show_panel ? "xrEndFrame, with the loading panel"
                                                       : "xrEndFrame");
+            const double t_end = mono_now();
             x4vr::xr::frame_end(g_vrs.session, layers, layer_count,
                                 layer_count ? declpair_in_turn : nullptr, nullptr);
+            if (layer_count) {
+                const auto us = (uint64_t)((mono_now() - t_end) * 1.0e6);
+                for (CopyStat *c : {&g_copystat, &g_copyphase}) {
+                    c->end_n.fetch_add(1, std::memory_order_relaxed);
+                    c->end_us.fetch_add(us, std::memory_order_relaxed);
+                }
+            }
         }
         g_last_headset_frame.store(mono_now(), std::memory_order_relaxed);
         if (tr)
@@ -17793,6 +18021,13 @@ void vr_report(const char *when) {
                  (double)g_turnstat.max_deg);
     if (!strcmp(when, "final"))
         turn_phase_report("was running at the end");
+    if (g_copystat.copies.load() || g_copystat.images.load()) {
+        char head[64];
+        snprintf(head, sizeof head, "copysync (%s)", when);
+        copy_stat_line(head, g_copystat);
+    }
+    if (!strcmp(when, "final"))
+        copy_phase_report("was running at the end");
     if (g_vrs.pair_res_frames)
         X4VR_LOG("declpair residual (%s): %llu headset frame(s) compared, %llu (%.1f%%) where "
                  "the newest residual was not the submitted image's, mean %.3f deg, max %.2f deg",

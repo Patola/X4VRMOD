@@ -1331,6 +1331,57 @@ want "declturn phases: A corrected some -> FAIL" /tmp/census-dtp-abad.log "FAIL|
 plant /tmp/census-dtp-bbad.log "$(dtl 104 52)" "$(dtph 1 B)" "$(dtp 1 B ended 50 2)"
 want "declturn phases: B left some -> FAIL" /tmp/census-dtp-bbad.log "FAIL|  - " "phase #1 is B and left 2 race(s) as built"
 absent "declturn phases: a timed A/B from before -> no per-phase rows" /tmp/census-dt-ok.log "declturn   #"
+
+# ------------------------------------------ copysync: the runtime's queue waits for the copy
+# NVIDIA gives the runtime its own queue, and nothing ordered it with the copy
+# into its images (2026-11-21). Same guard on the formats.
+csfmt=1
+for frag in '"%s: %llu copies into the runtime'"'"'s images, %llu waited for on the runtime'"'"'s "' \
+            '"queue; of %llu new image(s) handed over at xrEndFrame, %llu (%.2f%%) still "' \
+            '"being copied, %llu of them not waited for; xrEndFrame took %.3f ms on average",' \
+            'snprintf(head, sizeof head, "copysync (%s)", when);' \
+            '"copysync: phase #%ld (%s) %s after %.0f s",' \
+            'copy_phase_report("ended");' 'copy_phase_report("was running at the end");' \
+            '"copysync: A/B at each recentre from here, phase #1 is %s — A leaves "' \
+            '"copysync: phase #%ld — %s, after recentre %ld"' \
+            ': "copysync: ON — the runtime has its own queue, and waits for "' \
+            '"copysync: not needed — the runtime shares X4'"'"'s queue, so its work "' \
+            '"copysync: the wait on the runtime'"'"'s queue could not be submitted "'; do
+    grep -qF -- "$frag" layer/x4vr_layer.cpp || { csfmt=0; echo "        missing: $frag"; }
+done
+[ $csfmt -eq 1 ] && ok "copysync: the planted lines match the layer's formats" \
+    || bad "copysync: the layer's lines changed — replant the lines below"
+cst() { printf '[  999990.000] layer   copysync (final): %s copies into the runtime'"'"'s images, %s waited for on the runtime'"'"'s queue; of 4000 new image(s) handed over at xrEndFrame, 120 (3.00%%) still being copied, %s of them not waited for; xrEndFrame took 0.410 ms on average' "$1" "$2" "$3"; }
+cson='[  999970.000] layer   copysync: ON — the runtime has its own queue, and waits for each copy into its images before its own work'
+csshared='[  999970.000] layer   copysync: not needed — the runtime shares X4'"'"'s queue, so its work already comes after each copy'
+plant /tmp/census-cs-ok.log "$cson" "$(cst 4000 4000 0)"
+want "copysync: on, every copy waited for -> listed" /tmp/census-cs-ok.log copysync "4000 copies, 4000 waited for; of 4000 new image(s) at xrEndFrame, 120 (3.00%) still being copied, 0 of them not waited for; xrEndFrame 0.410 ms"
+want "copysync: on -> said" /tmp/census-cs-ok.log copysync "ON — the runtime has its own queue and waits for each copy"
+absent "copysync: on, every copy waited for -> no FAIL" /tmp/census-cs-ok.log "FAIL  copysync"
+plant /tmp/census-cs-none.log "$cson" "$(cst 4000 0 120)"
+want "copysync: on, none waited for -> FAIL" /tmp/census-cs-none.log "FAIL" "copysync is ON and none of 4000 copies was waited for"
+plant /tmp/census-cs-shared.log "$csshared" "$(cst 4000 0 120)"
+want "copysync: a shared queue -> not needed" /tmp/census-cs-shared.log copysync "not needed — the runtime shares X4's queue"
+absent "copysync: a shared queue, none waited for -> no FAIL" /tmp/census-cs-shared.log "FAIL  copysync"
+plant /tmp/census-cs-sub.log "$cson" "$(cst 4000 10 100)" '[  999980.000] layer   copysync: the wait on the runtime'"'"'s queue could not be submitted — no more copies ordered this session'
+want "copysync: a wait not submitted -> FAIL" /tmp/census-cs-sub.log "FAIL" "the wait on the runtime's queue could not be submitted"
+csp() { printf '[  99998%s.000] layer   copysync: phase #%s (%s) %s after 40 s: %s copies into the runtime'"'"'s images, %s waited for on the runtime'"'"'s queue; of %s new image(s) handed over at xrEndFrame, 30 (5.00%%) still being copied, %s of them not waited for; xrEndFrame took 0.400 ms on average' "$1" "$1" "$2" "$3" "$4" "$5" "$4" "$6"; }
+csph() { printf '[  99997%s.500] layer   copysync: phase #%s — %s, after recentre %s' "$1" "$1" "$2" "$(( $1 - 1 ))"; }
+csrec='[  999969.000] layer   copysync: A/B at each recentre from here, phase #1 is B — A leaves the runtime'"'"'s queue unordered with the copies, as before; B makes it wait for each'
+sed 's/env: run = /env: run = X4VR_COPY_SYNC_AB=recentre /' "$BASE" > /tmp/census-cs-base.log
+{ cat /tmp/census-cs-base.log; printf '%s\n' "$csrec" "$(csph 1 B)" "$(csph 2 A)" "$(csp 1 B ended 600 600 0)" "$(csp 2 A 'was running at the end' 600 0 30)" "$(cst 1200 600 30)"; } > /tmp/census-cs-ab.log
+want "copysync phases: B waited -> its row" /tmp/census-cs-ab.log "copysync   #1" "B     40 s     600 copies,    600 waited     30 of    600 (5.00%) still being copied,     0 not waited for  xrEndFrame 0.400 ms"
+want "copysync phases: A, the last one -> its row" /tmp/census-cs-ab.log "copysync   #2" "A     40 s     600 copies,      0 waited     30 of    600 (5.00%) still being copied,    30 not waited for"
+want "copysync phases: by recentre -> said" /tmp/census-cs-ab.log copysync "phase #1's letter was drawn at random: Patola's stretch N is phase #N"
+absent "copysync phases: a clean A/B -> no FAIL" /tmp/census-cs-ab.log "FAIL  copysync"
+{ cat /tmp/census-cs-base.log; printf '%s\n' "$(csph 1 A)" "$(csp 1 A ended 600 5 25)"; } > /tmp/census-cs-abad.log
+want "copysync phases: A waited for some -> FAIL" /tmp/census-cs-abad.log "FAIL" "phase #1 is A and 5 copies were waited for"
+{ cat /tmp/census-cs-base.log; printf '%s\n' "$(csph 1 B)" "$(csp 1 B ended 600 0 30)"; } > /tmp/census-cs-bbad.log
+want "copysync phases: B waited for none -> FAIL" /tmp/census-cs-bbad.log "FAIL" "phase #1 is B and none of its 600 copies was waited for"
+{ cat /tmp/census-cs-base.log; printf '%s\n' "$(cst 1200 0 30)"; } > /tmp/census-cs-nophase.log
+want "copysync: A/B asked, never began -> FAIL" /tmp/census-cs-nophase.log "FAIL" "X4VR_COPY_SYNC_AB was asked for and no phase began"
+absent "copysync: A/B asked, no copy at all -> no such FAIL" /tmp/census-cs-base.log "FAIL  X4VR_COPY_SYNC_AB"
+absent "copysync: an older build -> silent" "$BASE" copysync
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" '[  999975.000] inject  sdl: relative mouse mode ON (fold stands down)' '[  999976.000] inject  sdl: relative mouse mode off (fold applies)'; } > /tmp/census-fm-old.log
 want "foot-menu pointer freed, nothing logged -> an older build" /tmp/census-fm-old.log foot-menu "X4 freed the pointer 1 time(s) off the seat and no on-foot menu was logged"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" '[  999969.000] inject  sdl: relative mouse mode off (fold applies)' "$fmout"; } > /tmp/census-fm-none.log

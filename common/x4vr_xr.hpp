@@ -1223,10 +1223,15 @@ inline bool swapchain_acquire(Swapchain &sc, uint32_t *index) {
 // `count`, if given, goes up inside the same queue turn as the release, so a
 // thread holding the turn never sees the runtime's latest image and the count
 // disagree (frame_end's `in_turn`).
-inline void swapchain_release(Swapchain &sc, std::atomic<uint64_t> *count = nullptr) {
+// `before`, if given, runs inside that turn just before the release: the queue
+// is the caller's to submit to there (the layer's copysync, 2026-11-21).
+inline void swapchain_release(Swapchain &sc, std::atomic<uint64_t> *count = nullptr,
+                              void (*before)(void *) = nullptr, void *user = nullptr) {
     XrSwapchainImageReleaseInfo ri{};
     ri.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO;
     const QueueTurn turn;
+    if (before)
+        before(user);
     sc.s->rt->api.ReleaseSwapchainImage(sc.handle, &ri);
     if (count)
         count->fetch_add(1, std::memory_order_release);

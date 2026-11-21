@@ -5309,6 +5309,65 @@ def main(path):
             fails.append(f"declpair turn: phase #{n} is B and left {left} race(s) as built — the "
                          f"A/B did not hold its phase")
 
+    # --- copysync: the runtime's queue waits for the copy (2026-11-21) -------
+    #
+    # Where the runtime has its own queue (NVIDIA), nothing ordered it with the
+    # copy into its images, which goes on X4's: it could read one unwritten. The
+    # layer now makes it wait. "still being copied" at xrEndFrame is the
+    # exposure; whether it was waited for is what closes it.
+    cs_stats = (r"(\d+) copies into the runtime's images, (\d+) waited for on the runtime's "
+                r"queue; of (\d+) new image\(s\) handed over at xrEndFrame, (\d+) \(([\d.]+)%\) "
+                r"still being copied, (\d+) of them not waited for; xrEndFrame took ([\d.]+) ms "
+                r"on average")
+    cs_tot = re.findall(r"copysync \((?:periodic|final)\): " + cs_stats, text)
+    cs_on = "copysync: ON — the runtime has its own queue" in text
+    cs_ab = bool(re.search(r"\bX4VR_COPY_SYNC_AB=\S+", run or ""))
+    if "copysync: not needed — the runtime shares X4's queue" in text:
+        print("copysync not needed — the runtime shares X4's queue, so its work already comes "
+              "after each copy")
+    elif "copysync: OFF (X4VR_COPY_SYNC=0)" in text:
+        print("copysync OFF (X4VR_COPY_SYNC=0) — the runtime has its own queue and nothing "
+              "made it wait for the copies")
+    elif cs_on:
+        print("copysync ON — the runtime has its own queue and waits for each copy")
+    if cs_tot:
+        copies, waited, images, running, pct, unord, endms = cs_tot[-1]
+        print(f"copysync {copies} copies, {waited} waited for; of {images} new image(s) at "
+              f"xrEndFrame, {running} ({pct}%) still being copied, {unord} of them not waited "
+              f"for; xrEndFrame {endms} ms on average")
+        if cs_on and not cs_ab and int(copies) > 0 and int(waited) == 0:
+            fails.append(f"copysync is ON and none of {copies} copies was waited for on the "
+                         f"runtime's queue")
+    if "copysync: the wait on the runtime's queue could not be submitted" in text:
+        fails.append("copysync: the wait on the runtime's queue could not be submitted")
+    if re.search(r"copysync: the runtime never waited on slot \d+'s last copy", text):
+        fails.append("copysync: a copy's semaphore was never waited on, so ordering stopped")
+    cs_phases = re.findall(r"\[\s*([\d.]+)\]\s+layer\s+copysync: phase #(\d+) — ([AB])\b", text)
+    if cs_phases:
+        t0 = float(cs_phases[0][0])
+        print("copysync A = the runtime's queue left unordered with the copies (as before), "
+              "B = it waits for each")
+        if "copysync: A/B at each recentre from here" in text:
+            print("copysync the phase changed at each recentre (X4VR_COPY_SYNC_AB=recentre), "
+                  "and phase #1's letter was drawn at random: Patola's stretch N is phase #N")
+        print(f"copysync {len(cs_phases)} phase(s): " + ", ".join(
+            f"#{n} {k} at +{float(t) - t0:.0f} s" for t, n, k in cs_phases[:16])
+              + (" ..." if len(cs_phases) > 16 else ""))
+    elif cs_ab and cs_tot:
+        fails.append("X4VR_COPY_SYNC_AB was asked for and no phase began")
+    for (n, k, secs, copies, waited, images, running, pct, unord, endms) in re.findall(
+            r"copysync: phase #(\d+) \(([AB])\) (?:ended|was running at the end) after (\d+) "
+            r"s: " + cs_stats, text):
+        print(f"copysync   #{int(n):<3} {k}  {int(secs):5d} s  {int(copies):6d} copies, "
+              f"{int(waited):6d} waited  {int(running):5d} of {int(images):6d} ({pct}%) still "
+              f"being copied, {int(unord):5d} not waited for  xrEndFrame {endms} ms")
+        if k == "A" and int(waited) > 0:
+            fails.append(f"copysync: phase #{n} is A and {waited} copies were waited for — the "
+                         f"A/B did not hold its phase")
+        if k == "B" and int(copies) > 0 and int(waited) == 0:
+            fails.append(f"copysync: phase #{n} is B and none of its {copies} copies was "
+                         f"waited for — the A/B did not hold its phase")
+
     # --- the space forward is measured in (issue #4, 2026-11-19) -------------
     #
     # The seated space (LOCAL): the runtime sets its forward (on WiVRn, where

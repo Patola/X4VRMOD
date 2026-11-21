@@ -14,11 +14,17 @@
 // The swapchain is the test's own images behind a fake
 // vkGetSwapchainImagesKHR. Each case runs the composite twice on the same
 // slot, so the second run starts from the layouts the first one left.
+//
+// copysync (2026-11-21): with a second queue standing in for the runtime's own
+// (NVIDIA's), the composite also signals a semaphore that queue waits on, and
+// never signals it again before that wait -- a binary semaphore signalled twice
+// is a validation error here and undefined on a GPU.
 #define X4VR_LOG_TAG "test"
 #include "../layer/x4vr_sbs.hpp"
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <unistd.h>
 #include <vector>
 
@@ -302,19 +308,43 @@ int main() {
         printf("FAIL no graphics queue\n");
         return 1;
     }
-    const float prio = 1.f;
-    VkDeviceQueueCreateInfo qci{};
+    // The runtime's queue, for copysync: a second one on the graphics family
+    // where there is one (NVIDIA, as the layer reserves it), otherwise any
+    // other family's (RADV: compute). A wait-only submission runs on either.
+    uint32_t rt_family = UINT32_MAX, rt_index = 0;
+    if (qf[c.family].queueCount >= 2) {
+        rt_family = c.family;
+        rt_index = 1;
+    } else {
+        for (uint32_t i = 0; i < qn; i++)
+            if (i != c.family && qf[i].queueCount &&
+                (qf[i].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))) {
+                rt_family = i;
+                break;
+            }
+    }
+    const float prio[2] = {1.f, 1.f};
+    VkDeviceQueueCreateInfo qcis[2]{};
+    VkDeviceQueueCreateInfo &qci = qcis[0];
     qci.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
     qci.queueFamilyIndex = c.family;
-    qci.queueCount = 1;
-    qci.pQueuePriorities = &prio;
+    qci.queueCount = rt_family == c.family ? 2 : 1;
+    qci.pQueuePriorities = prio;
+    uint32_t qci_n = 1;
+    if (rt_family != UINT32_MAX && rt_family != c.family) {
+        qcis[1].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        qcis[1].queueFamilyIndex = rt_family;
+        qcis[1].queueCount = 1;
+        qcis[1].pQueuePriorities = prio;
+        qci_n = 2;
+    }
     // VK_KHR_swapchain for PRESENT_SRC_KHR, the layout X4 leaves its frame in,
     // as in tests/cursor_render.cpp. No swapchain is made.
     const char *dev_exts[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     VkDeviceCreateInfo dci{};
     dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    dci.queueCreateInfoCount = 1;
-    dci.pQueueCreateInfos = &qci;
+    dci.queueCreateInfoCount = qci_n;
+    dci.pQueueCreateInfos = qcis;
     dci.enabledExtensionCount = 1;
     dci.ppEnabledExtensionNames = dev_exts;
     if (vkCreateDevice(pd, &dci, nullptr, &g_dev) != VK_SUCCESS) {
@@ -322,6 +352,9 @@ int main() {
         return 1;
     }
     vkGetDeviceQueue(g_dev, c.family, 0, &c.queue);
+    VkQueue rt_queue = VK_NULL_HANDLE;
+    if (rt_family != UINT32_MAX)
+        vkGetDeviceQueue(g_dev, rt_family, rt_index, &rt_queue);
     vkGetPhysicalDeviceMemoryProperties(pd, &g_mp);
     VkCommandPoolCreateInfo pci{};
     pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -458,6 +491,79 @@ int main() {
     got = runtime_reads(c, xr);
     ok("copy again: byte for byte", got == pic);
     ok("the warp counted one frame per warped composite", sbs.vr_warped() == 2);
+
+    // ---- copysync: the runtime's own queue waits for the copy ----------------
+    if (rt_queue == VK_NULL_HANDLE) {
+        printf("skip copysync: no second queue on this device\n");
+    } else {
+        // One frame as the layer runs it: the copy asked for (and its order),
+        // the composite, then what the release takes, and the wait on the
+        // runtime's queue before it.
+        auto synced = [&](bool order, bool take, VkSemaphore *sync_out, VkFence *fence_out) {
+            x4_frame(c, eye, pic, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+            sbs.request_vr_blit(xr, {kW, kH}, 2, VK_FORMAT_B8G8R8A8_SRGB, nullptr);
+            sbs.request_runtime_order(order);
+            const VkSemaphore done =
+                sbs.composite(c.queue, c.family, sc, 0, nullptr, 0, nullptr);
+            const VkPipelineStageFlags st = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            if (done != VK_NULL_HANDLE) {
+                VkSubmitInfo si{};
+                si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                si.waitSemaphoreCount = 1;
+                si.pWaitSemaphores = &done;
+                si.pWaitDstStageMask = &st;
+                vkQueueSubmit(c.queue, 1, &si, VK_NULL_HANDLE);
+            }
+            VkSemaphore sync = VK_NULL_HANDLE;
+            VkFence fence = VK_NULL_HANDLE;
+            if (take) {
+                sbs.take_runtime_sync(&sync, &fence);
+                (void)sbs.copy_done(fence); // as at xrEndFrame: may be either
+                if (sync != VK_NULL_HANDLE) {
+                    VkSubmitInfo si{};
+                    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                    si.waitSemaphoreCount = 1;
+                    si.pWaitSemaphores = &sync;
+                    si.pWaitDstStageMask = &st;
+                    vkQueueSubmit(rt_queue, 1, &si, VK_NULL_HANDLE);
+                }
+            }
+            vkQueueWaitIdle(c.queue);
+            vkQueueWaitIdle(rt_queue);
+            if (sync_out)
+                *sync_out = sync;
+            if (fence_out)
+                *fence_out = fence;
+            return done != VK_NULL_HANDLE;
+        };
+        VkSemaphore s1 = VK_NULL_HANDLE, s2 = VK_NULL_HANDLE, s3 = VK_NULL_HANDLE;
+        VkFence f1 = VK_NULL_HANDLE, f3 = VK_NULL_HANDLE;
+        ok("copysync: the composite ran", synced(true, true, &s1, &f1));
+        ok("copysync: it left a semaphore for the runtime's queue and the copy's fence",
+           s1 != VK_NULL_HANDLE && f1 != VK_NULL_HANDLE);
+        ok("copysync: the fence says the copy ran, once the queue is idle", sbs.copy_done(f1));
+        got = runtime_reads(c, xr);
+        ok("copysync: the runtime's image is the eye image, byte for byte", got == pic);
+        ok("copysync: the same slot again, after the wait", synced(true, true, &s2, nullptr));
+        ok("copysync: signalled again, the same slot's semaphore", s2 == s1);
+        ok("copysync: not asked for -> no semaphore, still the fence",
+           synced(false, true, &s3, &f3) && s3 == VK_NULL_HANDLE && f3 != VK_NULL_HANDLE);
+        // A wait never handed over: the next copy into that slot must not
+        // signal it again (a validation error), and none is signalled after.
+        ok("copysync: a semaphore left owed", synced(true, false, nullptr, nullptr));
+        ok("copysync: the slot's next copy signals nothing",
+           synced(true, true, &s3, nullptr) && s3 == VK_NULL_HANDLE);
+        ok("copysync: nor any copy after", synced(true, true, &s3, nullptr) && s3 == VK_NULL_HANDLE);
+        bool said = false;
+        if (FILE *lf = fopen(g_log_path, "r")) {
+            char line[512];
+            while (fgets(line, sizeof line, lf))
+                if (strstr(line, "copysync: the runtime never waited on slot 0"))
+                    said = true;
+            fclose(lf);
+        }
+        ok("copysync: and the log says why", said);
+    }
 
     sbs.forget_target(xr);
     sbs.shutdown();

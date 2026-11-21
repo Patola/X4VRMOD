@@ -40,6 +40,7 @@ namespace x4vr {
     X(CreateSemaphore)                                                         \
     X(DestroySemaphore) X(CreateFence) X(DestroyFence) X(WaitForFences)        \
     X(ResetFences) X(GetSwapchainImagesKHR) X(QueueSubmit) X(DeviceWaitIdle)   \
+    X(GetFenceStatus)                                                          \
     X(CreateImage) X(DestroyImage) X(GetImageMemoryRequirements)               \
     X(AllocateMemory) X(FreeMemory) X(BindImageMemory)
 
@@ -99,6 +100,12 @@ public:
         std::vector<VkCommandBuffer> cmds;
         std::vector<VkSemaphore> done;
         std::vector<VkFence> fences;
+        // The copy into the runtime's images, for the runtime's own queue to
+        // wait on (copysync, 2026-11-21): signalled with `done` when that queue
+        // is not this one, and `rt_owed` until the wait is handed over, since a
+        // binary semaphore may not be signalled again before it is waited on.
+        std::vector<VkSemaphore> rt_sync;
+        std::vector<uint8_t> rt_owed;
         bool usable = false;
     };
 
@@ -192,6 +199,14 @@ public:
     // Counted so the log can say "the blit ran N times" rather than the caller
     // inferring it from the absence of a complaint.
     uint64_t vr_blits_ = 0, vr_refused_ = 0;
+    // copysync: asked for by the frame (one-shot, like vr_dst_), and what the
+    // composite that wrote the runtime's images left for the release: the
+    // semaphore its queue must wait on, and the fence that says the copy ran.
+    bool rt_order_ = false, rt_broken_ = false;
+    VkSemaphore rt_sync_out_ = VK_NULL_HANDLE;
+    VkFence rt_fence_out_ = VK_NULL_HANDLE;
+    VkSwapchainKHR rt_sc_out_ = VK_NULL_HANDLE;
+    uint32_t rt_image_out_ = 0;
 
     bool eye_info(VkSwapchainKHR sc, EyeInfo *out) {
         std::lock_guard<std::mutex> lock(mu_);
@@ -298,6 +313,46 @@ public:
     uint64_t vr_warped() {
         std::lock_guard<std::mutex> lock(mu_);
         return vr_warped_;
+    }
+
+    // copysync (2026-11-21). On a device where the runtime has its own queue
+    // (every NVIDIA one here), the copy into the runtime's images goes on X4's,
+    // and two queues are ordered only by a semaphore: without one, the runtime
+    // can read an image before the copy has written it, and shows what it held
+    // before. Asked for per frame, before the composite; the release takes what
+    // it left (take_runtime_sync) and has the runtime's queue wait on it.
+    void request_runtime_order(bool on) {
+        std::lock_guard<std::mutex> lock(mu_);
+        rt_order_ = on;
+    }
+    // One-shot, for the release that follows the composite: the semaphore to
+    // wait on before the runtime's work (VK_NULL_HANDLE: none was signalled),
+    // and the fence of the composite that wrote the runtime's images.
+    void take_runtime_sync(VkSemaphore *sync, VkFence *fence) {
+        std::lock_guard<std::mutex> lock(mu_);
+        *sync = rt_sync_out_;
+        *fence = rt_fence_out_;
+        // Handed over: the caller submits the wait (or says it could not).
+        if (rt_sync_out_ != VK_NULL_HANDLE) {
+            auto it = chains_.find(rt_sc_out_);
+            if (it != chains_.end() && rt_image_out_ < it->second.rt_owed.size())
+                it->second.rt_owed[rt_image_out_] = 0;
+        }
+        rt_sync_out_ = VK_NULL_HANDLE;
+        rt_fence_out_ = VK_NULL_HANDLE;
+        rt_order_ = false;
+    }
+    // The wait could not be submitted: that semaphore stays signalled, so none
+    // is signalled again this session.
+    void runtime_sync_broken() {
+        std::lock_guard<std::mutex> lock(mu_);
+        rt_broken_ = true;
+    }
+    // Whether the copy a fence covers has run. No lock: called inside the queue
+    // turn, which takes none; the entry point is set once, before any frame.
+    bool copy_done(VkFence f) const {
+        return f == VK_NULL_HANDLE || !fns_.GetFenceStatus ||
+               fns_.GetFenceStatus(device_, f) == VK_SUCCESS;
     }
 
     void request_ui_blit(VkImage src, VkImage dst, VkExtent2D extent) {
@@ -412,6 +467,8 @@ public:
         // queue family to build it for.
         c.done.resize(n, VK_NULL_HANDLE);
         c.fences.resize(n, VK_NULL_HANDLE);
+        c.rt_sync.resize(n, VK_NULL_HANDLE);
+        c.rt_owed.assign(n, 0);
         VkSemaphoreCreateInfo si{};
         si.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         VkFenceCreateInfo fi{};
@@ -419,6 +476,8 @@ public:
         fi.flags = VK_FENCE_CREATE_SIGNALED_BIT; // first use must not block
         for (uint32_t i = 0; i < n; i++) {
             if (fns_.CreateSemaphore(device_, &si, nullptr, &c.done[i]) !=
+                    VK_SUCCESS ||
+                fns_.CreateSemaphore(device_, &si, nullptr, &c.rt_sync[i]) !=
                     VK_SUCCESS ||
                 fns_.CreateFence(device_, &fi, nullptr, &c.fences[i]) !=
                     VK_SUCCESS) {
@@ -483,6 +542,7 @@ public:
             return VK_NULL_HANDLE;
 
         VkCommandBuffer cb = c.cmds[image];
+        bool wrote_runtime = false; // a copy into one of the runtime's images
         if (fns_.ResetCommandBuffer(cb, 0) != VK_SUCCESS)
             return VK_NULL_HANDLE;
 
@@ -701,6 +761,7 @@ public:
                             nullptr, 0, nullptr, 1, &vb);
                     }
                     vr_blits_++;
+                    wrote_runtime = true;
                 }
                 vr_dst_ = VK_NULL_HANDLE;
                 vr_warp_on_ = false;
@@ -764,6 +825,7 @@ public:
                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
                         nullptr, 0, nullptr, 1, &ub);
                     ui_blits_++;
+                    wrote_runtime = true;
                 }
                 ui_src_ = ui_dst_ = VK_NULL_HANDLE;
             }
@@ -819,14 +881,33 @@ public:
         si.pWaitDstStageMask = wait_count ? stages.data() : nullptr;
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cb;
-        si.signalSemaphoreCount = 1;
-        si.pSignalSemaphores = &c.done[image];
+        // copysync: the runtime's queue waits on the second one. Never signalled
+        // again before that wait has been handed over (rt_owed).
+        const bool rt_signal = rt_order_ && wrote_runtime && !rt_broken_ &&
+                               !c.rt_owed[image];
+        if (rt_order_ && wrote_runtime && c.rt_owed[image] && !rt_broken_) {
+            rt_broken_ = true;
+            X4VR_LOG("copysync: the runtime never waited on slot %u's last copy — no "
+                     "more copies ordered this session",
+                     image);
+        }
+        const VkSemaphore signals[2] = {c.done[image], c.rt_sync[image]};
+        si.signalSemaphoreCount = rt_signal ? 2 : 1;
+        si.pSignalSemaphores = signals;
         if (fns_.QueueSubmit(queue, 1, &si, c.fences[image]) != VK_SUCCESS) {
             // The fence stays unsignalled, which would deadlock the next
             // pass through this slot; drop the slot instead.
             c.usable = false;
             X4VR_LOG("sbs: composite submit failed — presenting untouched");
             return VK_NULL_HANDLE;
+        }
+        if (wrote_runtime) {
+            rt_fence_out_ = c.fences[image];
+            rt_sync_out_ = rt_signal ? c.rt_sync[image] : VK_NULL_HANDLE;
+            rt_sc_out_ = sc;
+            rt_image_out_ = image;
+            if (rt_signal)
+                c.rt_owed[image] = 1;
         }
         return c.done[image];
     }
@@ -988,6 +1069,9 @@ private:
             return;
         free_eye_images(c);
         for (VkSemaphore s : c.done)
+            if (s)
+                fns_.DestroySemaphore(device_, s, nullptr);
+        for (VkSemaphore s : c.rt_sync)
             if (s)
                 fns_.DestroySemaphore(device_, s, nullptr);
         for (VkFence f : c.fences)
