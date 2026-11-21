@@ -27,7 +27,9 @@ on the remote beside their `take-NNN-name` twins.
   recentred: behind issue #4's player again. The mod now sets it itself. When the loading panel
   goes away, X4 appears where the panel was (it follows your gaze), and each time the headset
   recentres, forward is set again to where you face, even when a headset's recentre turns too
-  far. **Where forward is: stage** in Advanced keeps the play area, as before.
+  far: the Steam Frame's through WiVRn landed 55-79 degrees off, and the mod put each right.
+  Tried on a Quest 3 and a Steam Frame, each through WiVRn and SteamVR. **Where forward is:
+  stage** in Advanced keeps the play area, as before.
 
 ## v1.0.0-rc7 — 2026-11-19 — Seventh release candidate: a working recentre (issue #4), and no twitch on foot or in F2-F4
 

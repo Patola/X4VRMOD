@@ -5274,7 +5274,10 @@ def main(path):
     lat = [float(t) for t in re.findall(r"\[\s*([\d.]+)\]\s+layer\s+head translate: neutral "
                                         r"point latched at", text)]
     if sp:
+        latched = "vr: forward is the mod's: latched" in text
         print(f"space    {sp.group(1)}" + (
+            " — forward is the mod's, latched where the loading panel was and at each recentre"
+            if sp.group(1) == "LOCAL" and latched else
             " — forward is the seated space's, which the headset's recentre moves"
             if sp.group(1) == "LOCAL" else
             " — the play area's forward (X4VR_SPACE=stage, or a build before 2026-11-19)"))
