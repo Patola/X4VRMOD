@@ -35,6 +35,8 @@ on the remote beside their `take-NNN-name` twins.
   far: the Steam Frame's through WiVRn landed 55-79 degrees off, and the mod put each right.
   Tried on a Quest 3 and a Steam Frame, each through WiVRn and SteamVR. **Where forward is:
   stage** in Advanced keeps the play area, as before.
+* **"Nothing in the headset while X4 starts" works.** In rc7, Advanced's **Loading panel in
+  the headset** set to that choice still showed the panel.
 
 ## v1.0.0-rc7 — 2026-11-19 — Seventh release candidate: a working recentre (issue #4), and no twitch on foot or in F2-F4
 
