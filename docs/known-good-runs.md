@@ -1333,3 +1333,41 @@ leaning too, for both WiVRn and SteamVR, in both headsets" (he forgot to lean in
 ```
 X4VR_TAKE=452 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2816 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=5632 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_RES=2816x2816 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=none X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_GAMEMODE=1 X4VR_STEER_PICK=1 X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOADING_ART=1 X4VR_PROJ_INVPROJ=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take452.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
 ```
+
+## Takes 454 to 455g2 (2026-11-21) — NVIDIA's shake: the runtime read the copy before it was written
+
+Eye 2016 (454: 2816), no upscaler, 144 Hz, Steam Frame, setup 5; `score_run.py` PASS unless
+said, logs in `/tmp`. 455 onwards on Patola's RTX 3070 laptop, which gives the runtime its own
+queue as the friend's RTX 5090 does; X4 drew 24-44 fps there against 144 Hz.
+
+* **Take 454, Radeon, WiVRn (code 6b9eabb), `X4VR_DECLARE_TURN_AB=20`:** smooth in both phases;
+  0.46% of frames had a newer image handed over after the declaration was built, all corrected in
+  B. Gameplay 8.55 ms against take 449's 8.49 ms.
+* **Takes 455 (SteamVR) to 455d (WiVRn), laptop:** races 0.16-0.92% of frames; A corrected none,
+  B all. No notification reached the headset (notify-send's failure was silent; fixed in
+  `watch_run.sh`), so no phase could be judged. Patola saw twitches in the cockpit and F2-F4.
+* **Takes 455e and 455f, laptop, WiVRn (code 564ba3b), `X4VR_DECLARE_TURN_AB=recentre`:** two
+  modes seen alternating everywhere (455e); in 455f the corrected stretches felt worse, which
+  Patola then withdrew (a bad connection, at his limits).
+* **Take 455g, laptop:** `X4VR_COPY_SYNC_AB=recentre` given to the previous build, which ignored
+  it: nothing switched, and Patola could not tell the stretches apart. The scorer now fails this.
+* **Take 455g2, laptop, WiVRn (code ce9c070), `X4VR_COPY_SYNC_AB=recentre`, blind (phase #1's
+  letter drawn at random):** Patola: rough, then "night and day, much smoother" after the first
+  recentre, rough again, smooth again: A, B, A, B.
+
+| stretch | | new images still being copied at xrEndFrame | not waited for | xrEndFrame | headset frames | X4 |
+|---|---|---|---|---|---|---|
+| 1 (143 s, loading included) | A | 4719 of 5957 (79%) | 4719 | 1.4 ms | 144 Hz | 41-44 fps |
+| 2 (25 s) | B | 1006 of 1006 | 0 | 11.9 ms | 61-72 Hz | 41-42 fps |
+| 3 (12 s) | A | 520 of 520 | 520 | 1.3 ms | 144 Hz | 42 fps |
+| 4 (28 s) | B | 756 of 756 | 0 | 6.7 ms | 50-68 Hz | 38-43 fps |
+
+In A the runtime was handed nearly every new image while its copy was still running on X4's
+queue, and nothing made it wait, so it could show what the image held before. In B its queue waits
+for the copy: X4's frame rate is unchanged, but WiVRn's `xrEndFrame` now waits for it too, and
+the mod sent about half as many headset frames (still more than X4's 42 new pictures; 1.3% of
+copies were never shown, against 0.7% in A).
+
+```
+X4VR_LANGUAGE=en X4VR_TAKE=455G2 X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2016 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=4032 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_NEEDS_STEAM=1 X4VR_RES=2016x2016 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=none X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_GAME='/games/SteamLibrary/steamapps/common/X4 Foundations/X4' X4VR_STEER_PICK=1 X4VR_INJECTOR=/usr/lib/x4vrmod/libx4vr_inject.so X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOADING_ART=1 X4VR_LAYER_MANIFEST=/usr/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json X4VR_PROJ_INVPROJ=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take455g2.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 X4VR_COPY_SYNC_AB=recentre ./launch/x4vr-launch.sh
+```

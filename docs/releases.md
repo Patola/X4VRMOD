@@ -22,6 +22,13 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
+* **No more shaking on NVIDIA cards.** On NVIDIA the headset's runtime gets a queue of its own on
+  the graphics card, and nothing made it wait for the mod's copy of X4's picture: it was often
+  handed a picture still being copied, and could show what that image held before. That's an
+  older picture under the new one's pose, which shakes whenever you move your head. Its queue now
+  waits for each copy. On an RTX 3070 laptop with a Steam Frame, switching it on and off at each
+  recentre was "night and day". X4's frame rate doesn't change. AMD cards never had it: there the
+  runtime shares X4's queue.
 * **A frame's pose always belongs to its picture.** When X4 handed a new picture to the headset
   just as a frame was being sent, the frame could go out with the new picture and the previous
   picture's pose: about 2% of frames on an RTX 5090 at 144 Hz, 0.36% on a Radeon. The mod now
