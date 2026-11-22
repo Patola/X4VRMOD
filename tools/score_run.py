@@ -5393,6 +5393,8 @@ def main(path):
     built = re.search(r"copyring: (\d+) images of (\d+x\d+) x2 layers, format (\d+), (\d+) MB", text)
     if built:
         print(f"copyring {built.group(1)} images of {built.group(2)} x2, {built.group(4)} MB")
+    if "copyring: not used — the runtime shares X4's queue" in text:
+        print("copyring not used — the runtime shares X4's queue (AMD), so it would gain nothing")
     if "copyring: ON — X4's picture goes into the mod's own images" in text:
         print("copyring ON — X4's picture goes through the mod's own images")
     if cr_tot:

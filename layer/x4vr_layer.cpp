@@ -15731,6 +15731,21 @@ static void ring_phase_report(const char *how) {
 // Per X4 frame, on X4's present thread: through the mod's images (true), or
 // straight into the runtime's with its queue waiting for the copy (rc8).
 static bool copy_ring_on() {
+    // Only where the runtime has its own queue (NVIDIA). Where it shares X4's
+    // (AMD: one graphics queue), the copy into its image is queued behind X4's
+    // own work whichever image it comes from, so the ring would add a copy and
+    // memory for nothing; and there the headset already gets its full rate
+    // (take 454, Radeon: 143 frames a second with X4 at 94).
+    if (g_vr_share_queue) {
+        static bool said = false;
+        if (!said && (x4vr::env_on("X4VR_COPY_RING", false) ||
+                      (getenv("X4VR_COPY_RING_AB") && *getenv("X4VR_COPY_RING_AB")))) {
+            said = true;
+            X4VR_LOG("copyring: not used — the runtime shares X4's queue, so its work comes "
+                     "after X4's whichever image the picture is copied from");
+        }
+        return false;
+    }
     struct Mode {
         bool on = false, ab = false, recentre = false;
         double s = 0.0;

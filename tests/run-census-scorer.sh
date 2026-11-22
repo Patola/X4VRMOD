@@ -1432,6 +1432,12 @@ want "copyring: A/B asked of a build without it -> FAIL" /tmp/census-cr-base.log
 { cat /tmp/census-cr-base.log; printf '%s\n' '[  999969.500] layer   copyring: X4VR_COPY_SYNC_AB is set too — two A/Bs in one run can'"'"'t be told apart; this one decides, and copysync'"'"'s runs in its A phases' "$(crt)"; } > /tmp/census-cr-both.log
 want "copyring: both A/Bs in one run -> FAIL" /tmp/census-cr-both.log "FAIL" "two A/Bs can't be told apart"
 absent "copyring: an older build -> silent" "$BASE" copyring
+grep -qF -- '"copyring: not used — the runtime shares X4'"'"'s queue, so its work comes "' layer/x4vr_layer.cpp \
+    && ok "copyring: the shared-queue line matches the layer's format" \
+    || bad "copyring: the shared-queue line changed — replant the line below"
+{ cat /tmp/census-cr-base.log; printf '%s\n' '[  999968.000] layer   copyring: not used — the runtime shares X4'"'"'s queue, so its work comes after X4'"'"'s whichever image the picture is copied from'; } > /tmp/census-cr-amd.log
+want "copyring: a shared queue -> not used, said" /tmp/census-cr-amd.log copyring "not used — the runtime shares X4's queue (AMD)"
+absent "copyring: a shared queue, A/B asked -> no FAIL" /tmp/census-cr-amd.log "FAIL  (copyring|X4VR_COPY_RING)"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" '[  999975.000] inject  sdl: relative mouse mode ON (fold stands down)' '[  999976.000] inject  sdl: relative mouse mode off (fold applies)'; } > /tmp/census-fm-old.log
 want "foot-menu pointer freed, nothing logged -> an older build" /tmp/census-fm-old.log foot-menu "X4 freed the pointer 1 time(s) off the seat and no on-foot menu was logged"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" '[  999969.000] inject  sdl: relative mouse mode off (fold applies)' "$fmout"; } > /tmp/census-fm-none.log
