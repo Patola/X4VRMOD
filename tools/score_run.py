@@ -6189,6 +6189,21 @@ def main(path):
     if lr_win:
         print(f"pointer X4's window is id {lr_win[0][0]}; the id {lr_win[0][1]} an earlier mouse "
               f"event carried was replaced")
+    # The id the mod uses against the window X4's own key presses come from:
+    # in 455i, 455l and 455m they differed (5 or 4 against 6), in every run
+    # that recentred they matched.
+    ids = re.findall(r"inject\s+headlook: (?:sampled a real motion event — window (\d+)|window id "
+                     r"(\d+) from SDL_GetWindowID|X4's window is id (\d+), from SDL_GetWindowID)",
+                     text)
+    keywin = collections.Counter(re.findall(r"inject\s+key\[[a-z]+\] type=0x30[01] .*? window=(\d+) ",
+                                            text))
+    if ids and keywin:
+        mod_id = next(x for x in ids[-1] if x)
+        x4_id, n_keys = keywin.most_common(1)[0]
+        if mod_id != x4_id:
+            fails.append(f"pointer: the mod's window id is {mod_id}, but X4's own key presses come "
+                         f"from window {x4_id} ({n_keys} of them): recentring the pointer and the "
+                         f"mod's synthetic events go to a window that isn't X4's")
     if lr:
         print(f"pointer recentred after {len(lr)} load(s): "
               + ", ".join(f"from {x},{y}" for _t, x, y in lr[:6])

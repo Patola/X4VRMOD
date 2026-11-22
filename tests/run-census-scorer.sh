@@ -1394,6 +1394,21 @@ grep -qF -- '"headlook: X4'"'"'s window is id %u, from SDL_GetWindowID — the i
 plant /tmp/census-ptrwin.log '[  999970.000] inject  headlook: X4'"'"'s window is id 5, from SDL_GetWindowID — the id 4 an earlier mouse event carried is replaced'
 want "pointer window: replaced -> said" /tmp/census-ptrwin.log pointer "X4's window is id 5; the id 4 an earlier mouse event carried was replaced"
 absent "pointer window: not replaced -> silent" "$BASE" "pointer X4's window"
+pwfmt=1
+for frag in '"headlook: sampled a real motion event — window %u, mouse %u; "' \
+            '"headlook: window id %u from SDL_GetWindowID — no mouse nudge "' \
+            '"window=%u down=%d repeat=%d raw=%u ts=%llu action=%d",'; do
+    grep -qF -- "$frag" injector/x4vr_inject.cpp || { pwfmt=0; echo "        missing: $frag"; }
+done
+[ $pwfmt -eq 1 ] && ok "pointer window: the id and key lines match the injector's formats" \
+    || bad "pointer window: the injector's lines changed — replant the lines below"
+pwkey() { printf '[  99998%s.000] inject  key[peep] type=0x300 scancode=40 keycode=0xd mod=0x0 which=0 window=%s down=1 repeat=0 raw=36 ts=1 action=2' "$1" "$2"; }
+plant /tmp/census-pw-bad.log '[  999960.000] inject  headlook: sampled a real motion event — window 4, mouse 0; synthetic events will carry the same' "$(pwkey 1 6)" "$(pwkey 2 6)"
+want "pointer window: the mod's id isn't X4's keys' window (455l) -> FAIL" /tmp/census-pw-bad.log "FAIL" "the mod's window id is 4, but X4's own key presses come from window 6 (2 of them)"
+plant /tmp/census-pw-fixed.log '[  999960.000] inject  headlook: sampled a real motion event — window 4, mouse 0; synthetic events will carry the same' '[  999961.000] inject  headlook: X4'"'"'s window is id 6, from SDL_GetWindowID — the id 4 an earlier mouse event carried is replaced' "$(pwkey 1 6)" "$(pwkey 2 6)"
+absent "pointer window: replaced by X4's own -> no FAIL" /tmp/census-pw-fixed.log "FAIL  pointer: the mod's window"
+plant /tmp/census-pw-ok.log '[  999960.000] inject  headlook: window id 3 from SDL_GetWindowID — no mouse nudge needed to arm' "$(pwkey 1 3)"
+absent "pointer window: X4's own id from the start -> no FAIL" /tmp/census-pw-ok.log "FAIL  pointer: the mod's window"
 
 # ------------------------------------------ copyring: the mod's own images in between
 # B copies X4's picture into the mod's images and, once written, on into the
