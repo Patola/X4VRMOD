@@ -5397,6 +5397,9 @@ def main(path):
         print("copyring not used — the runtime shares X4's queue (AMD), so it would gain nothing")
     if "copyring: ON — X4's picture goes into the mod's own images" in text:
         print("copyring ON — X4's picture goes through the mod's own images")
+    if "copyring: OFF (X4VR_COPY_RING=0)" in text:
+        print("copyring OFF (X4VR_COPY_RING=0) — X4's picture goes straight into the runtime's "
+              "image, its queue waiting (rc8)")
     if cr_tot:
         (frames, copies, noslot, handed, hmean, hmax, dropped, waits, noimg, endn, hz,
          endms) = cr_tot[-1]
@@ -5405,8 +5408,9 @@ def main(path):
               f"{dropped} superseded; {waits} runtime waits timed out, {noimg} no runtime image; "
               f"{hz} headset frames a second, xrEndFrame {endms} ms")
     nb = re.search(r"copyring: NOT built — (.*?); rc8's way all session", text)
-    if nb and cr_asked:
-        fails.append(f"copyring was asked for and its images were not built: {nb.group(1)}")
+    if nb:  # on by default where the runtime has its own queue
+        fails.append(f"copyring: its images were not built ({nb.group(1)}), so this run went "
+                     f"rc8's way")
     if cr_asked and "copyring" not in text:
         fails.append("X4VR_COPY_RING(_AB) was asked for and the layer never mentioned copyring: a "
                      "build from before it ignored the variable, so nothing switched")

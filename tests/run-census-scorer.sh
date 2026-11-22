@@ -1401,7 +1401,7 @@ for frag in '"%s: %llu X4 frame(s), %llu copied into the mod'"'"'s images, %llu 
             'ring_phase_report("ended");' 'ring_phase_report("was running at the end");' \
             '"copyring: A/B at each recentre from here, phase #1 is %s — A copies "' \
             '"copyring: phase #%ld — %s, after recentre %ld"' \
-            '"copyring: ON — X4'"'"'s picture goes into the mod'"'"'s own images, and once "' \
+            '? "copyring: ON — X4'"'"'s picture goes into the mod'"'"'s own images, and "' \
             '"copyring: X4VR_COPY_SYNC_AB is set too — two A/Bs in one run can'"'"'t be "' \
             '"copyring: NOT built — %s; rc8'"'"'s way all session"' \
             '"copyring: %u images of %ux%u x2 layers, format %d, %.0f MB, copied on into the "'; do
@@ -1427,7 +1427,14 @@ want "copyring phases: A went through the ring -> FAIL" /tmp/census-cr-abad.log 
 { cat /tmp/census-cr-base.log; printf '%s\n' "$(crph 1 B)" "$(crp 1 B ended 1200 1190 0)" "$(crt)"; } > /tmp/census-cr-bbad.log
 want "copyring phases: B handed none over -> FAIL" /tmp/census-cr-bbad.log "FAIL" "phase #1 is B and none of its 1190 pictures was handed to the runtime"
 { cat /tmp/census-cr-base.log; printf '%s\n' '[  999968.000] layer   copyring: NOT built — no device memory for it; rc8'"'"'s way all session'; } > /tmp/census-cr-nb.log
-want "copyring: asked, not built -> FAIL" /tmp/census-cr-nb.log "FAIL" "its images were not built: no device memory for it"
+want "copyring: asked, not built -> FAIL" /tmp/census-cr-nb.log "FAIL" "its images were not built (no device memory for it)"
+plant /tmp/census-cr-nbdef.log '[  999968.000] layer   copyring: NOT built — no device memory for it; rc8'"'"'s way all session'
+want "copyring: on by default, not built -> FAIL" /tmp/census-cr-nbdef.log "FAIL" "so this run went rc8's way"
+grep -qF -- ': "copyring: OFF (X4VR_COPY_RING=0) — X4'"'"'s picture is copied "' layer/x4vr_layer.cpp \
+    && ok "copyring: the OFF line matches the layer's format" \
+    || bad "copyring: the OFF line changed — replant the line below"
+plant /tmp/census-cr-off.log '[  999968.000] layer   copyring: OFF (X4VR_COPY_RING=0) — X4'"'"'s picture is copied straight into the runtime'"'"'s image, and its queue waits (rc8)'
+want "copyring: switched off -> said" /tmp/census-cr-off.log copyring "OFF (X4VR_COPY_RING=0)"
 want "copyring: A/B asked of a build without it -> FAIL" /tmp/census-cr-base.log "FAIL" "the layer never mentioned copyring"
 { cat /tmp/census-cr-base.log; printf '%s\n' '[  999969.500] layer   copyring: X4VR_COPY_SYNC_AB is set too — two A/Bs in one run can'"'"'t be told apart; this one decides, and copysync'"'"'s runs in its A phases' "$(crt)"; } > /tmp/census-cr-both.log
 want "copyring: both A/Bs in one run -> FAIL" /tmp/census-cr-both.log "FAIL" "two A/Bs can't be told apart"

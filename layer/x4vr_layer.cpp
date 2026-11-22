@@ -15663,8 +15663,9 @@ static void copy_check_in_turn(uint64_t rel, const PresentDecl &pd) {
 // images (x4vr_copy_ring.hpp); once that copy has finished, the XR thread takes
 // a runtime image, copies the picture into it on the runtime's queue, and hands
 // it over at once, then builds the frame for it. X4's present thread never
-// touches the runtime's swapchain. X4VR_COPY_RING=1 turns it on;
-// X4VR_COPY_RING_AB=<s>|recentre alternates it, blind, with rc8's way.
+// touches the runtime's swapchain. On by default where the runtime has its own
+// queue; X4VR_COPY_RING=0 puts back rc8's way, X4VR_COPY_RING_AB=<s>|recentre
+// alternates the two, blind.
 struct RingStat {
     std::atomic<uint64_t> frames{0};  // X4 frames there was a runtime to send to
     std::atomic<uint64_t> copies{0};  // ...copied into one of the mod's images
@@ -15738,7 +15739,7 @@ static bool copy_ring_on() {
     // (take 454, Radeon: 143 frames a second with X4 at 94).
     if (g_vr_share_queue) {
         static bool said = false;
-        if (!said && (x4vr::env_on("X4VR_COPY_RING", false) ||
+        if (!said && (x4vr::env_on("X4VR_COPY_RING", true) ||
                       (getenv("X4VR_COPY_RING_AB") && *getenv("X4VR_COPY_RING_AB")))) {
             said = true;
             X4VR_LOG("copyring: not used — the runtime shares X4's queue, so its work comes "
@@ -15752,7 +15753,10 @@ static bool copy_ring_on() {
     };
     static const Mode m = [] {
         Mode r;
-        r.on = x4vr::env_on("X4VR_COPY_RING", false);
+        // The default since takes 455j (SteamVR) and 455k (WiVRn), blind on the
+        // RTX 3070 laptop: as smooth to the eye, all of X4's pictures handed
+        // over, and the headset's frames from ~32-50 a second back to ~85-140.
+        r.on = x4vr::env_on("X4VR_COPY_RING", true);
         const char *e = getenv("X4VR_COPY_RING_AB");
         if (e && *e) {
             if (!strcmp(e, "recentre") || !strcmp(e, "recenter")) {
@@ -15778,11 +15782,13 @@ static bool copy_ring_on() {
         g_ring_t0 = mono_now();
     static bool said = false;
     if (!m.ab) {
-        if (!said && m.on) {
+        if (!said) {
             said = true;
-            X4VR_LOG("copyring: ON — X4's picture goes into the mod's own images, and once "
-                     "that copy has finished the XR thread copies it into the runtime's and "
-                     "hands it over");
+            X4VR_LOG(m.on ? "copyring: ON — X4's picture goes into the mod's own images, and "
+                            "once that copy has finished the XR thread copies it into the "
+                            "runtime's and hands it over"
+                          : "copyring: OFF (X4VR_COPY_RING=0) — X4's picture is copied "
+                            "straight into the runtime's image, and its queue waits (rc8)");
         }
         return m.on;
     }

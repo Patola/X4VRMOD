@@ -20,6 +20,18 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
+## Unreleased
+
+* **NVIDIA: the headset gets its frames back.** rc8's fix for the shaking made the headset's
+  runtime wait for each copy of X4's picture, and the mod then sent the headset far fewer frames:
+  on an RTX 3070 laptop about 50 a second instead of 144 through WiVRn, and about 30 through
+  SteamVR. X4's picture now goes into three images of the mod's own first, and only once it's
+  complete is it copied on into the runtime's and handed over. On the same laptop: 134-143 frames
+  a second through WiVRn and 82-90 through SteamVR, every picture X4 drew still shown, and as
+  smooth to the eye. X4's frame rate doesn't change. It takes some graphics memory: about 95 MB
+  with 2016 per eye, 190 MB with 2816, 430 MB with 4224. AMD cards don't need it, and don't use
+  it.
+
 ## v1.0.0-rc8 — 2026-11-21 — Eighth release candidate: no more shaking on NVIDIA, and X4 in front of you (issue #4)
 
 The eighth release candidate for 1.0. Packages call it `1.0.0~rc8` (Arch: `1.0.0rc8`), which

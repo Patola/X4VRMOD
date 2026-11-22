@@ -1387,3 +1387,38 @@ under WiVRn": A, B, A, B. `score_run.py` PASS.
 SteamVR halved its display rate in both (period changes 125-355 per 5 s), down to a quarter in B.
 The mod sent fewer headset frames than X4 drew in B, so some of X4's pictures were never shown:
 the cost the backlog's "release only finished copies" would remove.
+
+## Takes 455i to 455k (2026-11-22) — the headset's frames back on NVIDIA: the mod's own images
+
+RTX 3070 laptop, Steam Frame, eye 2016, no upscaler, 144 Hz, setup 5; blind A/B by recentre with
+phase #1's letter drawn at random; logs in `/tmp`. A is rc8's way each time: X4's picture copied
+straight into the runtime's image, its queue waiting for the copy.
+
+* **Take 455i, SteamVR (code 22f8b8b), `X4VR_COPY_FINISHED_AB=recentre`:** B held the runtime's
+  own images until X4's copy had finished. Patola, counting back from the last stretch: B bad
+  ("flashes/flickers and ghosting"), A good. The copies finished 74-91 ms after the present (the
+  card runs 2-3 frames behind), so with three images B sent 8-11 of X4's pictures a second against
+  A's 24-30, and 10-13 times a second a wait timed out and the image went back unwritten: an older
+  picture shown as the newest. Replaced. (`score_run.py` FAIL: the pointer wasn't recentred after
+  the load; not seen in 455j or 455k.)
+* **Take 455j, SteamVR (code 0176721), `X4VR_COPY_RING_AB=recentre`:** B copies X4's picture into
+  one of the mod's three images and, once written, on into a runtime image on the runtime's queue.
+  Patola: no difference between the stretches; "the best experience I ever had in that laptop".
+  PASS.
+* **Take 455k, WiVRn (code 0176721), the same:** both modes smooth and indistinguishable, a few
+  benign twitches in both (frame or packet drops). He recentred in the start menu: X4 had appeared
+  16° from where he faced (the panel at −36°, the head at −20° when it came down). PASS.
+
+| take | stretch | | headset frames | xrEndFrame | X4 | pictures handed over |
+|---|---|---|---|---|---|---|
+| 455j | 3, 5 | A | 32, 67 a second | 27.2, 9.9 ms | 27 fps | all, the runtime waiting |
+| 455j | 2, 4 | B | 90, 82 a second | 7.4, 8.5 ms | 27 fps | all, 71 ms after the present |
+| 455k | 4, 6 | A | 51, 48 a second | 16.3, 17.6 ms | 30 fps | all, the runtime waiting |
+| 455k | 3, 5, 7 | B | 142, 134, 137 a second | 2.0, 2.9, 2.6 ms | 30-32 fps | all, 58-63 ms after the present |
+
+B is the default since: `X4VR_COPY_RING=0` puts back rc8's way, on NVIDIA only (AMD shares X4's
+queue and never used it).
+
+```
+X4VR_LANGUAGE=en X4VR_TAKE=455K X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2016 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=4032 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_NEEDS_STEAM=1 X4VR_RES=2016x2016 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=none X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_COPY_RING_AB=recentre X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_GAME='/games/SteamLibrary/steamapps/common/X4 Foundations/X4' X4VR_STEER_PICK=1 X4VR_INJECTOR=/usr/lib/x4vrmod/libx4vr_inject.so X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOADING_ART=1 X4VR_LAYER_MANIFEST=/usr/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json X4VR_PROJ_INVPROJ=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take455k.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+```
