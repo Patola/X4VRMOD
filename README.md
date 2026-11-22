@@ -47,7 +47,7 @@ It's a release candidate, so reports from other machines and headsets are what I
 
 **Disclaimer**: Claude Code was used for code assistance, and also for helping creating the first draft of this post (which I altered substantially). Gemini was used for the X4VRMOD logo and artwork.
 
-> **Status: v1.0.0-rc8 — the eighth release candidate for 1.0, playable in VR** ([release notes](docs/releases.md)).
+> **Status: v1.0.0-rc9 — the ninth release candidate for 1.0, playable in VR** ([release notes](docs/releases.md)).
 > X4 runs in VR with in-engine stereo (per-eye lighting), head-look and lean
 > in the cockpit, head-look on foot, the UI on a canvas at the angle X4
 > intended, every menu reachable and lined up with the cursor, and the

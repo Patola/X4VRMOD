@@ -20,17 +20,23 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
-## Unreleased
+## v1.0.0-rc9 — 2026-11-23 — Ninth release candidate: the headset's frames back on NVIDIA
+
+The ninth release candidate for 1.0. Packages call it `1.0.0~rc9` (Arch: `1.0.0rc9`), which
+installs over rc1 to rc8 as an upgrade and sorts before 1.0.0.
+
+Take the package named for your system: Arch, Ubuntu 24.04, Ubuntu 26.04, Debian 13 or Fedora,
+or the zip for anything else.
 
 * **NVIDIA: the headset gets its frames back.** rc8's fix for the shaking made the headset's
   runtime wait for each copy of X4's picture, and the mod then sent the headset far fewer frames:
   on an RTX 3070 laptop about 50 a second instead of 144 through WiVRn, and about 30 through
   SteamVR. X4's picture now goes into three images of the mod's own first, and only once it's
   complete is it copied on into the runtime's and handed over. On the same laptop: 134-143 frames
-  a second through WiVRn and 82-90 through SteamVR, every picture X4 drew still shown, and as
-  smooth to the eye. X4's frame rate doesn't change. It takes some graphics memory: about 95 MB
-  with 2016 per eye, 190 MB with 2816, 430 MB with 4224. AMD cards don't need it, and don't use
-  it.
+  a second through WiVRn and 82-90 through SteamVR, with 2016 per eye; with 2816 through SteamVR,
+  58-84 instead of 18-22. Every picture X4 drew is still shown, and it's as smooth to the eye.
+  X4's frame rate doesn't change. It takes some graphics memory: about 95 MB with 2016 per eye,
+  190 MB with 2816, 430 MB with 4224. AMD cards don't need it, and don't use it.
 * **The pointer starts in the middle of the view after a load, even if the mouse moved while X4
   was starting.** A mouse movement over the window in X4's first seconds left the mod with the
   id of a window X4 then closed: the pointer stayed at the edge, outside what the headset shows,
