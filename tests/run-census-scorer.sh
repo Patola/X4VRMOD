@@ -1387,6 +1387,14 @@ sed 's/env: run = /env: run = X4VR_DECLARE_TURN_AB=recentre /' "$BASE" > /tmp/ce
 want "declturn: A/B asked of a build without it -> FAIL" /tmp/census-dt-old.log "FAIL" "the layer never mentioned the turn correction"
 absent "copysync: an older build -> silent" "$BASE" copysync
 
+# ------------------------------------------ the pointer's window: X4's own decides (455i/l/m)
+grep -qF -- '"headlook: X4'"'"'s window is id %u, from SDL_GetWindowID — the id %u an "' injector/x4vr_inject.cpp \
+    && ok "pointer window: the planted line matches the injector's format" \
+    || bad "pointer window: the injector's line changed — replant the line below"
+plant /tmp/census-ptrwin.log '[  999970.000] inject  headlook: X4'"'"'s window is id 5, from SDL_GetWindowID — the id 4 an earlier mouse event carried is replaced'
+want "pointer window: replaced -> said" /tmp/census-ptrwin.log pointer "X4's window is id 5; the id 4 an earlier mouse event carried was replaced"
+absent "pointer window: not replaced -> silent" "$BASE" "pointer X4's window"
+
 # ------------------------------------------ copyring: the mod's own images in between
 # B copies X4's picture into the mod's images and, once written, on into the
 # runtime's on its queue (2026-11-22). Same guard on the formats.

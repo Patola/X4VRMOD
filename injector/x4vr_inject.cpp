@@ -8474,9 +8474,19 @@ const bool *SDL_GetKeyboardState(int *numkeys) {
 // windowID, so a player on a HOTAS or a stick -- which is most of X4's cockpit
 // audience -- would never arm head-look at all. X4 hands us its window pointer
 // on every SDL_GetWindowSize call, and SDL will convert that to an id for free.
+//
+// And it decides, over a motion event's (2026-11-23). In takes 455i, 455l and
+// 455m a mouse motion arrived some 9 s before X4 first asked its game window's
+// size, for a window X4 had then, and its id was kept: SDL_GetWindowFromID
+// found nothing after, so the pointer was never recentred after the load, and
+// every synthetic key and mouse event carried a window that was gone. The
+// window X4 asks about is its own, so its id replaces any other, and is looked
+// up again only when X4 hands over a different window.
 void note_window(void *win) {
-    if (!win || !this_is_the_game() ||
-        g_motion_seen.load(std::memory_order_relaxed))
+    if (!win || !this_is_the_game())
+        return;
+    static std::atomic<void *> last{nullptr};
+    if (last.exchange(win, std::memory_order_relaxed) == win)
         return;
     static auto get_id = real<uint32_t (*)(void *)>("SDL_GetWindowID");
     if (!get_id)
@@ -8484,11 +8494,20 @@ void note_window(void *win) {
     const uint32_t id = get_id(win);
     if (!id)
         return;
-    g_motion_window.store(id, std::memory_order_relaxed);
+    const bool seen = g_motion_seen.load(std::memory_order_relaxed);
+    const uint32_t was = g_motion_window.exchange(id, std::memory_order_relaxed);
     g_motion_seen.store(1, std::memory_order_relaxed);
-    X4VR_LOG("headlook: window id %u from SDL_GetWindowID — no mouse nudge "
-             "needed to arm",
-             id);
+    if (!seen)
+        X4VR_LOG("headlook: window id %u from SDL_GetWindowID — no mouse nudge "
+                 "needed to arm",
+                 id);
+    else if (was != id) {
+        static std::atomic<int> said{0};
+        if (said.fetch_add(1, std::memory_order_relaxed) < 10)
+            X4VR_LOG("headlook: X4's window is id %u, from SDL_GetWindowID — the id %u an "
+                     "earlier mouse event carried is replaced",
+                     id, was);
+    }
 }
 
 int SDL_GetWindowSize(void *win, int *w, int *h) {

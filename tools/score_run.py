@@ -6181,6 +6181,14 @@ def main(path):
                     r"load from (?:\(unknown\) )?(-?\d+),(-?\d+) to", text)
     lr_arm = re.search(r"\[\s*([\d.]+)\]\s+inject\s+milestone: head-look write "
                        r"ARMED", text)
+    # Takes 455i, 455l, 455m (2026-11-23): an early mouse motion's window id
+    # was kept, SDL found no such window after, and the pointer was never
+    # recentred. X4's own window now replaces it.
+    lr_win = re.findall(r"inject\s+headlook: X4's window is id (\d+), from SDL_GetWindowID — "
+                        r"the id (\d+) an earlier mouse event carried is replaced", text)
+    if lr_win:
+        print(f"pointer X4's window is id {lr_win[0][0]}; the id {lr_win[0][1]} an earlier mouse "
+              f"event carried was replaced")
     if lr:
         print(f"pointer recentred after {len(lr)} load(s): "
               + ", ".join(f"from {x},{y}" for _t, x, y in lr[:6])
