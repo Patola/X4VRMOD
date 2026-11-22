@@ -5376,6 +5376,64 @@ def main(path):
             fails.append(f"copysync: phase #{n} is B and none of its {copies} copies was "
                          f"waited for — the A/B did not hold its phase")
 
+    # --- copyfinish: the runtime is handed only finished copies (2026-11-22) --
+    #
+    # rc8 made the runtime's queue wait for each copy, and its xrEndFrame then
+    # waited too: fewer headset frames than 144, through SteamVR fewer than X4
+    # drew (takes 455g2, 455h). Here the XR thread releases each image once its
+    # copy has finished. In B nothing handed over may still be copying.
+    cf_stats = (r"(\d+) copies into the runtime's images, (\d+) released once finished \(held "
+                r"([\d.]+) ms on average, ([\d.]+) at most\); of (\d+) new image\(s\) handed over "
+                r"at xrEndFrame, (\d+) still being copied; (\d+) headset frame\(s\), ([\d.]+) a "
+                r"second, xrEndFrame ([\d.]+) ms on average; (\d+) copies never shown, (\d+) "
+                r"frame\(s\) with no image free")
+    cf_ab = bool(re.search(r"\bX4VR_COPY_FINISHED_AB=\S+", run or ""))
+    cf_tot = re.findall(r"copyfinish \((?:periodic|final)\): " + cf_stats, text)
+    if "copyfinish: ON — the XR thread hands the runtime each image once" in text:
+        print("copyfinish ON — the runtime is handed each image once its copy has finished")
+    if cf_tot:
+        (copies, held, hmean, hmax, images, running, endn, hz, endms, unshown,
+         nofree) = cf_tot[-1]
+        print(f"copyfinish {copies} copies, {held} released once finished (held {hmean} ms on "
+              f"average, {hmax} at most); {running} of {images} handed over still copying; "
+              f"{hz} headset frames a second, xrEndFrame {endms} ms; {unshown} never shown, "
+              f"{nofree} with no image free")
+    if cf_ab and "copyfinish" not in text:
+        fails.append("X4VR_COPY_FINISHED_AB was asked for and the layer never mentioned "
+                     "copyfinish: a build from before it ignored the variable, so nothing "
+                     "switched")
+    if "copyfinish: X4VR_COPY_SYNC_AB is set too" in text:
+        fails.append("X4VR_COPY_FINISHED_AB and X4VR_COPY_SYNC_AB in one run: two A/Bs can't "
+                     "be told apart")
+    cf_phases = re.findall(r"\[\s*([\d.]+)\]\s+layer\s+copyfinish: phase #(\d+) — ([AB])\b",
+                           text)
+    if cf_phases:
+        t0 = float(cf_phases[0][0])
+        print("copyfinish A = each copy handed over at once, the runtime's queue waiting for "
+              "it (rc8), B = handed over once finished")
+        if "copyfinish: A/B at each recentre from here" in text:
+            print("copyfinish the phase changed at each recentre (X4VR_COPY_FINISHED_AB="
+                  "recentre), and phase #1's letter was drawn at random: Patola's stretch N "
+                  "is phase #N")
+        print(f"copyfinish {len(cf_phases)} phase(s): " + ", ".join(
+            f"#{n} {k} at +{float(t) - t0:.0f} s" for t, n, k in cf_phases[:16])
+              + (" ..." if len(cf_phases) > 16 else ""))
+    elif cf_ab and cf_tot:
+        fails.append("X4VR_COPY_FINISHED_AB was asked for and no phase began")
+    for (n, k, secs, copies, held, hmean, hmax, images, running, endn, hz, endms, unshown,
+         nofree) in re.findall(r"copyfinish: phase #(\d+) \(([AB])\) (?:ended|was running at "
+                               r"the end) after (\d+) s: " + cf_stats, text):
+        print(f"copyfinish   #{int(n):<3} {k}  {int(secs):5d} s  {int(copies):6d} copies, "
+              f"{int(held):6d} held ({hmean} ms avg, {hmax} max)  {int(running):5d} of "
+              f"{int(images):6d} still copying  {hz} headset Hz, xrEndFrame {endms} ms  "
+              f"{int(unshown):5d} never shown, {int(nofree):5d} no image free")
+        if k == "B" and int(running) > 0:
+            fails.append(f"copyfinish: phase #{n} is B and {running} image(s) were handed over "
+                         f"while still being copied — what B exists to prevent")
+        if k == "B" and int(copies) > 50 and int(held) == 0:
+            fails.append(f"copyfinish: phase #{n} is B and none of its {copies} copies was "
+                         f"held until finished — the A/B did not hold its phase")
+
     # --- the space forward is measured in (issue #4, 2026-11-19) -------------
     #
     # The seated space (LOCAL): the runtime sets its forward (on WiVRn, where

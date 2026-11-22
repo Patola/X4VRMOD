@@ -1386,6 +1386,46 @@ absent "copysync: A/B asked on a shared queue -> no FAIL" /tmp/census-cs-abshare
 sed 's/env: run = /env: run = X4VR_DECLARE_TURN_AB=recentre /' "$BASE" > /tmp/census-dt-old.log
 want "declturn: A/B asked of a build without it -> FAIL" /tmp/census-dt-old.log "FAIL" "the layer never mentioned the turn correction"
 absent "copysync: an older build -> silent" "$BASE" copysync
+
+# ------------------------------------------ copyfinish: only finished copies handed over
+# rc8's runtime wait cost headset frames (takes 455g2, 455h); B releases each
+# image once its copy has finished, from the XR thread (2026-11-22).
+cffmt=1
+for frag in '"%s: %llu copies into the runtime'"'"'s images, %llu released once finished (held "' \
+            '"%.2f ms on average, %.2f at most); of %llu new image(s) handed over at "' \
+            '"xrEndFrame, %llu still being copied; %llu headset frame(s), %.1f a second, "' \
+            '"xrEndFrame %.3f ms on average; %llu copies never shown, %llu frame(s) with no "' \
+            '"image free",' \
+            'snprintf(head, sizeof head, "copyfinish (%s)", when);' \
+            '"copyfinish: phase #%ld (%s) %s after %.0f s",' \
+            'finish_phase_report("ended");' 'finish_phase_report("was running at the end");' \
+            '"copyfinish: A/B at each recentre from here, phase #1 is %s — A hands "' \
+            '"copyfinish: phase #%ld — %s, after recentre %ld"' \
+            '"copyfinish: ON — the XR thread hands the runtime each image once "' \
+            '"copyfinish: X4VR_COPY_SYNC_AB is set too — two A/Bs in one run can'"'"'t "'; do
+    grep -qF -- "$frag" layer/x4vr_layer.cpp || { cffmt=0; echo "        missing: $frag"; }
+done
+[ $cffmt -eq 1 ] && ok "copyfinish: the planted lines match the layer's formats" \
+    || bad "copyfinish: the layer's lines changed — replant the lines below"
+cfp() { printf '[  99998%s.000] layer   copyfinish: phase #%s (%s) %s after 40 s: %s copies into the runtime'"'"'s images, %s released once finished (held 9.50 ms on average, 21.00 at most); of %s new image(s) handed over at xrEndFrame, %s still being copied; 5760 headset frame(s), 144.0 a second, xrEndFrame 1.300 ms on average; 12 copies never shown, 3 frame(s) with no image free' "$1" "$1" "$2" "$3" "$4" "$5" "$4" "$6"; }
+cfph() { printf '[  99997%s.500] layer   copyfinish: phase #%s — %s, after recentre %s' "$1" "$1" "$2" "$(( $1 - 1 ))"; }
+cft() { printf '[  999990.000] layer   copyfinish (final): 3200 copies into the runtime'"'"'s images, 1600 released once finished (held 9.50 ms on average, 21.00 at most); of 3150 new image(s) handed over at xrEndFrame, 1500 still being copied; 11520 headset frame(s), 110.0 a second, xrEndFrame 4.000 ms on average; 50 copies never shown, 3 frame(s) with no image free'; }
+cfrec='[  999969.000] layer   copyfinish: A/B at each recentre from here, phase #1 is A — A hands the runtime each copy at once and has its queue wait for it (rc8); B hands it each copy once finished'
+sed 's/env: run = /env: run = X4VR_COPY_FINISHED_AB=recentre /' "$BASE" > /tmp/census-cf-base.log
+{ cat /tmp/census-cf-base.log; printf '%s\n' "$cfrec" "$(cfph 1 A)" "$(cfph 2 B)" "$(cfp 1 A ended 1600 0 1500)" "$(cfp 2 B 'was running at the end' 1600 1600 0)" "$(cft)"; } > /tmp/census-cf-ab.log
+want "copyfinish phases: B, the last one -> its row" /tmp/census-cf-ab.log "copyfinish   #2" "B     40 s    1600 copies,   1600 held (9.50 ms avg, 21.00 max)      0 of   1600 still copying  144.0 headset Hz, xrEndFrame 1.300 ms     12 never shown,     3 no image free"
+want "copyfinish phases: A -> its row" /tmp/census-cf-ab.log "copyfinish   #1" "A     40 s    1600 copies,      0 held"
+want "copyfinish: the session's line" /tmp/census-cf-ab.log copyfinish "3200 copies, 1600 released once finished"
+want "copyfinish phases: by recentre -> said" /tmp/census-cf-ab.log copyfinish "phase #1's letter was drawn at random: Patola's stretch N is phase #N"
+absent "copyfinish phases: a clean A/B -> no FAIL" /tmp/census-cf-ab.log "FAIL  copyfinish"
+{ cat /tmp/census-cf-base.log; printf '%s\n' "$(cfph 1 B)" "$(cfp 1 B ended 1600 1600 7)" "$(cft)"; } > /tmp/census-cf-run.log
+want "copyfinish phases: B handed over a copy still running -> FAIL" /tmp/census-cf-run.log "FAIL" "phase #1 is B and 7 image(s) were handed over while still being copied"
+{ cat /tmp/census-cf-base.log; printf '%s\n' "$(cfph 1 B)" "$(cfp 1 B ended 1600 0 0)" "$(cft)"; } > /tmp/census-cf-held.log
+want "copyfinish phases: B held none -> FAIL" /tmp/census-cf-held.log "FAIL" "phase #1 is B and none of its 1600 copies was held until finished"
+want "copyfinish: A/B asked of a build without it -> FAIL" /tmp/census-cf-base.log "FAIL" "the layer never mentioned copyfinish"
+{ cat /tmp/census-cf-base.log; printf '%s\n' '[  999969.500] layer   copyfinish: X4VR_COPY_SYNC_AB is set too — two A/Bs in one run can'"'"'t be told apart; this one decides, and copysync'"'"'s runs in its A phases' "$(cft)"; } > /tmp/census-cf-both.log
+want "copyfinish: both A/Bs in one run -> FAIL" /tmp/census-cf-both.log "FAIL" "two A/Bs can't be told apart"
+absent "copyfinish: an older build -> silent" "$BASE" copyfinish
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" "$fmout" '[  999975.000] inject  sdl: relative mouse mode ON (fold stands down)' '[  999976.000] inject  sdl: relative mouse mode off (fold applies)'; } > /tmp/census-fm-old.log
 want "foot-menu pointer freed, nothing logged -> an older build" /tmp/census-fm-old.log foot-menu "X4 freed the pointer 1 time(s) off the seat and no on-foot menu was logged"
 { cat /tmp/census-fm-base.log; printf '%s\n' "$fmpat" '[  999969.000] inject  sdl: relative mouse mode off (fold applies)' "$fmout"; } > /tmp/census-fm-none.log
