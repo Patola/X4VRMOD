@@ -31,6 +31,10 @@ on the remote beside their `take-NNN-name` twins.
   smooth to the eye. X4's frame rate doesn't change. It takes some graphics memory: about 95 MB
   with 2016 per eye, 190 MB with 2816, 430 MB with 4224. AMD cards don't need it, and don't use
   it.
+* **The pointer starts in the middle of the view after a load, even if the mouse moved while X4
+  was starting.** A mouse movement over the window in X4's first seconds left the mod with the
+  id of a window X4 then closed: the pointer stayed at the edge, outside what the headset shows,
+  until steering was toggled.
 
 ## v1.0.0-rc8 — 2026-11-21 — Eighth release candidate: no more shaking on NVIDIA, and X4 in front of you (issue #4)
 
