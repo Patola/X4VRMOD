@@ -1206,6 +1206,15 @@ inline bool swapchain_acquire_timeout(Swapchain &sc, uint32_t *index,
     return sc.s->rt->api.WaitSwapchainImage(sc.handle, &wi) == XR_SUCCESS;
 }
 
+// The wait alone, for an image acquired earlier whose wait timed out: tried
+// again rather than handing the image back unwritten (the layer's copyring).
+inline bool swapchain_wait(Swapchain &sc, XrDuration timeout) {
+    XrSwapchainImageWaitInfo wi{};
+    wi.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO;
+    wi.timeout = timeout;
+    return sc.s->rt->api.WaitSwapchainImage(sc.handle, &wi) == XR_SUCCESS;
+}
+
 inline bool swapchain_acquire(Swapchain &sc, uint32_t *index) {
     XrSwapchainImageAcquireInfo ai{};
     ai.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO;

@@ -19,12 +19,19 @@
 // (NVIDIA's), the composite also signals a semaphore that queue waits on, and
 // never signals it again before that wait -- a binary semaphore signalled twice
 // is a validation error here and undefined on a GPU.
+//
+// copyring (2026-11-22): the composite writes one of the mod's own images
+// instead, signals a fence when it has, and the image is copied on into the
+// runtime's (CopyRing::record_hand) -- through the plain copy and the warp, and
+// a slot used twice.
 #define X4VR_LOG_TAG "test"
 #include "../layer/x4vr_sbs.hpp"
+#include "../layer/x4vr_copy_ring.hpp"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <unistd.h>
 #include <vector>
 
@@ -563,6 +570,104 @@ int main() {
             fclose(lf);
         }
         ok("copysync: and the log says why", said);
+    }
+
+    // ---- copyring: the mod's images in between ---------------------------------
+    {
+        RingFns rf;
+#define RESOLVE(name) rf.name = (PFN_vk##name)vkGetDeviceProcAddr(g_dev, "vk" #name);
+        X4VR_RING_FNS(RESOLVE)
+#undef RESOLVE
+        // The runtime's queue on NVIDIA is a second one of X4's graphics family;
+        // with none, the same queue does (the copy's barriers name graphics stages).
+        const bool second = rt_queue != VK_NULL_HANDLE && rt_family == c.family;
+        const VkQueue hq = second ? rt_queue : c.queue;
+        CopyRing ring;
+        ring.configure(g_dev, rf, g_mp);
+        std::string why;
+        const bool built = ring.build(VK_FORMAT_B8G8R8A8_SRGB, {kW, kH}, 2, c.family, &why);
+        ok("copyring: the images are built", built);
+        if (!built)
+            printf("     copyring: %s\n", why.c_str());
+        if (built) {
+            printf("     copyring: handed over on %s\n",
+                   second ? "a second queue of the graphics family" : "the same queue");
+            auto write = [&](uint32_t i, const MenuWarp::Params *warp) {
+                ring.reset(ring.slot(i).written);
+                x4_frame(c, eye, pic, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                sbs.request_vr_blit(ring.slot(i).image, {kW, kH}, 2, VK_FORMAT_B8G8R8A8_SRGB, warp,
+                                    ring.slot(i).written);
+                const VkSemaphore done =
+                    sbs.composite(c.queue, c.family, sc, 0, nullptr, 0, nullptr);
+                if (done != VK_NULL_HANDLE) {
+                    const VkPipelineStageFlags st = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                    VkSubmitInfo si{};
+                    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                    si.waitSemaphoreCount = 1;
+                    si.pWaitSemaphores = &done;
+                    si.pWaitDstStageMask = &st;
+                    vkQueueSubmit(c.queue, 1, &si, VK_NULL_HANDLE);
+                }
+                const bool sent = sbs.take_vr_done();
+                vkQueueWaitIdle(c.queue);
+                return sent && ring.done(ring.slot(i).written);
+            };
+            auto hand = [&](uint32_t i) {
+                ring.reset(ring.slot(i).handed);
+                if (!ring.record_hand(i, xr))
+                    return false;
+                VkSubmitInfo si{};
+                si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                si.commandBufferCount = 1;
+                si.pCommandBuffers = &ring.slot(i).cb;
+                if (vkQueueSubmit(hq, 1, &si, ring.slot(i).handed) != VK_SUCCESS)
+                    return false;
+                vkQueueWaitIdle(hq);
+                return ring.done(ring.slot(i).handed);
+            };
+            ok("copyring: the composite wrote slot 0 and its fence says so", write(0, nullptr));
+            ok("copyring: slot 0 copied on into the runtime's image", hand(0));
+            ok("copyring: which is the eye image, byte for byte", runtime_reads(c, xr) == pic);
+            MenuWarp::Params pw;
+            warp_matrix(id, id, pw.m);
+            pw.src[0] = pw.src[1] = pw.dst[0] = pw.dst[1] = field;
+            ok("copyring: the warp, unturned, wrote slot 1", write(1, &pw));
+            ok("copyring: and said it warped", sbs.vr_last_warped());
+            ok("copyring: slot 1 copied on", hand(1));
+            got = runtime_reads(c, xr);
+            int worst_r = 0;
+            for (size_t k = 0; k < pic.size(); k++)
+                worst_r = std::max(worst_r, std::abs((int)got[k] - (int)pic[k]));
+            printf("     copyring, warp unturned: worst byte %d\n", worst_r);
+            ok("copyring: the warp's picture within 1", worst_r <= 1);
+            ok("copyring: slot 0 again, from the layout its copy left", write(0, nullptr));
+            ok("copyring: copied on again", hand(0));
+            ok("copyring: byte for byte again", runtime_reads(c, xr) == pic);
+            // Asked for, never composited: dropped, the fence never submitted,
+            // and the next composite writes nothing into that slot.
+            ring.reset(ring.slot(2).written);
+            sbs.request_vr_blit(ring.slot(2).image, {kW, kH}, 2, VK_FORMAT_B8G8R8A8_SRGB, nullptr,
+                                ring.slot(2).written);
+            ok("copyring: a request no composite reached says so", !sbs.take_vr_done());
+            x4_frame(c, eye, pic, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+            const VkSemaphore d2 = sbs.composite(c.queue, c.family, sc, 0, nullptr, 0, nullptr);
+            if (d2 != VK_NULL_HANDLE) {
+                const VkPipelineStageFlags st = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                VkSubmitInfo si{};
+                si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                si.waitSemaphoreCount = 1;
+                si.pWaitSemaphores = &d2;
+                si.pWaitDstStageMask = &st;
+                vkQueueSubmit(c.queue, 1, &si, VK_NULL_HANDLE);
+            }
+            vkQueueWaitIdle(c.queue);
+            ok("copyring: and the next composite left that slot alone",
+               !sbs.take_vr_done() && !ring.done(ring.slot(2).written));
+            ring.wait_all(1000ull * 1000 * 1000);
+            for (uint32_t i = 0; i < CopyRing::kSlots; i++)
+                sbs.forget_target(ring.slot(i).image);
+            ring.destroy();
+        }
     }
 
     sbs.forget_target(xr);

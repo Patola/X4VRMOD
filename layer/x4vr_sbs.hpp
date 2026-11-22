@@ -183,6 +183,8 @@ public:
     uint64_t ui_dumps_ = 0;
     // Set by request_vr_blit(), likewise one-shot.
     VkImage vr_dst_ = VK_NULL_HANDLE;
+    VkFence vr_done_ = VK_NULL_HANDLE; // copyring: signalled after the copy
+    bool vr_done_sent_ = false;
     // Task #57 layer B. `ui_src_` is the layer's staging image, filled at the
     // end of X4's UI pass; `ui_dst_` is the second XR swapchain's acquired
     // image. Both are cleared after one composite, like vr_dst_ above, so a
@@ -291,11 +293,17 @@ public:
     // that cannot be recorded falls back to the copy, and vr_last_warped() says
     // which one this frame got, because the pose the frame is declared with
     // follows from it.
+    // `done`, if given (copyring, 2026-11-22), is submitted to the queue right
+    // after the composite, so it signals once the copy into `dst` has run; it
+    // must be unsignalled. take_vr_done() says whether it went.
     void request_vr_blit(VkImage dst, VkExtent2D extent, uint32_t layers,
                          VkFormat format = VK_FORMAT_UNDEFINED,
-                         const MenuWarp::Params *warp = nullptr) {
+                         const MenuWarp::Params *warp = nullptr,
+                         VkFence done = VK_NULL_HANDLE) {
         std::lock_guard<std::mutex> lock(mu_);
         vr_dst_ = dst;
+        vr_done_ = done;
+        vr_done_sent_ = false;
         vr_extent_ = extent;
         vr_layers_ = layers;
         vr_format_ = format;
@@ -305,6 +313,18 @@ public:
         vr_warp_on_ = warp != nullptr && format != VK_FORMAT_UNDEFINED;
         if (warp)
             vr_warp_ = *warp;
+    }
+    // One-shot: whether the last request's `done` fence was submitted (the
+    // composite wrote `dst`). A request the composite never reached is dropped
+    // here, so a later composite can't write an image nobody asked for anymore.
+    bool take_vr_done() {
+        std::lock_guard<std::mutex> lock(mu_);
+        const bool sent = vr_done_sent_;
+        vr_done_sent_ = false;
+        vr_done_ = VK_NULL_HANDLE;
+        vr_dst_ = VK_NULL_HANDLE;
+        vr_warp_on_ = false;
+        return sent;
     }
     bool vr_last_warped() {
         std::lock_guard<std::mutex> lock(mu_);
@@ -543,6 +563,7 @@ public:
 
         VkCommandBuffer cb = c.cmds[image];
         bool wrote_runtime = false; // a copy into one of the runtime's images
+        bool wrote_vr = false;      // ...into the eye image asked for (vr_dst_)
         if (fns_.ResetCommandBuffer(cb, 0) != VK_SUCCESS)
             return VK_NULL_HANDLE;
 
@@ -762,6 +783,7 @@ public:
                     }
                     vr_blits_++;
                     wrote_runtime = true;
+                    wrote_vr = true;
                 }
                 vr_dst_ = VK_NULL_HANDLE;
                 vr_warp_on_ = false;
@@ -901,6 +923,11 @@ public:
             X4VR_LOG("sbs: composite submit failed — presenting untouched");
             return VK_NULL_HANDLE;
         }
+        // copyring: a submission of no batches signals its fence once all the
+        // work before it on this queue has run, the copy just submitted with it.
+        if (wrote_vr && vr_done_ != VK_NULL_HANDLE)
+            vr_done_sent_ = fns_.QueueSubmit(queue, 0, nullptr, vr_done_) == VK_SUCCESS;
+        vr_done_ = VK_NULL_HANDLE;
         if (wrote_runtime) {
             rt_fence_out_ = c.fences[image];
             rt_sync_out_ = rt_signal ? c.rt_sync[image] : VK_NULL_HANDLE;

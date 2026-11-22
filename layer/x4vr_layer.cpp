@@ -29,7 +29,6 @@
 #include <cmath>
 #include <ctime>
 #include <cstring>
-#include <deque>
 #include <sys/random.h>
 #include <map>
 #include <mutex>
@@ -52,6 +51,7 @@
 #include "../common/x4vr_immortal.hpp"
 #include "x4vr_sbs.hpp"
 #include "x4vr_loading_panel.hpp"
+#include "x4vr_copy_ring.hpp"
 #include "vr_loading_assets.hpp"
 #include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
@@ -216,6 +216,9 @@ x4vr::SbsCompositor &g_sbs = x4vr::immortal<x4vr::SbsCompositor>();
 // vkCreateDevice beside the composite.
 x4vr::LoadingUpload &g_loading = x4vr::immortal<x4vr::LoadingUpload>();
 x4vr::LoadingFns g_loading_fns;
+// copyring (2026-11-22): the mod's own images between X4's picture and the
+// runtime's (x4vr_copy_ring.hpp), configured beside them.
+x4vr::CopyRing &g_ring = x4vr::immortal<x4vr::CopyRing>();
 // Read through env_on because the injector mirrors this exact decision to
 // choose whether to hide the compositor's pointer. Two spellings of the same
 // rule is how they come to disagree.
@@ -15632,31 +15635,6 @@ static void copy_wait_before_release(void *user) {
     w.ok = g_loading_fns.QueueSubmit(q, 1, &si, VK_NULL_HANDLE) == VK_SUCCESS;
 }
 
-// copyfinish's counts (below): declared here for the check at xrEndFrame.
-struct FinishStat {
-    std::atomic<uint64_t> copies{0};   // copies into the runtime's eye images
-    std::atomic<uint64_t> held{0};     // ...released by the XR thread once finished
-    std::atomic<uint64_t> hold_us{0};  // ...time from the copy's submission to that
-    std::atomic<uint64_t> hold_max_us{0};
-    std::atomic<uint64_t> images{0};   // new images handed over at xrEndFrame
-    std::atomic<uint64_t> running{0};  // ...whose copy had not finished then
-    std::atomic<uint64_t> end_n{0};    // xrEndFrame calls with X4's image or the panel
-    std::atomic<uint64_t> end_us{0};
-    std::atomic<uint64_t> acq_fail{0}; // frames with no image to copy into
-    void clear() {
-        copies = 0, held = 0, hold_us = 0, hold_max_us = 0, images = 0, running = 0;
-        end_n = 0, end_us = 0, acq_fail = 0;
-    }
-};
-static FinishStat g_finstat;  // the session's
-static FinishStat g_finphase; // the A/B phase in force
-static long g_finphase_n = -1; // X4's present thread
-static bool g_finphase_b = false;
-static double g_finphase_t0 = 0.0;
-static bool g_finish_asked = false; // the run asked for it, at all (log and stats)
-static bool g_finish_frame = false; // this X4 frame's way (X4's present thread)
-static double g_finish_t0 = 0.0;    // when the run first asked
-
 // At xrEndFrame, inside its queue turn: had the copy of the image it hands over
 // finished? Once per new image; the runtime's later read is what could see it
 // unwritten, so this is the exposure, and B is what closes it.
@@ -15674,68 +15652,93 @@ static void copy_check_in_turn(uint64_t rel, const PresentDecl &pd) {
                 c->running_unordered.fetch_add(1, std::memory_order_relaxed);
         }
     }
-    for (FinishStat *c : {&g_finstat, &g_finphase}) {
-        c->images.fetch_add(1, std::memory_order_relaxed);
-        if (running)
-            c->running.fetch_add(1, std::memory_order_relaxed);
-    }
 }
 
-// **copyfinish (2026-11-22): release only finished copies.** copysync made
-// the runtime's queue wait for each copy (rc8), and WiVRn's and SteamVR's
-// xrEndFrame then wait for that queue on the CPU: 6.7-20 ms instead of 1.3-6
-// on the RTX 3070 laptop, so the mod sent the headset ~40-65 frames a second
+// **copyring (2026-11-22).** rc8's copysync made the runtime's queue wait for
+// each copy into its images, and the runtimes' xrEndFrame then waited for that
+// queue on the CPU: on the RTX 3070 laptop the headset got 28-65 frames a second
 // instead of 144, and through SteamVR fewer than X4 drew (takes 455g2, 455h).
-// Here X4's present thread still acquires and copies, but queues the release;
-// the XR thread, at the start of each frame, releases in acquire order every
-// queued image whose copy has finished (its fence, read without waiting), then
-// builds the frame. The runtime is only ever handed a written image, nothing
-// waits inside xrEndFrame, and the release and the frame's declaration are on
-// one thread, so no release can fall between them (the in-turn correction then
-// finds nothing to do). The cost: an image is held until its copy is done, so
-// with three images an acquire can find none free and that frame isn't sent.
-// X4VR_COPY_FINISHED=1 turns it on; X4VR_COPY_FINISHED_AB=<s>|recentre
-// alternates it, blind, with rc8's way (the runtime waits for each copy).
+// Holding the runtime's own images until X4's copy had finished starved them
+// instead (take 455i). Here X4's picture goes into one of the mod's three
+// images (x4vr_copy_ring.hpp); once that copy has finished, the XR thread takes
+// a runtime image, copies the picture into it on the runtime's queue, and hands
+// it over at once, then builds the frame for it. X4's present thread never
+// touches the runtime's swapchain. X4VR_COPY_RING=1 turns it on;
+// X4VR_COPY_RING_AB=<s>|recentre alternates it, blind, with rc8's way.
+struct RingStat {
+    std::atomic<uint64_t> frames{0};  // X4 frames there was a runtime to send to
+    std::atomic<uint64_t> copies{0};  // ...copied into one of the mod's images
+    std::atomic<uint64_t> no_slot{0}; // ...with none of them free
+    std::atomic<uint64_t> handed{0};  // copied on into a runtime image and handed over
+    std::atomic<uint64_t> hold_us{0}; // ...from X4's present to the hand-over
+    std::atomic<uint64_t> hold_max_us{0};
+    std::atomic<uint64_t> dropped{0}; // finished, but a newer picture went first
+    std::atomic<uint64_t> waits{0};   // runtime image waits that timed out (retried)
+    std::atomic<uint64_t> no_image{0}; // the runtime had no image to give
+    std::atomic<uint64_t> end_n{0};   // xrEndFrame with a layer
+    std::atomic<uint64_t> end_us{0};
+    void clear() {
+        frames = 0, copies = 0, no_slot = 0, handed = 0, hold_us = 0, hold_max_us = 0;
+        dropped = 0, waits = 0, no_image = 0, end_n = 0, end_us = 0;
+    }
+};
+static RingStat g_ringstat;  // the session's
+static RingStat g_ringphase; // the A/B phase in force
+static long g_ringphase_n = -1; // X4's present thread
+static bool g_ringphase_b = false;
+static double g_ringphase_t0 = 0.0;
+static double g_ring_t0 = 0.0;     // when the run first asked
+static bool g_ring_asked = false;  // the run asked for it at all
+static bool g_ring_frame = false;  // this X4 frame goes through the ring (present thread)
+static int g_ring_claim = -1;      // ...into this slot (present thread)
+static std::atomic<bool> g_ring_ready{false}; // built, for the XR thread
+static bool g_ring_failed = false; // could not be built: rc8's way all session
+static std::mutex g_ring_mu;       // the slots' states, their pictures' inputs
+static PresentDecl g_ring_decl[x4vr::CopyRing::kSlots]; // under g_ring_mu
+static uint64_t g_ring_serial = 0; // under g_ring_mu
+// The runtime's eye swapchain, from an acquire to its release: X4's present
+// thread holds it across a copy the old way, the XR thread across a hand-over.
+// Both only try it, so neither ever waits on the other.
+static std::mutex g_rt_sc_mu;
+static bool g_rt_sc_held = false; // by X4's present thread, this frame
 
-static void finish_stat_line(const char *head, const FinishStat &c, double secs) {
-    const uint64_t copies = c.copies.load(), held = c.held.load(), images = c.images.load();
-    const uint64_t en = c.end_n.load();
-    X4VR_LOG("%s: %llu copies into the runtime's images, %llu released once finished (held "
-             "%.2f ms on average, %.2f at most); of %llu new image(s) handed over at "
-             "xrEndFrame, %llu still being copied; %llu headset frame(s), %.1f a second, "
-             "xrEndFrame %.3f ms on average; %llu copies never shown, %llu frame(s) with no "
-             "image free",
-             head, (unsigned long long)copies, (unsigned long long)held,
-             held ? (double)c.hold_us.load() / (double)held / 1000.0 : 0.0,
-             (double)c.hold_max_us.load() / 1000.0, (unsigned long long)images,
-             (unsigned long long)c.running.load(), (unsigned long long)en,
-             secs > 0.0 ? (double)en / secs : 0.0,
-             en ? (double)c.end_us.load() / (double)en / 1000.0 : 0.0,
-             (unsigned long long)(copies > images ? copies - images : 0),
-             (unsigned long long)c.acq_fail.load());
+static void ring_stat_line(const char *head, const RingStat &c, double secs) {
+    const uint64_t handed = c.handed.load(), en = c.end_n.load();
+    X4VR_LOG("%s: %llu X4 frame(s), %llu copied into the mod's images, %llu with none free; "
+             "%llu handed to the runtime (%.2f ms after X4's present on average, %.2f at "
+             "most), %llu finished but superseded; %llu runtime image wait(s) timed out, "
+             "%llu time(s) the runtime had no image; %llu headset frame(s), %.1f a second, "
+             "xrEndFrame %.3f ms on average",
+             head, (unsigned long long)c.frames.load(), (unsigned long long)c.copies.load(),
+             (unsigned long long)c.no_slot.load(), (unsigned long long)handed,
+             handed ? (double)c.hold_us.load() / (double)handed / 1000.0 : 0.0,
+             (double)c.hold_max_us.load() / 1000.0, (unsigned long long)c.dropped.load(),
+             (unsigned long long)c.waits.load(), (unsigned long long)c.no_image.load(),
+             (unsigned long long)en, secs > 0.0 ? (double)en / secs : 0.0,
+             en ? (double)c.end_us.load() / (double)en / 1000.0 : 0.0);
 }
 
-static void finish_phase_report(const char *how) {
-    if (g_finphase_n < 0)
+static void ring_phase_report(const char *how) {
+    if (g_ringphase_n < 0)
         return;
     char head[160];
-    const double secs = mono_now() - g_finphase_t0;
-    snprintf(head, sizeof head, "copyfinish: phase #%ld (%s) %s after %.0f s",
-             g_finphase_n + 1, g_finphase_b ? "B" : "A", how, secs);
-    finish_stat_line(head, g_finphase, secs);
+    const double secs = mono_now() - g_ringphase_t0;
+    snprintf(head, sizeof head, "copyring: phase #%ld (%s) %s after %.0f s", g_ringphase_n + 1,
+             g_ringphase_b ? "B" : "A", how, secs);
+    ring_stat_line(head, g_ringphase, secs);
 }
 
-// Per X4 frame, on X4's present thread, before the acquire: release only
-// finished copies (true), or hand each to the runtime at once (rc8).
-static bool copy_finish_on() {
+// Per X4 frame, on X4's present thread: through the mod's images (true), or
+// straight into the runtime's with its queue waiting for the copy (rc8).
+static bool copy_ring_on() {
     struct Mode {
         bool on = false, ab = false, recentre = false;
         double s = 0.0;
     };
     static const Mode m = [] {
         Mode r;
-        r.on = x4vr::env_on("X4VR_COPY_FINISHED", false);
-        const char *e = getenv("X4VR_COPY_FINISHED_AB");
+        r.on = x4vr::env_on("X4VR_COPY_RING", false);
+        const char *e = getenv("X4VR_COPY_RING_AB");
         if (e && *e) {
             if (!strcmp(e, "recentre") || !strcmp(e, "recenter")) {
                 r.ab = r.recentre = true;
@@ -15746,20 +15749,25 @@ static bool copy_finish_on() {
         }
         const char *cs = getenv("X4VR_COPY_SYNC_AB");
         if (r.ab && cs && *cs)
-            X4VR_LOG("copyfinish: X4VR_COPY_SYNC_AB is set too — two A/Bs in one run can't "
-                     "be told apart; this one decides, and copysync's runs in its A phases");
+            X4VR_LOG("copyring: X4VR_COPY_SYNC_AB is set too — two A/Bs in one run can't be "
+                     "told apart; this one decides, and copysync's runs in its A phases");
+        if ((r.on || r.ab) && ui_layer_enabled()) {
+            X4VR_LOG("copyring: OFF — the UI layer (X4VR_UI_LAYER) is copied into the runtime's "
+                     "own swapchain beside the eyes, and only the eyes go through the ring");
+            r.on = r.ab = false;
+        }
         return r;
     }();
-    g_finish_asked = m.on || m.ab;
-    if (g_finish_asked && g_finish_t0 == 0.0)
-        g_finish_t0 = mono_now();
+    g_ring_asked = m.on || m.ab;
+    if (g_ring_asked && g_ring_t0 == 0.0)
+        g_ring_t0 = mono_now();
     static bool said = false;
     if (!m.ab) {
-        if (!said) {
+        if (!said && m.on) {
             said = true;
-            if (m.on)
-                X4VR_LOG("copyfinish: ON — the XR thread hands the runtime each image once "
-                         "its copy has finished, and nothing waits inside xrEndFrame");
+            X4VR_LOG("copyring: ON — X4's picture goes into the mod's own images, and once "
+                     "that copy has finished the XR thread copies it into the runtime's and "
+                     "hands it over");
         }
         return m.on;
     }
@@ -15778,150 +15786,253 @@ static bool copy_finish_on() {
                 bit = (unsigned char)(ts.tv_nsec >> 10);
             }
             first_b = bit & 1;
-            X4VR_LOG("copyfinish: A/B at each recentre from here, phase #1 is %s — A hands "
-                     "the runtime each copy at once and has its queue wait for it (rc8); B "
-                     "hands it each copy once finished",
+            X4VR_LOG("copyring: A/B at each recentre from here, phase #1 is %s — A copies "
+                     "into the runtime's image and has its queue wait (rc8); B copies into "
+                     "the mod's own and hands each over once finished",
                      first_b ? "B" : "A");
         } else {
-            X4VR_LOG("copyfinish: A/B every %g s from here — A hands the runtime each copy "
-                     "at once and has its queue wait for it (rc8); B hands it each copy once "
-                     "finished",
+            X4VR_LOG("copyring: A/B every %g s from here — A copies into the runtime's image "
+                     "and has its queue wait (rc8); B copies into the mod's own and hands "
+                     "each over once finished",
                      m.s);
         }
     }
     const long p = m.recentre ? (long)(g_recentres.load(std::memory_order_relaxed) - rec0)
                               : (long)((now - t0) / m.s);
-    if (p != g_finphase_n) {
-        finish_phase_report("ended");
-        g_finphase.clear();
-        g_finphase_n = p;
-        g_finphase_b = (p + first_b) % 2 == 1;
-        g_finphase_t0 = now;
+    if (p != g_ringphase_n) {
+        ring_phase_report("ended");
+        g_ringphase.clear();
+        g_ringphase_n = p;
+        g_ringphase_b = (p + first_b) % 2 == 1;
+        g_ringphase_t0 = now;
         if (m.recentre)
-            X4VR_LOG("copyfinish: phase #%ld — %s, after recentre %ld", p + 1,
-                     g_finphase_b ? "B" : "A", p);
+            X4VR_LOG("copyring: phase #%ld — %s, after recentre %ld", p + 1,
+                     g_ringphase_b ? "B" : "A", p);
         else
-            X4VR_LOG("copyfinish: phase #%ld — %s", p + 1, g_finphase_b ? "B" : "A");
+            X4VR_LOG("copyring: phase #%ld — %s", p + 1, g_ringphase_b ? "B" : "A");
     }
-    return g_finphase_b;
+    return g_ringphase_b;
 }
 
-// One release owed to the runtime, in the order its image was acquired.
-struct PendingRelease {
-    bool eye = false;   // the eye swapchain's image
-    bool count = false; // ...with a copy in it: filed, and the release count goes up
-    bool ui = false;    // the UI swapchain's image
-    VkFence fence = VK_NULL_HANDLE;    // released once signalled; none: at once
-    VkSemaphore sync = VK_NULL_HANDLE; // copysync's wait, submitted just before
-    bool warp = false;                 // the composite turned it (the menu warp)
-    float warp_q[4] = {0.f, 0.f, 0.f, 1.f};
-    PresentDecl decl;                  // filed into the pair slot at the release
-    double queued = 0.0;
-};
-static std::mutex g_pend_mu;
-static std::deque<PendingRelease> &g_pend = x4vr::immortal<std::deque<PendingRelease>>();
+static void ring_count(std::atomic<uint64_t> RingStat::*field, uint64_t n = 1) {
+    (g_ringstat.*field).fetch_add(n, std::memory_order_relaxed);
+    (g_ringphase.*field).fetch_add(n, std::memory_order_relaxed);
+}
 
-// copysync's wait, submitted: counted, or said once when it could not be.
-static void copy_wait_counted(bool ok) {
-    if (ok) {
-        for (CopyStat *c : {&g_copystat, &g_copyphase})
-            c->ordered.fetch_add(1, std::memory_order_relaxed);
+// Under g_ring_mu: what has finished since.
+static void ring_advance_locked() {
+    for (uint32_t i = 0; i < x4vr::CopyRing::kSlots; i++) {
+        x4vr::CopyRing::Slot &s = g_ring.slot(i);
+        if (s.state == x4vr::CopyRing::State::Copying && g_ring.done(s.handed))
+            s.state = x4vr::CopyRing::State::Free;
+        else if (s.state == x4vr::CopyRing::State::Writing && g_ring.done(s.written))
+            s.state = x4vr::CopyRing::State::Ready;
+    }
+}
+
+// X4's present thread, holding sc_mu: the images, once, as the runtime's.
+static bool ring_ensure() {
+    if (g_ring_ready.load(std::memory_order_acquire))
+        return true;
+    if (g_ring_failed)
+        return false;
+    std::string why;
+    if (!g_ring.build(g_vrs.sc.format, {g_vrs.sc.width, g_vrs.sc.height}, 2, g_vrs.queue_family,
+                      &why)) {
+        g_ring_failed = true;
+        X4VR_LOG("copyring: NOT built — %s; rc8's way all session", why.c_str());
+        return false;
+    }
+    X4VR_LOG("copyring: %u images of %ux%u x2 layers, format %d, %.0f MB, copied on into the "
+             "runtime's on its queue (family %u index %u)",
+             x4vr::CopyRing::kSlots, g_vrs.sc.width, g_vrs.sc.height, (int)g_vrs.sc.format,
+             (double)g_ring.bytes() / (1024.0 * 1024.0), g_vrs.queue_family, g_vrs.queue_index);
+    g_ring_ready.store(true, std::memory_order_release);
+    return true;
+}
+
+// X4's present thread: one of the mod's images for this frame. A free one, or
+// else the oldest finished one not yet handed over (a newer picture is coming);
+// never one being written or read.
+static int ring_claim() {
+    int pick = -1;
+    {
+        std::lock_guard<std::mutex> l(g_ring_mu);
+        ring_advance_locked();
+        uint64_t oldest = UINT64_MAX;
+        int ready = -1;
+        for (uint32_t i = 0; i < x4vr::CopyRing::kSlots; i++) {
+            const x4vr::CopyRing::Slot &s = g_ring.slot(i);
+            if (s.state == x4vr::CopyRing::State::Free) {
+                pick = (int)i;
+                break;
+            }
+            if (s.state == x4vr::CopyRing::State::Ready && s.serial < oldest) {
+                oldest = s.serial;
+                ready = (int)i;
+            }
+        }
+        if (pick < 0 && ready >= 0) {
+            pick = ready;
+            ring_count(&RingStat::dropped);
+        }
+        if (pick >= 0)
+            g_ring.slot(pick).state = x4vr::CopyRing::State::Claimed;
+    }
+    // Claimed: nobody else touches its fences. Unsignalled for the composite.
+    if (pick >= 0)
+        g_ring.reset(g_ring.slot(pick).written);
+    return pick;
+}
+
+// X4's present thread, after the composite: the picture is being written, or
+// the composite didn't get to it and the image is free again.
+static void ring_finish(int i, bool warp_live, const float warp_q[4]) {
+    const bool sent = g_sbs.take_vr_done();
+    ring_count(&RingStat::frames);
+    std::lock_guard<std::mutex> l(g_ring_mu);
+    x4vr::CopyRing::Slot &s = g_ring.slot(i);
+    if (!sent) {
+        s.state = x4vr::CopyRing::State::Free;
         return;
     }
-    g_sbs.runtime_sync_broken();
-    static std::atomic<bool> said{false};
-    if (!said.exchange(true))
-        X4VR_LOG("copysync: the wait on the runtime's queue could not be submitted "
-                 "— no more copies ordered this session");
+    PresentDecl &d = g_ring_decl[i];
+    d = g_present_decl;
+    d.warp_live = warp_live;
+    std::memcpy(d.warp_q, warp_q, sizeof d.warp_q);
+    d.copy_fence = VK_NULL_HANDLE; // handed over only once written: nothing to check
+    d.copy_ordered = false;
+    s.serial = ++g_ring_serial;
+    s.t_written = mono_now();
+    s.state = x4vr::CopyRing::State::Writing;
+    ring_count(&RingStat::copies);
 }
 
-// The release itself, on whichever thread holds g_pend_mu; `spot` is that
-// thread's, for the stall watchdog.
-static void release_now(PendingRelease &p, CallSpot &spot) {
-    if (p.eye && p.count) {
-        {
-            std::lock_guard<std::mutex> pl(g_vrs.pair_mu);
-            PresentDecl &slot =
-                g_vrs.pair[(g_vrs.released.load(std::memory_order_relaxed) + 1) & 1];
-            slot = p.decl;
+// The XR thread's: a runtime image acquired for a hand-over, whose wait may
+// have timed out (tried again next frame, never handed back unwritten), and
+// the slot reserved for it.
+static bool g_ring_owed = false, g_ring_waited = false;
+static uint32_t g_ring_idx = 0;
+static int g_ring_res = -1;
+
+// On the XR thread, each frame, before the frame is built: the newest finished
+// picture, copied into a runtime image on the runtime's queue and handed over.
+static void ring_hand_over() {
+    if (!g_ring_ready.load(std::memory_order_acquire))
+        return;
+    {
+        std::lock_guard<std::mutex> l(g_ring_mu);
+        ring_advance_locked();
+        // The newest finished picture; older finished ones are superseded.
+        int newest = -1;
+        uint64_t best = g_ring_res >= 0 ? g_ring.slot(g_ring_res).serial : 0;
+        for (uint32_t i = 0; i < x4vr::CopyRing::kSlots; i++) {
+            const x4vr::CopyRing::Slot &s = g_ring.slot(i);
+            if (s.state == x4vr::CopyRing::State::Ready && s.serial > best) {
+                best = s.serial;
+                newest = (int)i;
+            }
         }
-        CopyWait cw;
-        cw.sync = p.sync;
-        {
-            const InCall in_release(spot, "xrReleaseSwapchainImage");
-            x4vr::xr::swapchain_release(g_vrs.sc, &g_vrs.released,
-                                        cw.sync != VK_NULL_HANDLE ? copy_wait_before_release
-                                                                  : nullptr,
-                                        &cw);
+        if (newest >= 0) {
+            for (uint32_t i = 0; i < x4vr::CopyRing::kSlots; i++) {
+                x4vr::CopyRing::Slot &s = g_ring.slot(i);
+                if ((int)i != newest && (s.state == x4vr::CopyRing::State::Ready ||
+                                         (int)i == g_ring_res)) {
+                    s.state = x4vr::CopyRing::State::Free;
+                    ring_count(&RingStat::dropped);
+                }
+            }
+            g_ring_res = newest;
+            g_ring.slot(newest).state = x4vr::CopyRing::State::Reserved;
         }
-        if (cw.sync != VK_NULL_HANDLE)
-            copy_wait_counted(cw.ok);
+    }
+    if (g_ring_res < 0)
+        return;
+    // The runtime's eye swapchain is the XR thread's from here to the release.
+    if (!g_ring_owed) {
+        if (!g_rt_sc_mu.try_lock())
+            return; // X4's present thread is copying the old way (an A/B's A)
+        bool owed = false;
+        bool ok = false;
+        {
+            const InCall in_acquire(g_spot_xr, "xrAcquireSwapchainImage and xrWaitSwapchainImage");
+            ok = x4vr::xr::swapchain_acquire_timeout(g_vrs.sc, &g_ring_idx, (XrDuration)1000000,
+                                                    &owed);
+        }
+        if (!owed) {
+            g_rt_sc_mu.unlock();
+            ring_count(&RingStat::no_image);
+            return;
+        }
+        g_ring_owed = true;
+        g_ring_waited = ok;
+    } else if (!g_ring_waited) {
+        const InCall in_wait(g_spot_xr, "xrWaitSwapchainImage");
+        g_ring_waited = x4vr::xr::swapchain_wait(g_vrs.sc, (XrDuration)1000000);
+    }
+    if (!g_ring_waited) {
+        ring_count(&RingStat::waits);
+        return; // kept, and its wait tried again next frame
+    }
+    // Into the runtime's image, on its queue: its own work comes after.
+    const int i = g_ring_res;
+    x4vr::CopyRing::Slot &s = g_ring.slot(i);
+    bool submitted = false;
+    if (g_ring.reset(s.handed) && g_ring.record_hand((uint32_t)i, g_vrs.sc.images[g_ring_idx])) {
+        const VkQueue q = runtime_queue();
+        VkSubmitInfo si{};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &s.cb;
+        const x4vr::xr::QueueTurn turn;
+        VrQueueLock qlock; // the runtime's queue may be X4's (#36)
+        submitted = q != VK_NULL_HANDLE &&
+                    g_loading_fns.QueueSubmit(q, 1, &si, s.handed) == VK_SUCCESS;
+    }
+    PresentDecl d;
+    double t_written = 0.0;
+    {
+        std::lock_guard<std::mutex> l(g_ring_mu);
+        d = g_ring_decl[i];
+        t_written = s.t_written;
+        s.state = submitted ? x4vr::CopyRing::State::Copying : x4vr::CopyRing::State::Free;
+        g_ring_res = -1;
+    }
+    if (!submitted) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            X4VR_LOG("copyring: the copy into the runtime's image could not be submitted — "
+                     "this picture is not handed over");
+        }
+        return; // the runtime image stays acquired and waited, for the next picture
+    }
+    {
+        std::lock_guard<std::mutex> pl(g_vrs.pair_mu);
+        g_vrs.pair[(g_vrs.released.load(std::memory_order_relaxed) + 1) & 1] = d;
+    }
+    {
+        const InCall in_release(g_spot_xr, "xrReleaseSwapchainImage");
+        x4vr::xr::swapchain_release(g_vrs.sc, &g_vrs.released);
+    }
+    {
         std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
-        g_vrs.warp_live = p.warp;
-        if (p.warp) {
-            std::memcpy(g_vrs.warp_live_q, p.warp_q, sizeof g_vrs.warp_live_q);
+        g_vrs.warp_live = d.warp_live;
+        if (d.warp_live) {
+            std::memcpy(g_vrs.warp_live_q, d.warp_q, sizeof g_vrs.warp_live_q);
             g_vrs.warp_done.fetch_add(1, std::memory_order_relaxed);
         }
         g_vrs.warp_live_seq = g_vrs.released.load(std::memory_order_relaxed);
-    } else if (p.eye) {
-        // Acquired and not written (the wait timed out): handed back as before.
-        const InCall in_release(spot, "xrReleaseSwapchainImage");
-        x4vr::xr::swapchain_release(g_vrs.sc);
     }
-    if (p.ui) {
-        const InCall in_release(spot, "xrReleaseSwapchainImage (the UI layer)");
-        x4vr::xr::swapchain_release(g_vrs.ui_sc);
-        g_vrs.ui_released.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
-// From X4's present thread: released now, or queued behind what is queued
-// already -- OpenXR releases in acquire order -- or queued to wait for its copy.
-static void release_or_queue(PendingRelease &&p, bool wait_for_copy) {
-    std::lock_guard<std::mutex> l(g_pend_mu);
-    if (!wait_for_copy && g_pend.empty()) {
-        release_now(p, g_spot_x4);
-        return;
-    }
-    if (!wait_for_copy)
-        p.fence = VK_NULL_HANDLE; // only behind the others, not behind its copy
-    // copysync's wait goes in now, not at the release: the composite may signal
-    // that semaphore again once it is handed over, and a wait submitted early
-    // still comes before the runtime's work on this image.
-    if (p.sync != VK_NULL_HANDLE) {
-        CopyWait cw;
-        cw.sync = p.sync;
-        {
-            const x4vr::xr::QueueTurn turn;
-            copy_wait_before_release(&cw);
-        }
-        copy_wait_counted(cw.ok);
-        p.sync = VK_NULL_HANDLE;
-    }
-    p.queued = mono_now();
-    g_pend.push_back(std::move(p));
-}
-
-// On the XR thread, each frame, before the frame is built: every queued release
-// whose copy has finished, in order.
-static void release_finished() {
-    std::lock_guard<std::mutex> l(g_pend_mu);
-    while (!g_pend.empty()) {
-        PendingRelease &p = g_pend.front();
-        if (p.fence != VK_NULL_HANDLE && !g_sbs.copy_done(p.fence))
-            break;
-        if (p.fence != VK_NULL_HANDLE) {
-            const auto us = (uint64_t)((mono_now() - p.queued) * 1.0e6);
-            for (FinishStat *c : {&g_finstat, &g_finphase}) {
-                c->held.fetch_add(1, std::memory_order_relaxed);
-                c->hold_us.fetch_add(us, std::memory_order_relaxed);
-                uint64_t m = c->hold_max_us.load(std::memory_order_relaxed);
-                while (us > m && !c->hold_max_us.compare_exchange_weak(m, us))
-                    ;
-            }
-        }
-        release_now(p, g_spot_xr);
-        g_pend.pop_front();
+    g_ring_owed = g_ring_waited = false;
+    g_rt_sc_mu.unlock();
+    const auto us = (uint64_t)((mono_now() - t_written) * 1.0e6);
+    ring_count(&RingStat::handed);
+    ring_count(&RingStat::hold_us, us);
+    for (RingStat *c : {&g_ringstat, &g_ringphase}) {
+        uint64_t m = c->hold_max_us.load(std::memory_order_relaxed);
+        while (us > m && !c->hold_max_us.compare_exchange_weak(m, us))
+            ;
     }
 }
 
@@ -15944,8 +16055,6 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
     VkFormat fmt = VK_FORMAT_UNDEFINED;
     if (!g_sbs.eye_shape(x4sc, &eye, &layers, &fmt))
         return false;
-    // copyfinish: this frame's way, for vr_finish_blit too.
-    g_finish_frame = copy_finish_on();
     if (layers < 2)
         return false; // mono: nothing stereo to send, and #2 owns that gap
 
@@ -16020,29 +16129,35 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
         g_vrs.sc_ready.store(true, std::memory_order_relaxed);
     }
 
-    // copyfinish: images are held until their copy has finished, and of the
-    // runtime's (three, on WiVRn and SteamVR) one is the one it shows. With
-    // all the others held, the next acquire would be that one, and a wait that
-    // timed out would hand it back unwritten below -- an older picture shown as
-    // the newest. So this frame isn't sent, and is counted.
-    if (g_finish_frame) {
-        size_t held = 0;
-        {
-            std::lock_guard<std::mutex> l(g_pend_mu);
-            for (const PendingRelease &q : g_pend)
-                if (q.eye)
-                    held++;
-        }
-        if (held + 1 >= g_vrs.sc.images.size()) {
-            for (FinishStat *c : {&g_finstat, &g_finphase})
-                c->acq_fail.fetch_add(1, std::memory_order_relaxed);
+    // copyring: this frame into one of the mod's images, and the XR thread
+    // takes it on from there. X4's present thread doesn't touch the runtime's
+    // swapchain.
+    g_ring_frame = copy_ring_on() && ring_ensure();
+    if (g_ring_frame) {
+        const int slot = ring_claim();
+        if (slot < 0) {
+            ring_count(&RingStat::frames);
+            ring_count(&RingStat::no_slot);
             return false;
         }
+        x4vr::MenuWarp::Params warp;
+        const bool want_warp = menu_warp_request(&warp);
+        g_sbs.request_vr_blit(g_ring.slot(slot).image, eye, 2, g_vrs.sc.format,
+                              want_warp ? &warp : nullptr, g_ring.slot(slot).written);
+        g_sbs.request_runtime_order(false);
+        g_ring_claim = slot;
+        return true;
     }
+    // The old way: the runtime's swapchain is this thread's until the release
+    // in vr_finish_blit. Only tried: the XR thread may be mid-hand-over.
+    if (!g_rt_sc_mu.try_lock()) {
+        ring_count(&RingStat::no_image);
+        return false;
+    }
+    g_rt_sc_held = true;
 
     // Two milliseconds, not forever. We hold an image only for the length of
-    // one composite (copyfinish: until its copy has finished, at most all but
-    // one) and there are three, so the common case returns at once;
+    // one composite and there are three, so the common case returns at once;
     // if the runtime cannot produce one in that time, X4 presents this frame
     // without it and the headset reprojects the previous one. A dropped VR
     // frame is a far smaller defect than a stalled game.
@@ -16063,17 +16178,13 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
                  ready ? "an image" : owed ? "an image not ready in time" : "none");
     if (!ready) {
         g_vrs.acquire_fail.fetch_add(1, std::memory_order_relaxed);
-        for (FinishStat *c : {&g_finstat, &g_finphase})
-            c->acq_fail.fetch_add(1, std::memory_order_relaxed);
         // Acquired but not ready: hand it straight back. Keeping it would leak
         // one image per frame and the pool would drain into the hang this
-        // timeout exists to prevent. Behind any release still queued, since
-        // OpenXR releases in acquire order (copyfinish).
-        if (owed) {
-            PendingRelease p;
-            p.eye = true;
-            release_or_queue(std::move(p), false);
-        }
+        // timeout exists to prevent.
+        if (owed)
+            x4vr::xr::swapchain_release(g_vrs.sc);
+        g_rt_sc_held = false;
+        g_rt_sc_mu.unlock();
         return false;
     }
     // While a full-screen menu is up, the copy becomes the menu warp.
@@ -16081,9 +16192,7 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
     const bool want_warp = menu_warp_request(&warp);
     g_sbs.request_vr_blit(g_vrs.sc.images[idx], eye, 2, g_vrs.sc.format,
                           want_warp ? &warp : nullptr);
-    // copyfinish: an image handed over only once its copy has finished needs
-    // no wait on the runtime's queue.
-    g_sbs.request_runtime_order(!g_finish_frame && copy_sync_on());
+    g_sbs.request_runtime_order(copy_sync_on());
 
     // ---- task #57 layer B ---------------------------------------------------
     //
@@ -16126,18 +16235,13 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
                 // "the identification is wrong" rather than as "nothing was
                 // captured yet".
                 if (g_ui_stage.image != VK_NULL_HANDLE &&
-                    g_ui_stage.captures.load(std::memory_order_relaxed) > 0) {
+                    g_ui_stage.captures.load(std::memory_order_relaxed) > 0)
                     g_sbs.request_ui_blit(g_ui_stage.image,
                                           g_vrs.ui_sc.images[uidx], eye);
-                } else if (uowed) {
-                    PendingRelease p; // behind any queued (copyfinish)
-                    p.ui = true;
-                    release_or_queue(std::move(p), false);
-                }
+                else if (uowed)
+                    x4vr::xr::swapchain_release(g_vrs.ui_sc);
             } else if (uowed) {
-                PendingRelease p;
-                p.ui = true;
-                release_or_queue(std::move(p), false);
+                x4vr::xr::swapchain_release(g_vrs.ui_sc);
             }
         }
     }
@@ -16163,6 +16267,14 @@ void vr_finish_blit() {
         if (live)
             std::memcpy(live_q, g_vrs.warp_pending_q, sizeof live_q);
     }
+    // copyring: no release here; the XR thread hands it over once written.
+    if (g_ring_claim >= 0) {
+        ring_finish(g_ring_claim, live, live_q);
+        g_ring_claim = -1;
+        std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
+        g_vrs.warp_pending = false;
+        return;
+    }
     // declpair: filed under the release count this release will make, before
     // the release, so an XR frame that sees the new count finds its inputs. The
     // count goes up inside the release's queue turn (2026-11-21): it used to go
@@ -16171,50 +16283,75 @@ void vr_finish_blit() {
     // pose over the new image -- 2% of frames on an RTX 5090 at 144 Hz.
     // copysync: the copy's fence for the count at xrEndFrame, and its
     // semaphore for the runtime's queue to wait on before the release.
-    // copyfinish (2026-11-22): all of it goes with the release, which is made
-    // here (rc8's way) or by the XR thread once the copy has finished.
-    PendingRelease p;
-    p.eye = true;
-    p.count = true;
-    g_sbs.take_runtime_sync(&p.sync, &p.fence);
-    p.warp = live;
-    std::memcpy(p.warp_q, live_q, sizeof live_q);
-    p.decl = g_present_decl;
-    p.decl.warp_live = live;
-    std::memcpy(p.decl.warp_q, live_q, sizeof live_q);
-    p.decl.copy_fence = p.fence;
-    p.decl.copy_ordered = p.sync != VK_NULL_HANDLE;
-    if (p.fence != VK_NULL_HANDLE) {
+    CopyWait cw;
+    VkFence copy_fence = VK_NULL_HANDLE;
+    g_sbs.take_runtime_sync(&cw.sync, &copy_fence);
+    {
+        std::lock_guard<std::mutex> pl(g_vrs.pair_mu);
+        PresentDecl &slot =
+            g_vrs.pair[(g_vrs.released.load(std::memory_order_relaxed) + 1) & 1];
+        slot = g_present_decl;
+        slot.warp_live = live;
+        std::memcpy(slot.warp_q, live_q, sizeof live_q);
+        slot.copy_fence = copy_fence;
+        slot.copy_ordered = cw.sync != VK_NULL_HANDLE;
+    }
+    if (tc < kTraceCopies)
+        X4VR_LOG("trace: X4's copy %u: calling xrReleaseSwapchainImage", tc + 1);
+    {
+        const InCall in_release(g_spot_x4, "xrReleaseSwapchainImage");
+        x4vr::xr::swapchain_release(g_vrs.sc, &g_vrs.released,
+                                    cw.sync != VK_NULL_HANDLE ? copy_wait_before_release
+                                                              : nullptr,
+                                    &cw);
+    }
+    if (copy_fence != VK_NULL_HANDLE)
         for (CopyStat *c : {&g_copystat, &g_copyphase})
             c->copies.fetch_add(1, std::memory_order_relaxed);
-        for (FinishStat *c : {&g_finstat, &g_finphase})
-            c->copies.fetch_add(1, std::memory_order_relaxed);
+    if (cw.sync != VK_NULL_HANDLE) {
+        if (cw.ok) {
+            for (CopyStat *c : {&g_copystat, &g_copyphase})
+                c->ordered.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            g_sbs.runtime_sync_broken();
+            static bool said = false;
+            if (!said) {
+                said = true;
+                X4VR_LOG("copysync: the wait on the runtime's queue could not be submitted "
+                         "— no more copies ordered this session");
+            }
+        }
     }
+    if (tc < kTraceCopies)
+        X4VR_LOG("trace: X4's copy %u: xrReleaseSwapchainImage returned", tc + 1);
     {
         std::lock_guard<std::mutex> wl(g_vrs.warp_mu);
+        g_vrs.warp_live = live;
+        if (live) {
+            std::memcpy(g_vrs.warp_live_q, live_q, sizeof g_vrs.warp_live_q);
+            g_vrs.warp_done.fetch_add(1, std::memory_order_relaxed);
+        }
+        g_vrs.warp_live_seq = g_vrs.released.load(std::memory_order_relaxed);
         g_vrs.warp_pending = false;
     }
     // Task #57. Released only when the composite was actually asked to fill it
     // -- request_ui_blit clears its handles as it records, so a non-zero blit
     // count is the acknowledgement. Releasing an image the composite skipped
     // would hand the runtime last frame's UI, and releasing one never acquired
-    // is an error. With the eye image: the same composite wrote both.
+    // is an error.
     if (g_vrs.ui_ready.load(std::memory_order_relaxed)) {
         static uint64_t seen = 0;
         const uint64_t now = g_sbs.ui_blits();
         if (now != seen) {
             seen = now;
-            p.ui = true;
+            x4vr::xr::swapchain_release(g_vrs.ui_sc);
+            g_vrs.ui_released.fetch_add(1, std::memory_order_relaxed);
         }
     }
-    const bool wait_for_copy = g_finish_frame && p.fence != VK_NULL_HANDLE;
-    if (tc < kTraceCopies)
-        X4VR_LOG("trace: X4's copy %u: %s", tc + 1,
-                 wait_for_copy ? "its release queued until the copy has finished"
-                               : "calling xrReleaseSwapchainImage");
-    release_or_queue(std::move(p), wait_for_copy);
-    if (tc < kTraceCopies)
-        X4VR_LOG("trace: X4's copy %u: released or queued", tc + 1);
+    if (g_rt_sc_held) {
+        g_rt_sc_held = false;
+        g_rt_sc_mu.unlock();
+    }
 }
 
 // The distance the world is drawn with this frame. The baked number alone is right
@@ -16982,9 +17119,9 @@ void vr_thread() {
         // projection layer: a projection layer carries no depth, so the
         // compositor places it at infinity, and #57 asks for a finite canvas.
         XrCompositionLayerQuad quad_ui = {};
-        // copyfinish: whatever X4 copied that has finished, handed over now, so
-        // this frame is built for it (and nothing can be released until the next).
-        release_finished();
+        // copyring: the newest picture that has finished, handed over now, so
+        // this frame is built for it.
+        ring_hand_over();
         const XrCompositionLayerBaseHeader *layers[2] = {nullptr, nullptr};
         uint32_t layer_count = 0;
         g_turnfix = TurnFix{}; // armed below when this frame submits X4's image
@@ -17749,10 +17886,8 @@ void vr_thread() {
                     c->end_n.fetch_add(1, std::memory_order_relaxed);
                     c->end_us.fetch_add(us, std::memory_order_relaxed);
                 }
-                for (FinishStat *c : {&g_finstat, &g_finphase}) {
-                    c->end_n.fetch_add(1, std::memory_order_relaxed);
-                    c->end_us.fetch_add(us, std::memory_order_relaxed);
-                }
+                ring_count(&RingStat::end_n);
+                ring_count(&RingStat::end_us, us);
             }
         }
         g_last_headset_frame.store(mono_now(), std::memory_order_relaxed);
@@ -18325,12 +18460,12 @@ void vr_report(const char *when) {
     }
     if (!strcmp(when, "final"))
         copy_phase_report("was running at the end");
-    if (g_finish_asked) {
+    if (g_ring_asked) {
         char head[64];
-        snprintf(head, sizeof head, "copyfinish (%s)", when);
-        finish_stat_line(head, g_finstat, mono_now() - g_finish_t0);
+        snprintf(head, sizeof head, "copyring (%s)", when);
+        ring_stat_line(head, g_ringstat, mono_now() - g_ring_t0);
         if (!strcmp(when, "final"))
-            finish_phase_report("was running at the end");
+            ring_phase_report("was running at the end");
     }
     if (g_vrs.pair_res_frames)
         X4VR_LOG("declpair residual (%s): %llu headset frame(s) compared, %llu (%.1f%%) where "
@@ -18400,6 +18535,14 @@ void vr_shutdown() {
         // The menu warp holds views on the runtime's images.
         for (VkImage im : g_vrs.sc.images)
             g_sbs.forget_target(im);
+        // copyring: and on the mod's own, which nothing can be using once
+        // their fences have signalled.
+        if (g_ring_ready.exchange(false)) {
+            g_ring.wait_all(100ull * 1000 * 1000);
+            for (uint32_t i = 0; i < x4vr::CopyRing::kSlots; i++)
+                g_sbs.forget_target(g_ring.slot(i).image);
+            g_ring.destroy();
+        }
         x4vr::xr::swapchain_destroy(g_vrs.sc);
         g_vrs.sc_ready.store(false);
     }
@@ -19060,6 +19203,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
 #undef RESOLVE
                 g_loading_fns = lf;
                 g_loading.configure(*out, lf, mem);
+                x4vr::RingFns rf;
+#define RESOLVE(name) rf.name = (PFN_vk##name)gdpa(*out, "vk" #name);
+                X4VR_RING_FNS(RESOLVE)
+#undef RESOLVE
+                g_ring.configure(*out, rf, mem);
             }
             {
                 x4vr::CursorFns wf;
