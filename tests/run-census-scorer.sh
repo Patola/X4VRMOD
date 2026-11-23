@@ -1387,6 +1387,15 @@ sed 's/env: run = /env: run = X4VR_DECLARE_TURN_AB=recentre /' "$BASE" > /tmp/ce
 want "declturn: A/B asked of a build without it -> FAIL" /tmp/census-dt-old.log "FAIL" "the layer never mentioned the turn correction"
 absent "copysync: an older build -> silent" "$BASE" copysync
 
+# ------------------------------------------ vram: the card's memory and the margin
+grep -qF -- '"vram (%s): the card'"'"'s %.0f MB — X4 uses %.0f, its budget %.0f, so %.0f free for it; "' layer/x4vr_layer.cpp \
+    && grep -qF -- '"at most %.0f used, at least %.0f free",' layer/x4vr_layer.cpp \
+    && ok "vram: the planted line matches the layer's format" \
+    || bad "vram: the layer's line changed — replant the line below"
+plant /tmp/census-vram.log '[  999980.000] layer   vram (periodic): the card'"'"'s 8192 MB — X4 uses 5900, its budget 7300, so 1400 free for it; at most 6100 used, at least 1100 free' '[  999990.000] layer   vram (final): the card'"'"'s 8192 MB — X4 uses 5800, its budget 7350, so 1550 free for it; at most 6100 used, at least 1100 free'
+want "vram: the session's peak and least free" /tmp/census-vram.log vram "the card's 8192 MB: X4 used at most 6100 MB, and had at least 1100 MB free"
+absent "vram: an older build -> silent" "$BASE" vram
+
 # ------------------------------------------ the pointer's window: X4's own decides (455i/l/m)
 grep -qF -- '"headlook: X4'"'"'s window is id %u, from SDL_GetWindowID — the id %u an "' injector/x4vr_inject.cpp \
     && ok "pointer window: the planted line matches the injector's format" \

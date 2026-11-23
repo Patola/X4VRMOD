@@ -18445,6 +18445,77 @@ void vr_start_session_deferred() {
 }
 
 // One line the scorer can key on, whatever else the run did.
+// **vram (2026-11-23).** How much of the graphics card's memory X4 uses and
+// how much the driver says it could still use (VK_EXT_memory_budget), for the
+// launcher's warning and the docs' sizes by GPU. Not "how much X4 needs": X4
+// keeps textures in whatever is free, so its use grows with the card. The
+// margin is the number that predicts trouble: the budget already leaves out
+// what other processes hold (SteamVR's compositor, WiVRn's server), and on the
+// RTX 3070 laptop 4000 per eye under SteamVR ran out (take 432). The largest
+// device-local heap is the card's own memory. Read on whichever thread
+// reports; nothing here is X4's.
+static void vram_report(const char *when) {
+    struct Probe {
+        PFN_vkGetPhysicalDeviceMemoryProperties2 fn = nullptr;
+        bool ok = false;
+    };
+    static const Probe pr = [] {
+        Probe r;
+        const InstanceData &inst = g_vrs.inst;
+        const VkPhysicalDevice phys = g_vrs.chain_phys;
+        if (!inst.gipa || !phys || !inst.EnumerateDeviceExtensionProperties)
+            return r;
+        uint32_t n = 0;
+        inst.EnumerateDeviceExtensionProperties(phys, nullptr, &n, nullptr);
+        std::vector<VkExtensionProperties> ext(n);
+        if (n)
+            inst.EnumerateDeviceExtensionProperties(phys, nullptr, &n, ext.data());
+        bool budget = false;
+        for (const VkExtensionProperties &e : ext)
+            if (!strcmp(e.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME))
+                budget = true;
+        r.fn = (PFN_vkGetPhysicalDeviceMemoryProperties2)inst.gipa(
+            inst.instance, "vkGetPhysicalDeviceMemoryProperties2");
+        if (!r.fn)
+            r.fn = (PFN_vkGetPhysicalDeviceMemoryProperties2)inst.gipa(
+                inst.instance, "vkGetPhysicalDeviceMemoryProperties2KHR");
+        r.ok = budget && r.fn;
+        if (!r.ok)
+            X4VR_LOG("vram: not measured — the driver offers no VK_EXT_memory_budget%s",
+                     budget ? " entry point" : "");
+        return r;
+    }();
+    if (!pr.ok)
+        return;
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT b{};
+    b.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    VkPhysicalDeviceMemoryProperties2 p{};
+    p.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+    p.pNext = &b;
+    pr.fn(g_vrs.chain_phys, &p);
+    const VkPhysicalDeviceMemoryProperties &mp = p.memoryProperties;
+    int heap = -1;
+    for (uint32_t i = 0; i < mp.memoryHeapCount; i++)
+        if ((mp.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
+            (heap < 0 || mp.memoryHeaps[i].size > mp.memoryHeaps[heap].size))
+            heap = (int)i;
+    if (heap < 0)
+        return;
+    constexpr double kMB = 1024.0 * 1024.0;
+    const double size = (double)mp.memoryHeaps[heap].size / kMB;
+    const double budget = (double)b.heapBudget[heap] / kMB;
+    const double use = (double)b.heapUsage[heap] / kMB;
+    const double free_mb = budget - use;
+    static double peak = 0.0, least = 1e18;
+    if (use > peak)
+        peak = use;
+    if (free_mb < least)
+        least = free_mb;
+    X4VR_LOG("vram (%s): the card's %.0f MB — X4 uses %.0f, its budget %.0f, so %.0f free for it; "
+             "at most %.0f used, at least %.0f free",
+             when, size, use, budget, free_mb, peak, least);
+}
+
 void vr_report(const char *when) {
     if (!g_vr)
         return;
@@ -18481,6 +18552,7 @@ void vr_report(const char *when) {
     }
     if (!strcmp(when, "final"))
         copy_phase_report("was running at the end");
+    vram_report(when);
     if (g_ring_asked) {
         char head[64];
         snprintf(head, sizeof head, "copyring (%s)", when);

@@ -5445,6 +5445,22 @@ def main(path):
             fails.append(f"copyring: phase #{n} is B and none of its {copies} pictures was handed "
                          f"to the runtime")
 
+    # --- vram: the card's memory, X4's use and the margin (2026-11-23) --------
+    #
+    # For the launcher's warning and the docs' sizes by GPU. X4 keeps textures
+    # in whatever is free, so its use grows with the card; the least free is
+    # what predicts running out (take 432: 4000 per eye, SteamVR, 8 GB).
+    vr_lines = re.findall(r"vram \((?:periodic|final)\): the card's (\d+) MB — X4 uses (\d+), its "
+                          r"budget (\d+), so (-?\d+) free for it; at most (\d+) used, at least "
+                          r"(-?\d+) free", text)
+    if vr_lines:
+        size, _use, budget, _free, peak, least = vr_lines[-1]
+        print(f"vram    the card's {size} MB: X4 used at most {peak} MB, and had at least {least} MB "
+              f"free (its budget at the end {budget} MB) — X4 fills free memory with textures, so "
+              f"the margin, not its use, says how close this size came to running out")
+    elif "vram: not measured" in text:
+        print("vram    not measured — the driver offers no VK_EXT_memory_budget")
+
     # --- the space forward is measured in (issue #4, 2026-11-19) -------------
     #
     # The seated space (LOCAL): the runtime sets its forward (on WiVRn, where
