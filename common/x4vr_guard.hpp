@@ -130,10 +130,11 @@ inline float half_tan_of_x4vr_fov(float fov) {
 // The budget a run may spend: none unless the vertex shaders really conjugate by
 // the pose (X4VR_POSE_ROTATE, off by default).
 //
-// **Issue #4 (2026-11-24).** What ships is the transport form (#59): it multiplies
+// **Issues #3 and #4 (2026-11-24).** What ships is the transport form (task 59): it multiplies
 // gl_Position by the block's matrix, right only while that is identity. On every
 // headset Patola owns the field X4 draws (1.4917, 110 deg) leaves no budget, so it
-// always was. A Quest 2 (3.29 deg) and a Reverb G2 (2.22) are narrower, and there
+// always was. A Quest 2 (3.29 deg) and two Reverb G2 (2.22 on Monado in #4, 1.53 on
+// SteamVR in #3, beside the copy defect rc8 fixed there) are narrower, and there
 // the residual turned clip space: clip z is the constant near plane, so z - x sin
 // goes below zero on one side of a line through the image's centre, across the
 // head's motion, and everything past a few metres on that side is clipped. What

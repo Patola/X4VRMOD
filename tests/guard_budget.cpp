@@ -138,7 +138,7 @@ int main() {
         check(c, "covered() accepts a 1 deg box at fov 2.0");
     }
 
-    // ---- issue #4: what each reporter's headset was given, and is given -----
+    // ---- issues #3 and #4: what each reporter's headset was given, and is given
     //
     // Frusta and budgets as their own logs print them. With shaders that
     // conjugate the budget is theirs (the control: the case must be able to
@@ -159,6 +159,10 @@ int main() {
              {{-51.46f * kDeg, 41.76f * kDeg, 46.41f * kDeg, -46.35f * kDeg},
               {-41.62f * kDeg, 51.57f * kDeg, 46.62f * kDeg, -46.04f * kDeg}},
              2.22f},
+            {"Reverb G2 on SteamVR, ShotBotv13's log (#3)",
+             {{-52.67f * kDeg, 41.47f * kDeg, 46.32f * kDeg, -46.28f * kDeg},
+              {-41.47f * kDeg, 52.67f * kDeg, 46.32f * kDeg, -46.28f * kDeg}},
+             1.53f},
             {"Steam Frame, take 456",
              {{-59.09f * kDeg, 50.47f * kDeg, 49.85f * kDeg, -59.73f * kDeg},
               {-50.39f * kDeg, 59.08f * kDeg, 49.95f * kDeg, -59.48f * kDeg}},

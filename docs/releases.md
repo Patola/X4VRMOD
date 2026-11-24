@@ -22,9 +22,9 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
-* **No more broken picture on narrower headsets (issue #4).** On headsets whose field of view is
-  narrower than the 110 degrees X4 draws, such as a Quest 2 or a Reverb G2, the mod turned the
-  picture by up to 3.3 degrees towards the head in a way its shaders couldn't do. Parts of the
+* **No more broken picture on narrower headsets (issues #3 and #4).** On headsets whose field of
+  view is narrower than the 110 degrees X4 draws, such as a Quest 2 or a Reverb G2, the mod turned
+  the picture by up to 3.3 degrees towards the head in a way its shaders couldn't do. Parts of the
   picture were cut away along lines from its centre and kept old frames, spiralling outwards as
   the head moved. The Quest 3 and the Steam Frame never had it. All headsets now work as those two
   do.
