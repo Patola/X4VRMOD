@@ -138,6 +138,46 @@ int main() {
         check(c, "covered() accepts a 1 deg box at fov 2.0");
     }
 
+    // ---- issue #4: what each reporter's headset was given, and is given -----
+    //
+    // Frusta and budgets as their own logs print them. With shaders that
+    // conjugate the budget is theirs (the control: the case must be able to
+    // fail); with the shipped transport form it is none, as on the Quest 3 and
+    // the Steam Frame, where it has always been.
+    {
+        struct Headset {
+            const char *name;
+            x4vr::EyeFov eye[2];
+            float was;
+        };
+        const Headset hs[] = {
+            {"Quest 2, Frazzle402's log",
+             {{-43.0f * kDeg, 45.0f * kDeg, 48.0f * kDeg, -50.0f * kDeg},
+              {-45.0f * kDeg, 43.0f * kDeg, 48.0f * kDeg, -50.0f * kDeg}},
+             3.29f},
+            {"Reverb G2, rpdg-h's log",
+             {{-51.46f * kDeg, 41.76f * kDeg, 46.41f * kDeg, -46.35f * kDeg},
+              {-41.62f * kDeg, 51.57f * kDeg, 46.62f * kDeg, -46.04f * kDeg}},
+             2.22f},
+            {"Steam Frame, take 456",
+             {{-59.09f * kDeg, 50.47f * kDeg, 49.85f * kDeg, -59.73f * kDeg},
+              {-50.39f * kDeg, 59.08f * kDeg, 49.95f * kDeg, -59.48f * kDeg}},
+             0.0f},
+        };
+        const float ht = x4vr::guard::half_tan_of_x4vr_fov(1.4917f);
+        for (const Headset &h : hs) {
+            char buf[128];
+            const float conj = x4vr::guard::residual_budget(h.eye, 2, ht, true);
+            snprintf(buf, sizeof(buf), "%s: %.2f deg", h.name, conj);
+            check(std::fabs(conj - h.was) < 0.02f, "what it was given, as its log says", buf);
+            const float now = x4vr::guard::residual_budget(h.eye, 2, ht, false);
+            check(now == 0.0f, "shaders that don't conjugate: no budget", h.name);
+            const auto r = x4vr::guard::residual_of(30.0f, -10.0f, 20.0f, 0.0f, true, now);
+            check(r.yaw == 0.0f && r.pitch == 0.0f && !r.clamped,
+                  "and no residual, whatever the head does", h.name);
+        }
+    }
+
     // ---- the residual itself, against the angles actually measured ---------
     //
     // These are not invented numbers: median 0.22 and p90 2.27 deg are what

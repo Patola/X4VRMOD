@@ -22482,9 +22482,16 @@ combination and logs `head translate: ASKED FOR BUT INACTIVE`; the scorer FAILs
 it. Translation therefore needs `X4VR_POSE=1`, which also brings roll stereo
 back (off since take 260).
 
-With `X4VR_POSE_ROTATE` unset, the pose channel's residual rotation is written
-but no shader reads it, so `X4VR_POSE=1` with head-look off changes exactly two
-things: roll stereo and the translation shear.
+~~With `X4VR_POSE_ROTATE` unset, the pose channel's residual rotation is written
+but no shader reads it~~ **Wrong, and it shipped as issue #4 (2026-11-24).** With
+`X4VR_POSE_ROTATE` unset every vertex module still gets #59's transport form
+(`patch_vertex_pose_clip`), which multiplies `gl_Position` by `r`: right only
+while `r` is identity. It was identity here because the Quest 3 and the Steam
+Frame leave no residual budget at `X4VR_FOV=1.4917`. A Quest 2 (3.29 deg) and a
+Reverb G2 (2.22) do, and half their picture was clipped along a line through its
+centre, keeping old frames. The budget is now zero unless the shaders conjugate
+(`x4vr::guard::residual_budget`). So `X4VR_POSE=1` with head-look off changes
+exactly two things: roll stereo and the translation shear.
 
 **Why it was off, so a comfort report can be read:** take 245 removed it and
 three complaints improved at once (cockpit pushed away, load-screen drift, eye

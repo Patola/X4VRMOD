@@ -5447,19 +5447,49 @@ def main(path):
 
     # --- vram: the card's memory, X4's use and the margin (2026-11-23) --------
     #
-    # For the launcher's warning and the docs' sizes by GPU. X4 keeps textures
-    # in whatever is free, so its use grows with the card; the least free is
-    # what predicts running out (take 432: 4000 per eye, SteamVR, 8 GB).
+    # For the launcher's warning and the docs' sizes by GPU. Where it fits, X4's
+    # use grows when the save loads (457a: +1.1 GB); where it doesn't, it is at
+    # its ceiling from the start menu and the load adds nothing (457b, 457c).
     vr_lines = re.findall(r"vram \((?:periodic|final)\): the card's (\d+) MB — X4 uses (\d+), its "
                           r"budget (\d+), so (-?\d+) free for it; at most (\d+) used, at least "
                           r"(-?\d+) free", text)
     if vr_lines:
         size, _use, budget, _free, peak, least = vr_lines[-1]
         print(f"vram    the card's {size} MB: X4 used at most {peak} MB, and had at least {least} MB "
-              f"free (its budget at the end {budget} MB) — X4 fills free memory with textures, so "
-              f"the margin, not its use, says how close this size came to running out")
+              f"free (its budget at the end {budget} MB)")
+        vr_t = [(float(t), int(u)) for t, u in re.findall(
+            r"\[\s*([\d.]+)\]\s+layer\s+vram \(periodic\): the card's \d+ MB — X4 uses (\d+),", text)]
+        vr_arm = re.search(r"\[\s*([\d.]+)\]\s+inject\s+headlook write: ARMED", text)
+        if vr_arm and vr_t:
+            ta = float(vr_arm.group(1))
+            menu = [u for t, u in vr_t if ta - 60 <= t < ta - 45] or [u for t, u in vr_t if t < ta][:1]
+            play = [u for t, u in vr_t if t >= ta]
+            if menu and play:
+                print(f"vram    {max(menu)} MB a minute before the save was up, {max(play)} MB in it: "
+                      f"{max(play) - max(menu):+d} MB")
     elif "vram: not measured" in text:
         print("vram    not measured — the driver offers no VK_EXT_memory_budget")
+
+    # --- issue #4: the residual through shaders that don't conjugate ----------
+    #
+    # Up to rc9 a headset narrower than X4's field was given a residual
+    # rotation, which the shipped vertex patch multiplies clip space by: half
+    # the picture is clipped along a line through its centre, and keeps what
+    # was there before. Zero on the Quest 3 and the Steam Frame, 2.2-3.3 deg on
+    # a Reverb G2 and a Quest 2 (2026-11-24).
+    res_seen = re.findall(r"vr pose: shared=\d .*?residual (-?[\d.]+),(-?[\d.]+) applied, budget "
+                          r"(-?[\d.]+)", text)
+    res_on = [(float(a), float(b)) for a, b, _ in res_seen if float(a) or float(b)]
+    if "pose residual: OFF, budget 0.00 deg" in text:
+        m = re.search(r"pose residual: OFF.*?up to rc9 this headset was given ([\d.]+) deg", text)
+        if m:
+            print(f"residual none — up to rc9 this headset was given {m.group(1)} deg (issue #4)")
+    if res_on and not re.search(r"\bX4VR_POSE_ROTATE=[^0\s]", run or ""):
+        fails.append(f"issue #4: {len(res_on)} of {len(res_seen)} pose samples turned the picture by "
+                     f"a residual (budget {res_seen[-1][2]} deg, up to "
+                     f"{max(abs(v) for ab in res_on for v in ab):.2f}) through vertex shaders that "
+                     f"don't conjugate it: wedges of the picture are clipped from its centre and "
+                     f"keep old frames")
 
     # --- the space forward is measured in (issue #4, 2026-11-19) -------------
     #

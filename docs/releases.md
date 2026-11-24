@@ -20,6 +20,15 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
+## Unreleased
+
+* **No more broken picture on narrower headsets (issue #4).** On headsets whose field of view is
+  narrower than the 110 degrees X4 draws, such as a Quest 2 or a Reverb G2, the mod turned the
+  picture by up to 3.3 degrees towards the head in a way its shaders couldn't do. Parts of the
+  picture were cut away along lines from its centre and kept old frames, spiralling outwards as
+  the head moved. The Quest 3 and the Steam Frame never had it. All headsets now work as those two
+  do.
+
 ## v1.0.0-rc9 — 2026-11-23 — Ninth release candidate: the headset's frames back on NVIDIA
 
 The ninth release candidate for 1.0. Packages call it `1.0.0~rc9` (Arch: `1.0.0rc9`), which

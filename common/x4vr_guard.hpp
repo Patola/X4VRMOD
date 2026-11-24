@@ -127,6 +127,22 @@ inline float half_tan_of_x4vr_fov(float fov) {
     return std::tan(0.5f * fov * 73.7399f * kDeg);
 }
 
+// The budget a run may spend: none unless the vertex shaders really conjugate by
+// the pose (X4VR_POSE_ROTATE, off by default).
+//
+// **Issue #4 (2026-11-24).** What ships is the transport form (#59): it multiplies
+// gl_Position by the block's matrix, right only while that is identity. On every
+// headset Patola owns the field X4 draws (1.4917, 110 deg) leaves no budget, so it
+// always was. A Quest 2 (3.29 deg) and a Reverb G2 (2.22) are narrower, and there
+// the residual turned clip space: clip z is the constant near plane, so z - x sin
+// goes below zero on one side of a line through the image's centre, across the
+// head's motion, and everything past a few metres on that side is clipped. What
+// was drawn there before stays: the "circular glitch that spirals outwards".
+inline float residual_budget(const EyeFov *eyes, int count, float half_tan,
+                             bool shaders_conjugate) {
+    return shaders_conjugate ? max_budget_deg(eyes, count, half_tan) : 0.0f;
+}
+
 // What the conjugation should apply this frame, and whether the budget bit.
 //
 // Here rather than in the layer because the layer's copy cannot run headless

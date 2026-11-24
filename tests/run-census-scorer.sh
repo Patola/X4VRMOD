@@ -1387,6 +1387,24 @@ sed 's/env: run = /env: run = X4VR_DECLARE_TURN_AB=recentre /' "$BASE" > /tmp/ce
 want "declturn: A/B asked of a build without it -> FAIL" /tmp/census-dt-old.log "FAIL" "the layer never mentioned the turn correction"
 absent "copysync: an older build -> silent" "$BASE" copysync
 
+# ------------------------------------------ issue #4: the residual without a conjugation
+rsfmt=1
+for frag in '"residual %.2f,%.2f applied, budget %.2f, "' \
+            '"pose residual: OFF, budget 0.00 deg — the vertex shaders don'"'"'t conjugate by "' \
+            '"per eye: up to rc9 this headset was given %.2f deg (issue #4)",'; do
+    grep -qF -- "$frag" layer/x4vr_layer.cpp || { rsfmt=0; echo "        missing: $frag"; }
+done
+[ $rsfmt -eq 1 ] && ok "residual: the planted lines match the layer's formats" \
+    || bad "residual: the layer's lines changed — replant the lines below"
+rsp() { printf '[  99996%s.000] layer   vr pose: shared=1 cam_valid=1 declared yaw=-14.46 pitch=-4.40 deg (X4 -14.09,-4.36 + residual %s applied, budget %s, 5700/8420 clamped)' "$1" "$2" "$3"; }
+plant /tmp/census-res-bad.log "$(rsp 1 '-0.37,-0.05' 3.29)" "$(rsp 2 '3.29,-3.29' 3.29)"
+want "residual: applied without the conjugation (Frazzle402) -> FAIL" /tmp/census-res-bad.log "FAIL" "2 of 2 pose samples turned the picture by a residual (budget 3.29 deg, up to 3.29)"
+sed 's/env: run = /env: run = X4VR_POSE_ROTATE=1 /' /tmp/census-res-bad.log > /tmp/census-res-rot.log
+absent "residual: with the conjugation -> no FAIL" /tmp/census-res-rot.log "FAIL  issue #4"
+plant /tmp/census-res-ok.log '[  999955.000] layer   pose residual: OFF, budget 0.00 deg — the vertex shaders don'"'"'t conjugate by the pose (X4VR_POSE_ROTATE), so the picture is drawn at X4'"'"'s own camera on every headset. X4VR_FOV=1.4917 renders 110.0 deg, runtime wants 88.0 x 98.0 deg per eye: up to rc9 this headset was given 3.29 deg (issue #4)' "$(rsp 1 '0.00,0.00' 0.00)"
+want "residual: off on a narrow headset -> said" /tmp/census-res-ok.log residual "none — up to rc9 this headset was given 3.29 deg (issue #4)"
+absent "residual: off on a narrow headset -> no FAIL" /tmp/census-res-ok.log "FAIL  issue #4"
+
 # ------------------------------------------ vram: the card's memory and the margin
 grep -qF -- '"vram (%s): the card'"'"'s %.0f MB — X4 uses %.0f, its budget %.0f, so %.0f free for it; "' layer/x4vr_layer.cpp \
     && grep -qF -- '"at most %.0f used, at least %.0f free",' layer/x4vr_layer.cpp \

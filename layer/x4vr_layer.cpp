@@ -8638,8 +8638,18 @@ void pose_budget_establish(const float fov_rad[2][4]) {
         eyes[e] = {fov_rad[e][0], fov_rad[e][1], fov_rad[e][2], fov_rad[e][3]};
     const float fov = (float)atof(fe);
     const float ht = x4vr::guard::half_tan_of_x4vr_fov(fov);
-    const float b = x4vr::guard::max_budget_deg(eyes, 2, ht);
+    const float b = x4vr::guard::residual_budget(eyes, 2, ht, pose_rotate());
     g_residual.budget_deg.store(b);
+    if (!pose_rotate()) {
+        X4VR_LOG("pose residual: OFF, budget 0.00 deg — the vertex shaders don't conjugate by "
+                 "the pose (X4VR_POSE_ROTATE), so the picture is drawn at X4's own camera on "
+                 "every headset. X4VR_FOV=%.4f renders %.1f deg, runtime wants %.1f x %.1f deg "
+                 "per eye: up to rc9 this headset was given %.2f deg (issue #4)",
+                 fov, fov * 73.7399f, (fov_rad[0][1] - fov_rad[0][0]) * 57.2957795f,
+                 (fov_rad[0][2] - fov_rad[0][3]) * 57.2957795f,
+                 x4vr::guard::max_budget_deg(eyes, 2, ht));
+        return;
+    }
     X4VR_LOG("pose residual: X4VR_FOV=%.4f renders %.1f deg, runtime wants "
              "%.1f x %.1f deg per eye -> budget %.2f deg of head rotation. "
              "The servo's residual is median 0.22 / p90 2.27 deg below X4's "
