@@ -1422,3 +1422,23 @@ queue and never used it).
 ```
 X4VR_LANGUAGE=en X4VR_TAKE=455K X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=2016 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=4032 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_NEEDS_STEAM=1 X4VR_RES=2016x2016 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=none X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_COPY_RING_AB=recentre X4VR_HEADLOOK_RAW=191 X4VR_HEADLOOK_KP=0.25 X4VR_GAME='/games/SteamLibrary/steamapps/common/X4 Foundations/X4' X4VR_STEER_PICK=1 X4VR_INJECTOR=/usr/lib/x4vrmod/libx4vr_inject.so X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOADING_ART=1 X4VR_LAYER_MANIFEST=/usr/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json X4VR_PROJ_INVPROJ=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take455k.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
 ```
+
+## Takes 457 and 458 (2026-11-24) — issue #4's wedges reproduced and gone; the map on an 8 GB card
+
+RTX 3070 laptop (8 GB), Steam Frame, no upscaler, setup 5; logs in `/tmp`; `score_run.py` PASS unless said.
+
+* **Take 458a (code d9c7732, rc9's pose code), WiVRn, 2016, `X4VR_FOV=1.80`:** X4's field made wider than
+  the Frame's, so the residual has a budget (3.76°), as on a Quest 2 or a Reverb G2. Patola saw the
+  reporters' artefacts. 17 of 17 pose samples turned; FAIL "issue #4", as it should.
+* **Take 458b (code 3f660cc), the same:** "completely fixed the issue". 0 of 19 samples turned. PASS.
+* **Takes 457e (3600) and 457f (3200), WiVRn (code d9c7732):** all textures, but the map empty, X4 asking
+  for its doubled image 627 and 546 times (FAIL, by the rule added after). **457z (2816):** textures and map.
+* **Take 457g (code 3f660cc), SteamVR, 3200:** the doubled map (156.2 MiB) dropped three times in 92 ms,
+  one layer from then on; "no missing textures, map was working, everything looked good and crisp". PASS.
+  X4 had 90 MB left at the least: full, not broken.
+* **Takes 457a-d (code d9c7732):** SteamVR 2816 fine, 3600 nothing missed (the map not opened), 4000
+  textures missing with X4's memory at its ceiling from the start menu; WiVRn 4000 the map empty.
+
+```
+XR_RUNTIME_JSON=/home/patola/.local/share/Steam/steamapps/common/SteamVR/steamxr_linux64.json X4VR_LANGUAGE=en X4VR_TAKE=457G X4VR_CANVAS_M=1000 X4VR_HEADLOOK_YAW_LIMIT=180 X4VR_STEREO=1 X4VR_HEADLOOK_PITCH_LIMIT=75 X4VR_BINDLESS_PATCH=1 X4VR_H=3200 X4VR_DECLARE_RENDERED_POS=1 X4VR_W=6400 X4VR_ROLL_STEREO=1 X4VR_HEADLOOK_LEAD=1.0 X4VR_HUD_MOUSE=1 X4VR_HEADLOOK_EXTERNAL=1 X4VR_HEADLOOK_WRITE=1 X4VR_NEEDS_STEAM=1 X4VR_RES=3200x3200 X4VR_VR=1 X4VR_OFFAXIS=off X4VR_GAMESCOPE=1 X4VR_UPSCALE=none X4VR_SBS_RIGHT_LAYER=1 X4VR_HEADLOOK=1 X4VR_EXTENSIONS=1 X4VR_SBS_LAYERS=2 X4VR_UI_WGATE=0.02 X4VR_POSE=1 X4VR_HEADLOOK_RAW=191 X4VR_MEMLOG=1 X4VR_HEADLOOK_KP=0.25 X4VR_GAME='/games/SteamLibrary/steamapps/common/X4 Foundations/X4' X4VR_STEER_PICK=1 X4VR_INJECTOR=/usr/lib/x4vrmod/libx4vr_inject.so X4VR_UI_WGATE_W1=0 X4VR_MV=1 X4VR_PROJ_LIVE=1 X4VR_SBS=1 X4VR_LOADING_ART=1 X4VR_LAYER_MANIFEST=/usr/share/vulkan/explicit_layer.d/VK_LAYER_X4VR_core.json X4VR_PROJ_INVPROJ=1 X4VR_HEADLOOK_FOOT=1 X4VR_LOG=/tmp/x4vr-take457g.log X4VR_DECLARE_RENDERED_ROT=2 X4VR_STEER=a X4VR_MASK_PRESENT=1 X4VR_UI_FOV=1.0 X4VR_FOV=1.4917 X4VR_BINDLESS_MIRROR=1 X4VR_CAMREAD=1 X4VR_CAMLOOP=1 X4VR_CURSOR_CANVAS=auto X4VR_HEAD_6DOF=1 X4VR_CSM_COVER=0.663 X4VR_HEADLOOK_MENU_CENTRE=1 X4VR_HEADLOOK_GAIN=0.115 ./launch/x4vr-launch.sh
+```
