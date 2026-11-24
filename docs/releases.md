@@ -20,7 +20,13 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
-## Unreleased
+## v1.0.0-rc10 — 2026-11-24 — Tenth release candidate: no more broken picture on narrower headsets (issues #3 and #4)
+
+The tenth release candidate for 1.0. Packages call it `1.0.0~rc10` (Arch: `1.0.0rc10`), which
+installs over rc1 to rc9 as an upgrade and sorts before 1.0.0.
+
+Take the package named for your system: Arch, Ubuntu 24.04, Ubuntu 26.04, Debian 13 or Fedora,
+or the zip for anything else.
 
 * **No more broken picture on narrower headsets (issues #3 and #4).** On headsets whose field of
   view is narrower than the 110 degrees X4 draws, such as a Quest 2 or a Reverb G2, the mod turned
