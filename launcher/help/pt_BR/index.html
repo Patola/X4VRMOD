@@ -72,8 +72,8 @@ o que quebra uma sessão em andamento. Por isso ela é escolhida antes de inicia
 <p>Com o headset conectado, a lista marca o tamanho mais próximo do que o seu headset pede.
 Essa é a recomendação do runtime, que já leva as lentes em conta, e costuma ser maior que a
 tela do headset.</p>
-<p>Acima de 4068 por olho, a visão 3D do mapa fica plana em vez de ter profundidade, por causa
-de como o X4 guarda imagens grandes na memória. Com o SteamVR, 4224 já mostrou uma imagem
+<p>Até onde dá para ir depende da sua placa de vídeo, da velocidade e da memória dela: veja
+<a href="#cards">Configurações por placa de vídeo</a>. Com o SteamVR, 4224 já mostrou uma imagem
 embaralhada; se isso acontecer, diminua.</p>
 
 <a name="headsets"></a>
@@ -96,6 +96,49 @@ o mesmo que no Médio, e o upscaler e a imagem maior custam um pouco mais por ci
 <p><b>Só o Médio e o Alto do Quest 3 foram jogados</b>, no WiVRn com uma Radeon RX 7900 XTX.
 O resto é a mesma regra aplicada à tela de cada um. Se você testar algum, o que descobrir é
 bem-vindo num relato de bug.</p>
+
+<a name="cards"></a>
+<h3>Configurações por placa de vídeo</h3>
+<p>Duas coisas limitam o tamanho: a velocidade da sua placa de vídeo e a memória que ela tem.</p>
+<p><b>Velocidade.</b> Pontos de partida, calculados a partir das medições abaixo:</p>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>Placa de vídeo</th><th>Comece com</th><th>Depois tente</th></tr>
+<tr><td>GeForce RTX 2060, Radeon RX 5700</td><td>2048 + FSR 1 Qualidade</td><td>2400</td></tr>
+<tr><td>GeForce RTX 3070 ou 4060, Radeon RX 6700 XT</td><td>2816 + FSR 1 Qualidade</td><td>2816</td></tr>
+<tr><td>GeForce RTX 4070 Ti a 5080, Radeon RX 6900 XT a 9070 XT</td><td>2816</td><td>4224 + FSR 1 Qualidade</td></tr>
+<tr><td>Radeon RX 7900 XTX, GeForce RTX 4090 ou 5090</td><td>3200 + FSR 1 Qualidade</td><td>4224 + FSR 1 Qualidade</td></tr>
+</table>
+<p><b>O que os jogadores mediram</b>, em quadros por segundo:</p>
+<ul>
+<li>GeForce RTX 3070 de notebook: 30 a 45 em 2016, 17 a 40 em 2816, 28 a 32 em 3200, 26 em 3600</li>
+<li>Radeon RX 6900 XT: 73 a 77 em 2400</li>
+<li>Radeon RX 7900 XTX: 117 em 2016, 58 a 113 em 2816, 76 a 95 em 3200 + FSR 1 Qualidade, 54 a 62 em 4224 + FSR 1 Equilibrado, 34 em 4224</li>
+<li>Radeon RX 9070 XT: 126 em 3072 + FSR 3 Ultra Desempenho</li>
+<li>GeForce RTX 5090: 122 a 127 em 2816 + DLSS Automático</li>
+</ul>
+<p>As cenas são diferentes, então são números aproximados: perto de uma estação grande, ou voando,
+espere os menores. Se um tamanho menor não ficar mais rápido, quem limita o X4 ali é o
+processador, e dá para voltar a um maior.</p>
+<p><b>Memória.</b> Em cada tamanho, as imagens do X4 ocupam uma quantidade fixa da memória de
+vídeo antes de qualquer textura, e as texturas ficam com o que sobra. Quando é pouco, algumas
+faltam, e o X4 não avisa. Com o headset conectado, o launcher compara o tamanho com a memória
+livre da sua placa e avisa abaixo da lista. Se o X4 ficou sem memória numa sessão anterior, ele
+diz. Os maiores tamanhos que deixam o bastante, sem upscaler:</p>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>Memória da placa</th><th>Com o WiVRn</th><th>Com o SteamVR</th><th>Mapa com profundidade até</th></tr>
+<tr><td>6 GB</td><td>2816</td><td>1600</td><td>2816</td></tr>
+<tr><td>8 GB</td><td>4000</td><td>3200</td><td>2816</td></tr>
+<tr><td>10 ou 12 GB</td><td>4224</td><td>4000</td><td>2816</td></tr>
+<tr><td>16 GB</td><td>4224</td><td>4000</td><td>3200</td></tr>
+<tr><td>20 GB</td><td>4224</td><td>4000</td><td>3600</td></tr>
+<tr><td>24 GB ou mais</td><td>4224</td><td>4000</td><td>4000</td></tr>
+</table>
+<p>Só as linhas de 8 e 24 GB foram jogadas, a primeira no notebook com RTX 3070. Nele o SteamVR
+deixou para o X4 cerca de 1,2 GB a menos que o WiVRn. Um upscaler deixa as imagens do X4 menores,
+então cabem tamanhos maiores.</p>
+<p><b>O mapa:</b> acima do tamanho da última coluna, a visão 3D do mapa fica plana em vez de ter
+profundidade. O X4 guarda essa imagem num bloco de memória cujo tamanho depende da placa, e o mod
+a duplica, uma para cada olho. Em placas com 12 GB ou menos, ela nem é desenhada acima de 4000.</p>
 
 <a name="upscaler"></a>
 <h2>Upscaler</h2>

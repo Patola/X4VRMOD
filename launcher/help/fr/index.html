@@ -74,9 +74,9 @@ ce qui casse une session en cours. Elle se choisit donc avant le lancement.</p>
 <p>Quand le casque est connecté, la liste marque la taille la plus proche de ce que demande votre
 casque. C'est la recommandation du runtime, qui tient déjà compte des lentilles, et elle est
 généralement plus grande que l'écran du casque.</p>
-<p>Au-dessus de 4068 par œil, la vue 3D de la carte est plate au lieu d'avoir de la profondeur, à
-cause de la façon dont X4 place les grandes images en mémoire. Avec SteamVR, 4224 a déjà donné une
-image brouillée ; si vous voyez cela, descendez.</p>
+<p>Jusqu'où aller dépend de votre carte graphique, de sa vitesse et de sa mémoire : voir
+<a href="#cards">Réglages par carte graphique</a>. Avec SteamVR, 4224 a déjà donné une image
+brouillée ; si vous voyez cela, descendez.</p>
 
 <a name="headsets"></a>
 <h3>Réglages par casque</h3>
@@ -98,6 +98,51 @@ autant qu'en Moyen, et l'upscaler et l'image plus grande coûtent un peu plus en
 <p><b>Seuls le Moyen et le Haut du Quest 3 ont été joués</b>, sur WiVRn avec une Radeon RX 7900
 XTX. Le reste applique la même règle à l'écran de chaque casque. Si vous en essayez un, ce que vous
 constatez est bienvenu dans un rapport de bug.</p>
+
+<a name="cards"></a>
+<h3>Réglages par carte graphique</h3>
+<p>Deux choses limitent la taille : la vitesse de votre carte graphique et la mémoire dont elle
+dispose.</p>
+<p><b>Vitesse.</b> Des points de départ, calculés à partir des mesures ci-dessous :</p>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>Carte graphique</th><th>Commencez par</th><th>Puis essayez</th></tr>
+<tr><td>GeForce RTX 2060, Radeon RX 5700</td><td>2048 + FSR 1 Qualité</td><td>2400</td></tr>
+<tr><td>GeForce RTX 3070 ou 4060, Radeon RX 6700 XT</td><td>2816 + FSR 1 Qualité</td><td>2816</td></tr>
+<tr><td>GeForce RTX 4070 Ti à 5080, Radeon RX 6900 XT à 9070 XT</td><td>2816</td><td>4224 + FSR 1 Qualité</td></tr>
+<tr><td>Radeon RX 7900 XTX, GeForce RTX 4090 ou 5090</td><td>3200 + FSR 1 Qualité</td><td>4224 + FSR 1 Qualité</td></tr>
+</table>
+<p><b>Ce que les joueurs ont mesuré</b>, en images par seconde :</p>
+<ul>
+<li>GeForce RTX 3070 de portable : 30 à 45 à 2016, 17 à 40 à 2816, 28 à 32 à 3200, 26 à 3600</li>
+<li>Radeon RX 6900 XT : 73 à 77 à 2400</li>
+<li>Radeon RX 7900 XTX : 117 à 2016, 58 à 113 à 2816, 76 à 95 à 3200 + FSR 1 Qualité, 54 à 62 à 4224 + FSR 1 Équilibré, 34 à 4224</li>
+<li>Radeon RX 9070 XT : 126 à 3072 + FSR 3 Ultra Performance</li>
+<li>GeForce RTX 5090 : 122 à 127 à 2816 + DLSS Auto</li>
+</ul>
+<p>Les scènes diffèrent, ces chiffres sont donc approximatifs : près d'une grande station, ou en vol,
+attendez-vous aux plus bas. Si une taille plus petite n'est pas plus rapide, c'est le processeur qui
+limite X4 à cet endroit, et vous pouvez remonter.</p>
+<p><b>Mémoire.</b> À chaque taille, les images de X4 prennent une part fixe de la mémoire
+graphique avant toute texture, et les textures ont ce qui reste. Quand c'est trop peu, certaines
+manquent, et X4 ne le dit pas. Casque connecté, le lanceur compare la taille à la mémoire libre de
+votre carte et vous avertit sous la liste. Si X4 a manqué de mémoire lors d'une session précédente,
+il le dit. Les plus grandes tailles qui en laissent assez, sans upscaler :</p>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>Mémoire de la carte</th><th>Avec WiVRn</th><th>Avec SteamVR</th><th>Carte en profondeur jusqu'à</th></tr>
+<tr><td>6 Go</td><td>2816</td><td>1600</td><td>2816</td></tr>
+<tr><td>8 Go</td><td>4000</td><td>3200</td><td>2816</td></tr>
+<tr><td>10 ou 12 Go</td><td>4224</td><td>4000</td><td>2816</td></tr>
+<tr><td>16 Go</td><td>4224</td><td>4000</td><td>3200</td></tr>
+<tr><td>20 Go</td><td>4224</td><td>4000</td><td>3600</td></tr>
+<tr><td>24 Go ou plus</td><td>4224</td><td>4000</td><td>4000</td></tr>
+</table>
+<p>Seules les lignes 8 et 24 Go ont été jouées, la première sur le portable à RTX 3070. SteamVR
+y laissait à X4 environ 1,2 Go de moins que WiVRn. Un upscaler rend les images de X4 plus petites,
+donc de plus grandes tailles tiennent.</p>
+<p><b>La carte du jeu :</b> au-dessus de la taille de la dernière colonne, la vue 3D de la carte est
+plate au lieu d'avoir de la profondeur. X4 garde cette image dans un bloc de mémoire dont la taille
+dépend de la carte graphique, et le mod la double, une par œil. Sur les cartes graphiques de 12 Go
+ou moins, elle n'est pas dessinée du tout au-dessus de 4000.</p>
 
 <a name="upscaler"></a>
 <h2>Upscaler</h2>

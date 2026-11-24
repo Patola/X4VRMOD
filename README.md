@@ -126,7 +126,7 @@ blocks every frame.
 | F6 (cinematic) a steady window, as X4 intends | done | **`v0.9.4`** |
 | F6's overlay fills its window | done | **`v0.9.5`** |
 | The cockpit HUD clicks where it is drawn; steering targets at the ring; lean in the cockpit | done | **`v0.9.6`** |
-| Larger eyes: the HUD stays put; the map draws (flat above ~4068² per eye, X4's 255.8 MiB pool block) | done | **`v0.9.7`** |
+| Larger eyes: the HUD stays put; the map draws (flat above a size the card decides) | done | **`v0.9.7`** |
 | FSR 1 in both eyes (`X4VR_UPSCALE=fsr_*`) | done | **`v0.9.8`** |
 | FSR 3 in both eyes (`X4VR_UPSCALE=fsr3_*`) | done | **`v0.9.8`** |
 | The Pause key keeps the cockpit and walking immersive | done | **`v0.9.8`** |
@@ -246,10 +246,25 @@ yourself. The eyes are square:
 | `X4VR_RES` | X4's resolution: `X4VR_H`x`X4VR_H` | `2816x2816` | `4224x4224` |
 
 The shipping line (take 375 in [docs/known-good-runs.md](docs/known-good-runs.md))
-uses 2816² per eye. Two limits are known at larger sizes:
-* Above about 4068² per eye the map is drawn flat, the same image in both
-  eyes. It is too big, doubled, for X4's 255.8 MiB memory block.
-* SteamVR garbles the image at 4224² per eye; WiVRn does not.
+uses 2816² per eye. SteamVR garbles the image at 4224² per eye; WiVRn does not. The graphics
+card's memory sets two more limits. X4's images take a fixed amount of it at each size, before any
+texture, and the textures get what's left: too little and some go missing. And X4 keeps the map's
+image in a block of memory whose size depends on the card, which that image, doubled, outgrows:
+above that size the map is drawn flat, the same image in both eyes, and at 12 GB or less it isn't
+drawn at all above 4000. With no upscaler:
+
+| Card's memory | Largest size, WiVRn | Largest size, SteamVR | Map in depth up to |
+|---|---|---|---|
+| 6 GB ¹ | 2816 | 1600 | 2816 |
+| 8 GB | 4000 | 3200 | 2816 |
+| 10 or 12 GB ¹ | 4224 | 4000 | 2816 |
+| 16 GB ¹ | 4224 | 4000 | 3200 |
+| 20 GB ¹ | 4224 | 4000 | 3600 |
+| 24 GB or more | 4224 | 4000 | 4000 |
+
+¹ Worked out from the 8 and 24 GB cards' numbers. The launcher does the same sum with the memory
+your card has free, and warns you. Its help has starting points for other cards, under "Settings
+by graphics card".
 
 **Upscaling.** `X4VR_UPSCALE=<mode>` chooses X4's upscaler, which renders the
 scene smaller and scales it up to the eye size. The default is `none`: X4

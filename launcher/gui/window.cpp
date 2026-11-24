@@ -560,7 +560,7 @@ void Window::syncSettings() {
         lines << qtr("Renders %1 x %1.").arg(size);
     if (!m_note.isEmpty())
         lines << m_note;
-    const std::string en = eye_note(m_eye.eye, m_steamvr);
+    const std::string en = eyeNote();
     if (!en.empty())
         lines << q(en);
     // Flatscreen greys these out: they're the mod's VR settings, and a flat game runs
@@ -581,6 +581,15 @@ void Window::syncSettings() {
     m_gamemode->setVisible(have_gamemode());
     m_gamemode->setChecked(m_profile.get("gamemode") == "1");
     m_syncing = false;
+}
+
+// Free memory counts only with VR up: the runtime's own share is taken by then.
+std::string Window::eyeNote() const {
+    GpuInfo g = m_gpu;
+    const auto vr = m_checks.find("vr");
+    if (vr == m_checks.end() || vr->second.status != Status::Ok)
+        g.budget_mb = 0;
+    return eye_note(m_eye, m_steamvr, g, m_past);
 }
 
 // DLSS only with an RTX card. Until the GPU has been asked, a choice already saved stays on
@@ -690,8 +699,11 @@ void Window::requestChecks(bool forceVr) {
     const bool vrDue = now - m_lastVr >= std::chrono::seconds(vrOk ? 30 : 10);
     const std::string lastRuntime = m_runtimePath;
     const bool lastSteamvr = m_steamvrUp;
+    const bool askPast = !m_pastAsked;
+    m_pastAsked = true;
 
-    m_worker = QThread::create([this, o, forceVr, haveVr, vrDue, lastRuntime, lastSteamvr]() mutable {
+    m_worker = QThread::create([this, o, forceVr, haveVr, vrDue, lastRuntime, lastSteamvr,
+                                askPast]() mutable {
         // Asking a runtime is what's slow and what could bother it, so only when
         // something changed or it's due. Reading its file costs nothing.
         const ActiveRuntime rt = active_runtime(o.home);
@@ -703,9 +715,26 @@ void Window::requestChecks(bool forceVr) {
         o.xr_out = &xr;
         const std::vector<Check> rows = run_checks(o);
         const bool skipGpu = o.skip_gpu;
+        // How much memory is free changes, unlike the card: asked again with the runtime,
+        // and never beside a running X4, which holds most of it.
+        GpuInfo card;
+        const auto free = [&rows](const Check &c) {
+            return c.id == "running" && c.status == Status::Ok;
+        };
+        if (skipGpu && ask && xr.status == XrStatus::Ready &&
+            std::any_of(rows.begin(), rows.end(), free)) {
+            const VulkanProbe vp = vulkan_probe_child(4000);
+            if (const GpuInfo *g = best_gpu(vp))
+                card = *g;
+        }
+        std::vector<SessionMemory> past;
+        if (askPast)
+            past = past_memory(o.home);
         QMetaObject::invokeMethod(
             this,
-            [this, rows, xr, ask, skipGpu, path = rt.path, steamvr = rt.steamvr, up] {
+            [this, rows, xr, ask, skipGpu, card, past, askPast, path = rt.path,
+             steamvr = rt.steamvr, up] {
+                const std::string noted = eyeNote();
                 m_runtimePath = path;
                 m_steamvrUp = up;
                 if (ask)
@@ -717,7 +746,11 @@ void Window::requestChecks(bool forceVr) {
                 m_headsetAsks = asks;
                 m_checksDone++;
                 applyChecks(rows, !ask, skipGpu);
-                if (steamvrChanged || asksChanged) {
+                if (askPast)
+                    m_past = past;
+                if (card.budget_mb)
+                    cardMemory(card);
+                if (steamvrChanged || asksChanged || eyeNote() != noted) {
                     syncSettings();
                     fitSize();
                 }
@@ -733,6 +766,14 @@ void Window::requestChecks(bool forceVr) {
     m_worker->start();
 }
 
+// Small changes are other programs' comings and goings, and would make the note flicker.
+void Window::cardMemory(const GpuInfo &g) {
+    const uint32_t kept = m_gpu.budget_mb;
+    m_gpu = g;
+    if (kept && g.budget_mb && std::abs((int)g.budget_mb - (int)kept) < 256)
+        m_gpu.budget_mb = kept;
+}
+
 void Window::showChecks(const std::vector<Check> &rows) { applyChecks(rows, false, false); }
 
 void Window::applyChecks(const std::vector<Check> &rows, bool keepVr, bool keepGpu) {
@@ -745,6 +786,8 @@ void Window::applyChecks(const std::vector<Check> &rows, bool keepVr, bool keepG
         next["gpu"] = m_checks["gpu"];
     m_checks = std::move(next);
     const auto gpu = m_checks.find("gpu");
+    if (gpu != m_checks.end() && !keepGpu)
+        cardMemory(gpu->second.gpu);
     if (gpu != m_checks.end() && (!m_gpuAsked || gpu->second.dlss != m_rtx)) {
         m_gpuAsked = true;
         m_rtx = gpu->second.dlss;
@@ -917,6 +960,11 @@ void Window::drawBanner(int width) {
 // kWidth, or wider when the window's words need it, and never narrower again, so it
 // doesn't jump as the rows change; then the height its rows take at that width.
 void Window::fitSize() {
+    // From the note outwards: each layout hears that something in it grew only from the one
+    // inside, which otherwise answers later, by a posted event.
+    for (QWidget *in = m_renders->parentWidget(); in && in != this; in = in->parentWidget())
+        if (in->layout())
+            in->layout()->activate();
     QLayout *l = layout();
     l->activate();
     const int w = std::max({kWidth, width(), l->minimumSize().width()});
@@ -988,6 +1036,7 @@ void Window::sessionEnded() {
                           std::chrono::steady_clock::now() - m_gameStart)
                           .count();
     m_gamePid = 0;
+    m_pastAsked = false; // this one's log says how much memory it had
     m_timer->setInterval(4000);
     if (secs < 20) {
         // Whatever it said last is the best explanation there is.

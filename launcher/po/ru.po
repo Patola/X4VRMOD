@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-19 16:22+0100\n"
+"POT-Creation-Date: 2026-11-24 21:08+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -53,6 +53,11 @@ msgid_plural "%1 would load into X4"
 msgstr[0] "%1 загрузится в X4"
 msgstr[1] "%1 загрузятся в X4"
 msgstr[2] "%1 загрузятся в X4"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1, %2 GB of memory"
+msgstr "%1, %2 ГБ памяти"
 
 #: launcher/core/checks.cpp
 #, qt-format
@@ -474,6 +479,65 @@ msgstr ""
 msgid "X4 wasn't found."
 msgstr "X4 не найден."
 
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "At 4224 SteamVR has shown a jumbled picture. If you see that, go lower."
+msgstr ""
+"При 4224 SteamVR уже показывал перемешанную картинку. Если увидите такое, "
+"уменьшите разрешение."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid ""
+"At this size X4's images alone take about %1 GB, and your graphics card has "
+"%2 GB free. What's left is too little for the textures, and some may be "
+"missing."
+msgstr ""
+"При таком разрешении одни только изображения X4 занимают около %1 ГБ, а на "
+"видеокарте свободно %2 ГБ. Остатка мало для текстур, и часть их может "
+"пропасть."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "Choose %1 or less, or an upscaler."
+msgstr "Выберите %1 или меньше либо апскейлер."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "Choose %1 or less."
+msgstr "Выберите %1 или меньше."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "Close other programs that use the graphics card."
+msgstr "Закройте другие программы, которые используют видеокарту."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid ""
+"In an earlier session at %1, X4 ran out of graphics memory before the save "
+"was loaded, and some textures may have been missing. Choose a smaller size "
+"or an upscaler."
+msgstr ""
+"В прошлом сеансе при %1 у X4 закончилась видеопамять ещё до загрузки "
+"сохранения, и части текстур могло не быть. Выберите разрешение меньше или "
+"апскейлер."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid ""
+"On this graphics card, the map's 3D view is flat, not in depth, above %1."
+msgstr ""
+"На этой видеокарте трёхмерный вид карты становится плоским, без глубины, при "
+"разрешении выше %1."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "On this graphics card, the map's 3D view stays empty above %1."
+msgstr ""
+"На этой видеокарте трёхмерный вид карты остаётся пустым при разрешении выше "
+"%1."
+
 #: launcher/core/patches.cpp
 #, qt-format
 msgid "Aiming at where the steering target points"
@@ -523,18 +587,6 @@ msgstr "Исправление теней"
 #, qt-format
 msgid "The steering target drawn in VR"
 msgstr "Маркер управления в VR"
-
-#: launcher/core/profile.cpp
-#, qt-format
-msgid "Above 4068 the map's 3D view is flat, not in depth."
-msgstr "Выше 4068 трёхмерный вид карты становится плоским, без глубины."
-
-#: launcher/core/profile.cpp
-#, qt-format
-msgid "At 4224 SteamVR has shown a jumbled picture. If you see that, go lower."
-msgstr ""
-"При 4224 SteamVR уже показывал перемешанную картинку. Если увидите такое, "
-"уменьшите разрешение."
 
 #: launcher/core/profile.cpp
 #, qt-format

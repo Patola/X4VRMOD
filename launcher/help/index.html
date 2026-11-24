@@ -71,9 +71,9 @@ which breaks a running session. So it's chosen before starting.</p>
 <p>When the headset is connected, the list marks the size nearest what your headset
 asks for. That's the runtime's recommendation, which already allows for the lenses, and
 it's usually larger than the headset's panel.</p>
-<p>Above 4068 per eye, the map's 3D view is flat instead of in depth, because of how X4
-places large images in memory. With SteamVR, 4224 has shown a jumbled picture; if you
-see that, go lower.</p>
+<p>How large it can be depends on your graphics card, its speed and its memory: see
+<a href="#cards">Settings by graphics card</a>. With SteamVR, 4224 has shown a jumbled
+picture; if you see that, go lower.</p>
 
 <a name="headsets"></a>
 <h3>Settings by headset</h3>
@@ -95,6 +95,49 @@ and the larger image cost extra on top.</p>
 <p><b>Only the Quest 3's Mid and High have been played</b>, on WiVRn with a Radeon RX 7900
 XTX. The rest is the same rule applied to each panel. If you try one, what you find is
 welcome in a bug report.</p>
+
+<a name="cards"></a>
+<h3>Settings by graphics card</h3>
+<p>Two things limit the size: how fast your graphics card is, and how much memory it has.</p>
+<p><b>Speed.</b> Starting points, worked out from the measurements below:</p>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>Graphics card</th><th>Start with</th><th>Then try</th></tr>
+<tr><td>GeForce RTX 2060, Radeon RX 5700</td><td>2048 + FSR 1 Quality</td><td>2400</td></tr>
+<tr><td>GeForce RTX 3070 or 4060, Radeon RX 6700 XT</td><td>2816 + FSR 1 Quality</td><td>2816</td></tr>
+<tr><td>GeForce RTX 4070 Ti to 5080, Radeon RX 6900 XT to 9070 XT</td><td>2816</td><td>4224 + FSR 1 Quality</td></tr>
+<tr><td>Radeon RX 7900 XTX, GeForce RTX 4090 or 5090</td><td>3200 + FSR 1 Quality</td><td>4224 + FSR 1 Quality</td></tr>
+</table>
+<p><b>What players have measured</b>, in frames per second:</p>
+<ul>
+<li>GeForce RTX 3070 laptop: 30 to 45 at 2016, 17 to 40 at 2816, 28 to 32 at 3200, 26 at 3600</li>
+<li>Radeon RX 6900 XT: 73 to 77 at 2400</li>
+<li>Radeon RX 7900 XTX: 117 at 2016, 58 to 113 at 2816, 76 to 95 at 3200 + FSR 1 Quality, 54 to 62 at 4224 + FSR 1 Balanced, 34 at 4224</li>
+<li>Radeon RX 9070 XT: 126 at 3072 + FSR 3 Ultra Performance</li>
+<li>GeForce RTX 5090: 122 to 127 at 2816 + DLSS Auto</li>
+</ul>
+<p>The scenes differ, so they're rough: near a large station, or flying, expect the lower
+numbers. If a smaller size isn't faster, the processor is what limits X4 there, and you can go
+back up.</p>
+<p><b>Memory.</b> At each size, X4's images take a fixed amount of graphics memory before any
+texture does, and the textures get what's left. When that's too little, some go missing, and X4
+doesn't say so. With your headset connected, the launcher compares the size with the memory your
+card has free and warns you under the list. If X4 ran out in an earlier session, it says so.
+The largest sizes that leave enough, with no upscaler:</p>
+<table border="1" cellpadding="4" cellspacing="0">
+<tr><th>Card's memory</th><th>With WiVRn</th><th>With SteamVR</th><th>Map in depth up to</th></tr>
+<tr><td>6 GB</td><td>2816</td><td>1600</td><td>2816</td></tr>
+<tr><td>8 GB</td><td>4000</td><td>3200</td><td>2816</td></tr>
+<tr><td>10 or 12 GB</td><td>4224</td><td>4000</td><td>2816</td></tr>
+<tr><td>16 GB</td><td>4224</td><td>4000</td><td>3200</td></tr>
+<tr><td>20 GB</td><td>4224</td><td>4000</td><td>3600</td></tr>
+<tr><td>24 GB or more</td><td>4224</td><td>4000</td><td>4000</td></tr>
+</table>
+<p>Only the 8 and 24 GB rows have been played, the first on the RTX 3070 laptop. There SteamVR
+left X4 about 1.2 GB less than WiVRn did. An upscaler makes X4's images smaller, so larger sizes
+fit.</p>
+<p><b>The map:</b> above the last column's size, the map's 3D view is flat instead of in depth.
+X4 keeps that image in a block of memory whose size depends on the card, and the mod doubles the
+image, one for each eye. On cards with 12 GB or less, it isn't drawn at all above 4000.</p>
 
 <a name="upscaler"></a>
 <h2>Upscaler</h2>

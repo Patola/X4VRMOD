@@ -4762,8 +4762,9 @@ bool mv_exceeds_x4_pool(DeviceData *d, VkDevice device, VkImage doubled,
 // the RTX 3070 laptop (8 GB) the blocks are 128.0 MiB, so the map's doubled 3D
 // view fits at 2816 per eye (121.0 MiB, bound) and not at 3200 (156.2 MiB): X4
 // re-created it 546 times and the map was empty, with 1.4 GB free. The limit
-// above only knows the Radeon's block, and X4's rule for choosing it is not
-// known. So the layer learns from X4 as well: an image it doubled, of 64 MiB or
+// above only knows the Radeon's block. X4's rule, read since, is max(128 MiB, the
+// card's memory / 96) (docs/x4-quirks.md, "X4's memory"); the layer doesn't use it and
+// learns from X4 instead: an image it doubled, of 64 MiB or
 // more, that X4 destroys without ever making a view of it, three times in a row
 // for the same size, format and usage, is one X4's pool will not take, and from
 // then on that kind keeps the one layer X4 asked for. Any view of one starts the

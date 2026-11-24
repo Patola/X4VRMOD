@@ -387,11 +387,13 @@ static void test_probes_format() {
     GpuInfo g;
     g.name = "AMD Radeon RX 7900 XTX (RADV NAVI31)";
     g.api_major = 1, g.api_minor = 4, g.max_sets = 32, g.multiview = true, g.discrete = true;
+    g.heap_mb = 24560, g.budget_mb = 18555;
     v.gpus.push_back(g);
     const VulkanProbe w = vulkan_probe_parse(vulkan_probe_format(v));
     check(w.ok && w.gpus.size() == 1 && w.gpus[0].name == g.name && w.gpus[0].max_sets == 32 &&
-              w.gpus[0].multiview && w.gpus[0].discrete,
-          "vulkan: the lines, and a name with spaces");
+              w.gpus[0].multiview && w.gpus[0].discrete && w.gpus[0].heap_mb == 24560 &&
+              w.gpus[0].budget_mb == 18555,
+          "vulkan: the lines, its memory, and a name with spaces");
     check(g.capable(), "gpu: this one can");
     GpuInfo h = g;
     h.multiview = false;
@@ -957,11 +959,19 @@ static void test_child_env() {
 }
 
 static void test_offered() {
-    check(!eye_note(4000, false).empty() == false, "4000 keeps the map in depth");
-    check(eye_note(4096, false).find("flat") != std::string::npos, "4096 says the map is flat");
-    check(eye_note(3200, true).empty(), "SteamVR at 3200 has no warning");
-    check(eye_note(3600, true).find("SteamVR") != std::string::npos, "SteamVR above 3200 has one");
-    check(eye_note(3600, false).empty(), "WiVRn at 3600 doesn't");
+    const auto note = [](int eye, bool steamvr) {
+        GpuInfo g;
+        g.discrete = true;
+        g.heap_mb = 24560;
+        EyeSettings s;
+        s.eye = eye;
+        return eye_note(s, steamvr, g, {});
+    };
+    check(note(4000, false).empty(), "4000 keeps the map in depth on a 24 GB card");
+    check(note(4096, false).find("flat") != std::string::npos, "4096 says the map is flat");
+    check(note(3200, true).empty(), "SteamVR at 3200 has no warning");
+    check(note(3600, true).find("SteamVR") != std::string::npos, "SteamVR above 3200 has one");
+    check(note(3600, false).empty(), "WiVRn at 3600 doesn't");
     bool have_default = false, sorted = true;
     int last = 0;
     for (int e : eye_sizes()) {
@@ -1025,6 +1035,130 @@ static void test_offered() {
           "the vendor and the name survive the child process's output");
     const GpuInfo *best = best_gpu(back);
     check(best && best->rtx(), "a laptop's discrete RTX is the one chosen over its Intel");
+}
+
+// The card's memory. Every number is a run's: the steady use before the start menu, as the
+// layer's vram lines gave it (docs/known-good-runs.md, takes 457 and 458).
+static void test_memory() {
+    struct Run {
+        const char *take;
+        int eye;
+        bool steamvr;
+        int measured;
+    };
+    for (const Run &r : {Run{"458b", 2016, false, 1159}, {"457z", 2816, false, 2040},
+                         {"457f", 3200, false, 2550}, {"457e", 3600, false, 3235},
+                         {"457d", 4000, false, 3884}, {"457a", 2816, true, 2232},
+                         {"457g", 3200, true, 2796}, {"457b", 3600, true, 3547},
+                         {"457c", 4000, true, 4268}}) {
+        const int est = images_mb(r.eye, r.eye, true, r.steamvr);
+        check(std::abs(est - r.measured) <= 60, std::string("images, take ") + r.take + ": " +
+                                                    std::to_string(est) + " for " +
+                                                    std::to_string(r.measured));
+    }
+    check(images_mb(3600, 2400, true, false) < images_mb(3600, 3600, true, false) &&
+              images_mb(3600, 2400, true, false) > images_mb(2400, 2400, true, false),
+          "an upscaler saves some of it, not all: the rest has the eye's size");
+
+    // The map: 8 GB keeps its depth at 2816 (121.0 MiB in 128) and not at 3072 or 3200; it is
+    // drawn at 4000 and not at 4224. 24 GB: depth at 4000, not at 4224.
+    check(map_depth_up_to(8192) >= 2816 && map_depth_up_to(8192) < 3072, "map: 8 GB");
+    check(map_drawn_up_to(8192) >= 4000 && map_drawn_up_to(8192) < 4224, "map: 8 GB, drawn");
+    check(map_depth_up_to(24560) >= 4000 && map_depth_up_to(24560) < 4224, "map: 24 GB");
+    check(map_drawn_up_to(24560) >= 4224, "map: 24 GB draws it at every size");
+    check(map_depth_up_to(16368) >= 3200 && map_depth_up_to(16368) < 3600, "map: 16 GB");
+    check(map_depth_up_to(32607) < 4224, "map: the layer doubles none above 248 MiB, on any card");
+    check(map_depth_up_to(0) == 0, "map: a card not asked says nothing");
+
+    // The estimate, with what X4 was offered at its start in each run.
+    const auto warn = [](int eye, bool steamvr, uint32_t budget, const char *up = "none",
+                         const std::vector<SessionMemory> &past = {}) {
+        GpuInfo g;
+        g.vendor = 0x10de, g.discrete = true, g.heap_mb = 8192, g.budget_mb = budget;
+        EyeSettings s;
+        s.eye = eye;
+        s.upscaler = up;
+        return memory_note(s, steamvr, g, past);
+    };
+    check(warn(4000, true, 4827).find("textures") != std::string::npos, "457c: textures missing");
+    check(!warn(3600, true, 4854).empty(), "457b: out of memory from the start menu on");
+    for (const auto &[eye, sv, budget] :
+         {std::tuple<int, bool, uint32_t>{2816, true, 4865}, {3200, true, 4861}, {2016, false, 6151},
+          {2816, false, 6062}, {3200, false, 5999}, {3600, false, 5921}, {4000, false, 5812}})
+        check(warn(eye, sv, budget).empty(),
+              "no false alarm at " + std::to_string(eye) + (sv ? " through SteamVR" : ""));
+    check(warn(4000, true, 4827).find("3200 or less, or an upscaler") != std::string::npos,
+          "...it names the largest that fits: " + warn(4000, true, 4827));
+    check(warn(4224, true, 4850, "fsr_quality").find("or less.") != std::string::npos,
+          "...and no upscaler to someone who has one");
+    check(warn(3600, true, 0).empty(), "nothing said without the driver's answer");
+    check(warn(1600, true, 900).find("Close other programs") != std::string::npos,
+          "with no size that fits, the card is full of something else");
+    {
+        GpuInfo g;
+        g.heap_mb = 2048, g.budget_mb = 1500;
+        EyeSettings s;
+        check(memory_note(s, false, g, {}).empty(), "an integrated GPU shares the system's memory");
+    }
+
+    // What a session's log says. Written as the layer and the injector write it.
+    const auto log = [](const char *h, const char *up, const char *rt,
+                        std::vector<std::pair<int, std::pair<int, int>>> use, int armed) {
+        std::string t = "[     0.500] inject  env: run = X4VR_TAKE=1 X4VR_H=" + std::string(h) +
+                        " X4VR_W=8000 X4VR_UPSCALE=" + up + " X4VR_VR=1 ./launch/x4vr-launch.sh\n";
+        for (const auto &[at, ub] : use) {
+            char b[256];
+            if (armed && at > armed) {
+                snprintf(b, sizeof b, "[ %8d.000] inject  headlook write: ARMED at frame 1\n", armed);
+                t += b;
+                armed = 0;
+            }
+            snprintf(b, sizeof b,
+                     "[ %8d.000] layer   vram (periodic): the card's 8192 MB — X4 uses %d, its "
+                     "budget %d, so %d free for it; at most 1 used, at least 1 free\n"
+                     "[ %8d.000] layer   vr summary (periodic): runtime=%s session=1\n",
+                     at, ub.first, ub.second, ub.second - ub.first, at, rt);
+            t += b;
+        }
+        return t;
+    };
+    SessionMemory m;
+    // 457b's and 457g's shapes, shortened.
+    check(session_memory(log("3600", "none", "SteamVR/OpenXR",
+                             {{5, {3547, 4854}}, {10, {3547, 4854}}, {15, {4353, 4514}},
+                              {20, {4438, 4514}}, {25, {4438, 4514}}, {30, {4438, 4514}},
+                              {35, {4438, 4514}}, {40, {4438, 4514}}, {95, {4438, 4514}}}, 92),
+                         &m) &&
+              m.eye == 3600 && m.steamvr && m.card_mb == 8192 && m.ran_out(),
+          "457b: X4 had nothing left in the start menu");
+    const SessionMemory bad = m;
+    check(session_memory(log("3200", "none", "SteamVR/OpenXR",
+                             {{5, {2796, 4861}}, {10, {3601, 4597}}, {15, {3601, 4597}},
+                              {20, {3729, 4597}}, {25, {3729, 4597}}, {30, {4420, 4597}},
+                              {95, {4505, 4597}}, {99, {4505, 4595}}}, 89), &m) && !m.ran_out(),
+          "457g: at its ceiling in the save, not before: no shortage");
+    check(session_memory(log("3200", "fsr_quality", "WiVRn",
+                             {{5, {2000, 6000}}, {10, {3000, 6000}}}, 0), &m) &&
+              m.upscaler == "fsr_quality" && !m.steamvr && !m.ran_out(),
+          "WiVRn, an upscaler, and no save loaded");
+    check(!session_memory("[ 1.0] layer   nothing of the sort\n", &m), "a log without them says nothing");
+
+    // What happened beats the estimate, both ways.
+    check(warn(3600, true, 6100, "none", {bad}).find("earlier session at 3600") != std::string::npos,
+          "a session that ran out is said, whatever the estimate");
+    check(warn(4000, true, 6100, "none", {bad}).find("earlier session") != std::string::npos,
+          "...at any size needing more");
+    check(warn(3200, true, 4861, "none", {bad}).empty(), "...and not at one needing less");
+    check(warn(3600, false, 6000, "none", {bad}).empty(), "...nor with another runtime");
+    SessionMemory good = bad;
+    good.menu_free = 500;
+    check(warn(3600, true, 4854, "none", {good}).empty(),
+          "a session that had room silences the estimate");
+    check(!warn(4000, true, 4827, "none", {good}).empty(), "...up to its own size");
+    good.card_mb = 24560;
+    check(!warn(3600, true, 4854, "none", {good}).empty(), "...on the same card");
+    check(warn(3600, true, 4854, "none", {bad, good}).find("earlier") != std::string::npos,
+          "the newest session decides");
 }
 
 static void test_menu_entry() {
@@ -1432,6 +1566,7 @@ int main() {
     test_profile_dirs();
     test_child_env();
     test_offered();
+    test_memory();
     test_menu_entry();
     test_scrub();
     test_log_excerpt();

@@ -81,6 +81,8 @@ private:
 
     void requestChecks(bool forceVr);
     void applyChecks(const std::vector<Check> &rows, bool keepVr, bool keepGpu);
+    void cardMemory(const GpuInfo &g);
+    std::string eyeNote() const;
     void fillUpscalers();
     void gamemodeToggled();
     void languageChosen();
@@ -135,6 +137,9 @@ private:
 
     QPointer<QThread> m_worker;
     bool m_gpuAsked = false, m_rtx = false;
+    GpuInfo m_gpu;                      // its free memory as it was with VR up
+    std::vector<SessionMemory> m_past;  // what earlier sessions had, newest first
+    bool m_pastAsked = false;
     QTimer *m_timer = nullptr;
     int m_checksDone = 0, m_ticks = 0;
     bool m_again = false, m_againForce = false;

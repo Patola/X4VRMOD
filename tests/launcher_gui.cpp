@@ -72,6 +72,18 @@ static void shot(QWidget &w, const QString &path) {
     w.grab().scaledToWidth(640, Qt::SmoothTransformation).save(path);
 }
 
+static Check gpu_row(const char *name, uint32_t vendor, uint32_t heap_mb, uint32_t free_mb) {
+    Check c = row("gpu", Status::Ok, "GPU capable",
+                  fmt(tr_("%1, %2 GB of memory"), {fmt(tr_("%1, Vulkan %2"), {name, "1.4"}),
+                                                   std::to_string((heap_mb + 512) / 1024)}));
+    c.gpu.name = name;
+    c.gpu.vendor = vendor;
+    c.gpu.discrete = true;
+    c.gpu.heap_mb = heap_mb;
+    c.gpu.budget_mb = free_mb;
+    return c;
+}
+
 static std::vector<Check> good_rows() {
     // As checks.cpp words them.
     return {row("x4", Status::Ok, "X4 found",
@@ -85,7 +97,7 @@ static std::vector<Check> good_rows() {
                 fmt(tr_("%1, %2. It recommends %3 x %4 per eye."),
                     {"WiVRn", "Meta Quest 3 on WiVRn", "2889", "3026"})),
             row("mod", Status::Ok, "Mod installed", fmt(tr_("%1, up to date"), {"v0.9.10"})),
-            row("gpu", Status::Ok, "GPU capable", fmt(tr_("%1, Vulkan %2"), {"Radeon RX 7900 XTX", "1.4"}))};
+            gpu_row("Radeon RX 7900 XTX", 0x1002, 24560, 22131)};
 }
 
 static void replace(std::vector<Check> &rows, const Check &c) {
@@ -298,6 +310,7 @@ static void test_eye_rule(Window &w, const std::string &home) {
     auto *up = w.findChild<QComboBox *>("upscaler");
     auto *renders = w.findChild<QLabel *>("renders");
     check(eye && up && renders, "the eye and upscaler lists exist");
+    w.showChecks(good_rows()); // a 24 GB card
     check(eye->currentData().toInt() == 2816 && eye->currentText().contains("default"),
           "2816 is the default, and says so");
     check(up->currentData().toString() == "none", "no upscaler by default");
@@ -309,7 +322,7 @@ static void test_eye_rule(Window &w, const std::string &home) {
     check(up->currentData().toString() == kAutoUpscaler, "4224 selects FSR 1 Quality");
     check(renders->text().contains("2816 x 2816") && renders->text().contains("FSR 1 Quality chosen"),
           "...shows what it renders and says why");
-    check(renders->text().contains("flat"), "...and warns about the map above 4068");
+    check(renders->text().contains("flat"), "...and warns about the map above 4000");
     check(dump(home) == "4224", "...and is saved");
     check(load_profile(profile_path(home)).get("upscaler") == kAutoUpscaler, "...the upscaler too");
 
@@ -325,6 +338,42 @@ static void test_eye_rule(Window &w, const std::string &home) {
     check(up->currentData().toString() == kAutoUpscaler, "crossing again selects it again");
     eye->setCurrentIndex(eye->findData(2816));
     check(up->currentData().toString() == "none", "back under: returns to None, since the rule chose it");
+
+    // A small card: what its memory says, only while VR is up.
+    {
+        auto small = good_rows();
+        replace(small, gpu_row("NVIDIA GeForce RTX 3070 Laptop GPU", 0x10de, 8192, 4700));
+        w.showChecks(small);
+        eye->setCurrentIndex(eye->findData(4000));
+        up->setCurrentIndex(up->findData("none"));
+        check(renders->text().contains("GB free") && renders->text().contains("textures") &&
+                  renders->text().contains("flat"),
+              "8 GB at 4000: too little for textures, and a flat map");
+        const bool shown = w.isVisible();
+        w.show();
+        QApplication::processEvents();
+        eye->setCurrentIndex(eye->findData(2816));
+        QApplication::processEvents();
+        eye->setCurrentIndex(eye->findData(4000));
+        up->setCurrentIndex(up->findData("none"));
+        QApplication::processEvents();
+        check(renders->height() >= renders->heightForWidth(renders->width()),
+              "...all of it, at once: " + std::to_string(renders->height()) + " of " +
+                  std::to_string(renders->heightForWidth(renders->width())));
+        w.setVisible(shown);
+        auto off = small;
+        replace(off, row("vr", Status::Block, "VR not running"));
+        w.showChecks(off);
+        eye->setCurrentIndex(eye->findData(3600));
+        up->setCurrentIndex(up->findData("none"));
+        eye->setCurrentIndex(eye->findData(4000));
+        check(!renders->text().contains("GB free") && renders->text().contains("flat"),
+              "...and without VR only the map: the runtime hasn't taken its share yet");
+        w.showChecks(good_rows());
+        eye->setCurrentIndex(eye->findData(2816));
+        up->setCurrentIndex(up->findData("none"));
+        check(renders->isHidden(), "2816 on 24 GB: nothing to say");
+    }
 
     up->setCurrentIndex(up->findData("fsr3_balanced"));
     eye->setCurrentIndex(eye->findData(4224));

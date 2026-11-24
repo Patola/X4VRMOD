@@ -30257,3 +30257,46 @@ gimbals' reach toward B's point, the per-gun aim-assist flag. An instrument that
 every 2 s in the cockpit (`X4VR_AIMWATCH`, commit f7e66ac) ran for hours in takes 438 and 440
 without the split coming back, and is parked on the branch `aimwatch`. If the split recurs, save
 the game at once, so the state can be loaded again with the instrument back in.
+
+## X4's memory: the budget it keeps to and its blocks (read-only, 2026-11-24)
+
+For the launcher's memory warning and the sizes by graphics card. Read from X4 9.00's binary
+(Steam); nothing patched.
+
+**The budget.** With VK_EXT_memory_budget X4's headroom is `heapBudget - heapUsage`, refreshed
+(0x21e1940, kept per heap at renderer +0xbb8/+0xbc0; "VRAM: %zu / %zu MB" prints them). Without it,
+the heap less 256 MiB to 1 GiB by size. Before a new block, 0x21df9b0 adds the block to what was
+taken since the refresh and refuses if it reaches the headroom. The refusal logs "Vulkan::Alloc(...)
+OUT OF GPU MEMORY, couldn't create new heap" once a run (flag 0x3d8f4a4) and X4 carries on without
+that memory, so no Vulkan call fails: the layer can't see it, and on screen textures are missing. A
+second gate (0x21dfa30) holds five kinds of memory each to its own limit.
+
+**The blocks** (0x21e2840). Each pool's block is **max(its class, the card's memory in MiB / 96)**:
+the class is 64, 128 or 256 MiB, or 512 for three pools on cards of more than 6144 MiB. At most 96
+blocks to a pool. So 8 GB has blocks of 85.3 (the 64 class) and 128.0 MiB, and 24560 MiB has
+255.8: both seen in the takes' memory logs. The map's image lives in the 128 class. 10 and 12 GB
+cards therefore have the 8 GB card's limit, 16 GB has 170.5, 20 GB 213.2, and 32 GB 339.7 (there
+the layer's own 248 MiB limit decides).
+
+**What's in place before the first texture** is decided by the eye size alone. With no upscaler, on
+the RTX 3070 laptop: 233 MB + 228 MB a megapixel through WiVRn (1159, 2040, 2550, 3235, 3884 at 2016,
+2816, 3200, 3600, 4000) and 234 + 252 through SteamVR (2232, 2796, 3547, 4268 from 2816 up), all
+within 50 MB. From take 457g's list about 122 MB a megapixel of that follows the rendered size and the
+rest the eye's. **Not measured on NVIDIA: any upscaler.** On the Radeon 2531 at 2816 (459) and 2737
+at 3200 + FSR 1 Quality (Patola's sessions of 2026-11-23), in blocks of 256.
+
+**What textures got** (the budget at X4's start, less those images), on the laptop:
+
+| run | left for textures | what happened |
+|---|---|---|
+| 457c SteamVR 4000 | 559 MB | textures missing |
+| 457b SteamVR 3600 | 1307 | nothing left from the start menu on; none noticed missing |
+| 457d WiVRn 4000 | 1928 | 481 free at the least |
+| 457g SteamVR 3200 | 2065 | 90 free at the least, textures fine |
+| 457a SteamVR 2816 | 2633 | 399 free at the least |
+
+So the launcher warns under 1700. **A short take understates what X4 takes:** Patola's four
+sessions of 32 to 58 minutes on the Radeon (3200 + FSR 1 Quality) grew to between 9.4 and 12.2 GB,
+where the takes end near 5. X4 also lets go of some (by 256 MB steps down as well as up). A small
+card reaches its ceiling in any long session, so "at its ceiling" isn't a fault by itself; being
+there before the save is loaded is (457b, 457c).

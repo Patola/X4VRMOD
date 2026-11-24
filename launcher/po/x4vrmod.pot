@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-19 16:22+0100\n"
+"POT-Creation-Date: 2026-11-24 21:08+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -287,6 +287,11 @@ msgstr ""
 
 #: launcher/core/checks.cpp
 #, qt-format
+msgid "%1, %2 GB of memory"
+msgstr ""
+
+#: launcher/core/checks.cpp
+#, qt-format
 msgid "%1, DLSS available"
 msgstr ""
 
@@ -455,6 +460,53 @@ msgstr ""
 msgid "The package itself stays. Remove it with your package manager."
 msgstr ""
 
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "On this graphics card, the map's 3D view stays empty above %1."
+msgstr ""
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid ""
+"On this graphics card, the map's 3D view is flat, not in depth, above %1."
+msgstr ""
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid ""
+"In an earlier session at %1, X4 ran out of graphics memory before the save "
+"was loaded, and some textures may have been missing. Choose a smaller size "
+"or an upscaler."
+msgstr ""
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid ""
+"At this size X4's images alone take about %1 GB, and your graphics card has "
+"%2 GB free. What's left is too little for the textures, and some may be "
+"missing."
+msgstr ""
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "Close other programs that use the graphics card."
+msgstr ""
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "Choose %1 or less, or an upscaler."
+msgstr ""
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "Choose %1 or less."
+msgstr ""
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "At 4224 SteamVR has shown a jumbled picture. If you see that, go lower."
+msgstr ""
+
 #: launcher/core/patches.cpp
 #, qt-format
 msgid "Head tracking in the cockpit"
@@ -583,16 +635,6 @@ msgstr ""
 #: launcher/core/profile.cpp
 #, qt-format
 msgid "FSR 3 Ultra Performance"
-msgstr ""
-
-#: launcher/core/profile.cpp
-#, qt-format
-msgid "Above 4068 the map's 3D view is flat, not in depth."
-msgstr ""
-
-#: launcher/core/profile.cpp
-#, qt-format
-msgid "At 4224 SteamVR has shown a jumbled picture. If you see that, go lower."
 msgstr ""
 
 #: launcher/core/profile.cpp

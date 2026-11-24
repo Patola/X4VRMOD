@@ -686,6 +686,10 @@ static Check check_gpu_row() {
     c.title = tr_("GPU capable");
     c.detail = fmt(tr_("%1, Vulkan %2"),
                    {best->name, std::to_string(best->api_major) + "." + std::to_string(best->api_minor)});
+    c.gpu = *best;
+    if (best->discrete && best->heap_mb)
+        c.detail = fmt(tr_("%1, %2 GB of memory"),
+                       {c.detail, std::to_string((best->heap_mb + 512) / 1024)});
     c.dlss = best->rtx();
     if (c.dlss)
         c.detail = fmt(tr_("%1, DLSS available"), {c.detail});

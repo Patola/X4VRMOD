@@ -20,6 +20,16 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
+## Unreleased
+
+* **The launcher warns when an eye size won't fit your graphics card's memory.** With the headset
+  connected, it compares what X4's images need at that size with the memory your card has free, and
+  says so under the list, with the largest size that fits. If X4 ran out of graphics memory in an
+  earlier session, it says that instead. The map's note is now right for your card: on cards with
+  less memory the map goes flat at smaller sizes than 4000.
+* **Settings by graphics card, in the launcher's help and the README:** starting points by card,
+  the frame rates measured so far, and the largest size for each amount of memory.
+
 ## v1.0.0-rc10 — 2026-11-24 — Tenth release candidate: no more broken picture on narrower headsets (issues #3 and #4)
 
 The tenth release candidate for 1.0. Packages call it `1.0.0~rc10` (Arch: `1.0.0rc10`), which

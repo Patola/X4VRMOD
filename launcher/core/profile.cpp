@@ -49,17 +49,6 @@ const std::vector<int> &eye_sizes() {
     return v;
 }
 
-std::string eye_note(int eye, bool steamvr) {
-    std::string note;
-    // docs/packaging-plan.md, Resolution: takes 376-378 and Patola, 2026-10-31.
-    if (eye > 4068)
-        note = tr_("Above 4068 the map's 3D view is flat, not in depth.");
-    if (steamvr && eye > kAutoUpscaleAbove)
-        note += std::string(note.empty() ? "" : " ") +
-                tr_("At 4224 SteamVR has shown a jumbled picture. If you see that, go lower.");
-    return note;
-}
-
 bool valid_upscaler(const std::string &mode) {
     for (const Upscaler &u : upscalers())
         if (mode == u.mode)

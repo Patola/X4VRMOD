@@ -7,6 +7,7 @@ add_library(x4vrmod_core STATIC
     core/checks.cpp
     core/profile.cpp
     core/install.cpp
+    core/memory.cpp
     core/report.cpp
     core/i18n.cpp
     ${X4VR_VERSION_FILE})

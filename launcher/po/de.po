@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-19 16:22+0100\n"
+"POT-Creation-Date: 2026-11-24 21:08+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -50,6 +50,11 @@ msgid "%1 would load into X4"
 msgid_plural "%1 would load into X4"
 msgstr[0] "%1 würde in X4 geladen"
 msgstr[1] "%1 würden in X4 geladen"
+
+#: launcher/core/checks.cpp
+#, qt-format
+msgid "%1, %2 GB of memory"
+msgstr "%1, %2 GB Speicher"
 
 #: launcher/core/checks.cpp
 #, qt-format
@@ -480,6 +485,63 @@ msgstr ""
 msgid "X4 wasn't found."
 msgstr "X4 wurde nicht gefunden."
 
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "At 4224 SteamVR has shown a jumbled picture. If you see that, go lower."
+msgstr ""
+"Bei 4224 hat SteamVR schon ein verworrenes Bild gezeigt. Wenn du das siehst, "
+"geh niedriger."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid ""
+"At this size X4's images alone take about %1 GB, and your graphics card has "
+"%2 GB free. What's left is too little for the textures, and some may be "
+"missing."
+msgstr ""
+"Bei dieser Größe belegen allein die Bilder von X4 etwa %1 GB, und deine "
+"Grafikkarte hat %2 GB frei. Der Rest ist zu wenig für die Texturen, und "
+"manche können fehlen."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "Choose %1 or less, or an upscaler."
+msgstr "Wähle %1 oder weniger, oder einen Upscaler."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "Choose %1 or less."
+msgstr "Wähle %1 oder weniger."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "Close other programs that use the graphics card."
+msgstr "Schließe andere Programme, die die Grafikkarte nutzen."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid ""
+"In an earlier session at %1, X4 ran out of graphics memory before the save "
+"was loaded, and some textures may have been missing. Choose a smaller size "
+"or an upscaler."
+msgstr ""
+"In einer früheren Sitzung bei %1 ging X4 der Grafikspeicher aus, bevor der "
+"Spielstand geladen war, und manche Texturen fehlten vielleicht. Wähle eine "
+"kleinere Größe oder einen Upscaler."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid ""
+"On this graphics card, the map's 3D view is flat, not in depth, above %1."
+msgstr ""
+"Auf dieser Grafikkarte ist die 3D-Ansicht der Karte über %1 flach, ohne "
+"Tiefe."
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "On this graphics card, the map's 3D view stays empty above %1."
+msgstr "Auf dieser Grafikkarte bleibt die 3D-Ansicht der Karte über %1 leer."
+
 #: launcher/core/patches.cpp
 #, qt-format
 msgid "Aiming at where the steering target points"
@@ -529,18 +591,6 @@ msgstr "Die Schattenkorrektur"
 #, qt-format
 msgid "The steering target drawn in VR"
 msgstr "Das Steuerziel in VR"
-
-#: launcher/core/profile.cpp
-#, qt-format
-msgid "Above 4068 the map's 3D view is flat, not in depth."
-msgstr "Über 4068 ist die 3D-Ansicht der Karte flach, ohne Tiefe."
-
-#: launcher/core/profile.cpp
-#, qt-format
-msgid "At 4224 SteamVR has shown a jumbled picture. If you see that, go lower."
-msgstr ""
-"Bei 4224 hat SteamVR schon ein verworrenes Bild gezeigt. Wenn du das siehst, "
-"geh niedriger."
 
 #: launcher/core/profile.cpp
 #, qt-format

@@ -194,6 +194,9 @@ struct GpuInfo {
     unsigned api_major = 0, api_minor = 0;
     uint32_t max_sets = 0, vendor = 0;
     bool multiview = false, discrete = false;
+    // The card's own memory, and what the driver would give a program starting now
+    // (VK_EXT_memory_budget), in MB; 0 = not known.
+    uint32_t heap_mb = 0, budget_mb = 0;
     // The layer binds its set at the top of the device's range, above X4's 6.
     bool capable() const;
     // What DLSS is offered on: an NVIDIA card named RTX.
@@ -313,8 +316,38 @@ struct Upscaler {
 bool is_dlss(const std::string &mode);
 const std::vector<Upscaler> &upscalers();
 const std::vector<int> &eye_sizes();
-// What the player should know about this size, or "".
-std::string eye_note(int eye, bool steamvr);
+// What the player should know about this size on this card, or "": memory, the map's
+// image, SteamVR. A card not asked yet has no name and says nothing of memory.
+struct SessionMemory;
+std::string eye_note(const EyeSettings &s, bool steamvr, const GpuInfo &g,
+                     const std::vector<SessionMemory> &past);
+
+// ------------------------------------------------------------- the card's memory
+// X4's and the mod's images, in MB: all that's in place before the first texture.
+int images_mb(int eye, int render, bool nvidia, bool steamvr);
+// The least left for textures that isn't warned about, in MB of what the driver offered
+// before X4 started. Takes on the 8 GB laptop: 2065, 1928 and more were fine; with 1307 X4
+// was out of memory from the start menu on (457b), with 559 textures were missing (457c).
+constexpr int kTexturesNeedMb = 1700;
+// The largest eye size whose map keeps its depth, and is drawn at all; 0 = not known.
+int map_depth_up_to(uint32_t heap_mb);
+int map_drawn_up_to(uint32_t heap_mb);
+// What a session's log says X4 had left before the save was loaded. It takes memory a block
+// at a time, 128 MiB on most cards, so under that it couldn't take one more.
+struct SessionMemory {
+    int eye = 0;
+    std::string upscaler;
+    bool steamvr = false;
+    uint32_t card_mb = 0;
+    int menu_free = -1;
+    bool ran_out() const { return menu_free >= 0 && menu_free < 128; }
+};
+bool session_memory(const std::string &log, SessionMemory *out);
+// The newest sessions' that say, newest first.
+std::vector<SessionMemory> past_memory(const std::string &home, size_t max = 4);
+// What to tell the player about memory at this size, or "".
+std::string memory_note(const EyeSettings &s, bool steamvr, const GpuInfo &g,
+                        const std::vector<SessionMemory> &past);
 
 // -------------------------------------------------- install, uninstall and run
 // The one given, then X4VR_GAME, then the profile's, else the best one discovered.
@@ -368,6 +401,7 @@ struct Check {
     std::string detail;
     std::string fix; // an action the caller can offer: "" for none
     bool dlss = false; // the gpu row: DLSS can be offered
+    GpuInfo gpu;       // the gpu row: the card itself
 };
 struct CheckOptions {
     std::string home;

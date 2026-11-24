@@ -194,6 +194,8 @@ VulkanProbe vulkan_probe_here() {
     VK_GET(vkEnumeratePhysicalDevices);
     VK_GET(vkGetPhysicalDeviceProperties);
     VK_GET(vkGetPhysicalDeviceFeatures2);
+    VK_GET(vkGetPhysicalDeviceMemoryProperties2);
+    VK_GET(vkEnumerateDeviceExtensionProperties);
     VK_GET(vkDestroyInstance);
 #undef VK_GET
     uint32_t n = 0;
@@ -219,6 +221,30 @@ VulkanProbe vulkan_probe_here() {
         g.max_sets = p.limits.maxBoundDescriptorSets;
         g.multiview = v11.multiview == VK_TRUE;
         g.discrete = p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+        // Asked of the physical device, so no device is made for it.
+        uint32_t en = 0;
+        vkEnumerateDeviceExtensionProperties(d, nullptr, &en, nullptr);
+        std::vector<VkExtensionProperties> ext(en);
+        vkEnumerateDeviceExtensionProperties(d, nullptr, &en, ext.data());
+        bool budget = false;
+        for (const VkExtensionProperties &e : ext)
+            budget = budget || !strcmp(e.extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+        VkPhysicalDeviceMemoryBudgetPropertiesEXT mb{};
+        mb.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+        VkPhysicalDeviceMemoryProperties2 m2{};
+        m2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+        m2.pNext = budget ? &mb : nullptr;
+        vkGetPhysicalDeviceMemoryProperties2(d, &m2);
+        // The largest device-local heap is the card's own, as X4's layer counts it.
+        VkDeviceSize heap = 0;
+        for (uint32_t i = 0; i < m2.memoryProperties.memoryHeapCount; i++) {
+            const VkMemoryHeap &h = m2.memoryProperties.memoryHeaps[i];
+            if (!(h.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) || h.size <= heap)
+                continue;
+            heap = h.size;
+            g.budget_mb = budget ? (uint32_t)(mb.heapBudget[i] >> 20) : 0;
+        }
+        g.heap_mb = (uint32_t)(heap >> 20);
         out.gpus.push_back(std::move(g));
     }
     vkDestroyInstance(inst, nullptr);
@@ -229,9 +255,10 @@ std::string vulkan_probe_format(const VulkanProbe &p) {
     std::string s = std::string("X4VRMOD_VK_OK=") + (p.ok ? "1" : "0") + "\n";
     s += "X4VRMOD_VK_DETAIL=" + one_line(p.detail) + "\n";
     for (const GpuInfo &g : p.gpus) {
-        char b[96];
-        snprintf(b, sizeof b, "X4VRMOD_VK_GPU=%u %u %u %d %d %u ", g.api_major,
-                 g.api_minor, g.max_sets, g.multiview ? 1 : 0, g.discrete ? 1 : 0, g.vendor);
+        char b[128];
+        snprintf(b, sizeof b, "X4VRMOD_VK_GPU=%u %u %u %d %d %u %u %u ", g.api_major,
+                 g.api_minor, g.max_sets, g.multiview ? 1 : 0, g.discrete ? 1 : 0, g.vendor,
+                 g.heap_mb, g.budget_mb);
         s += b + one_line(g.name) + "\n";
     }
     return s;
@@ -244,8 +271,8 @@ VulkanProbe vulkan_probe_parse(const std::string &text) {
     for (const std::string &v : values_of(text, "X4VRMOD_VK_GPU")) {
         GpuInfo g;
         int mv = 0, disc = 0, used = 0;
-        if (sscanf(v.c_str(), "%u %u %u %d %d %u %n", &g.api_major, &g.api_minor,
-                   &g.max_sets, &mv, &disc, &g.vendor, &used) < 6)
+        if (sscanf(v.c_str(), "%u %u %u %d %d %u %u %u %n", &g.api_major, &g.api_minor,
+                   &g.max_sets, &mv, &disc, &g.vendor, &g.heap_mb, &g.budget_mb, &used) < 8)
             continue;
         g.multiview = mv != 0;
         g.discrete = disc != 0;

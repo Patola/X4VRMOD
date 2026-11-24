@@ -435,11 +435,12 @@ its paths parameterised (`BUILD`, `ROOT`, the `/nvme` default, `SteamAppId`).
   down fixed it under SteamVR. The launcher shows a warning when SteamVR is
   the runtime and the resolution is above the last size known to work there
   (to be measured). The release notes say the same for players.
-* **Above ~4068² per eye the map is flat** (4000² keeps depth, 4096² does not). X4 places images it creates
-  after start-up in 255.8 MiB blocks; the map's 3D view, doubled for two
-  eyes, outgrows them there, so the layer keeps it single-layer (takes
-  376–378). The launcher says so next to the resolution choices that cross
-  it.
+* **Above ~4068² per eye the map is flat on a 24 GB card** (4000² keeps depth, 4096² does not),
+  and from 2900² on an 8 GB one. X4 places images it creates after start-up in blocks of
+  max(128 MiB, card/96) ([x4-quirks.md](x4-quirks.md), "X4's memory"); the map's 3D view, doubled for
+  two eyes, outgrows them there, so the layer keeps it single-layer (takes 376–378, 457g). The
+  launcher says so, for the card it finds, next to the resolution choices that cross it, and warns
+  when X4's images leave the textures too little memory.
 * **The lower HUD's placement depends on the height** through X4's own
   formula, unless X4's HUD scale is off (docs/x4-quirks.md, "The lower HUD
   moves with the resolution"). If the HUD-scale test holds, the mod serves it
