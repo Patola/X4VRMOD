@@ -2226,6 +2226,25 @@ fi
 plant /tmp/census-mp-lost.log "$mpk1" "$mpl"
 want "mvpool: attached to a masked pass -> FAIL" /tmp/census-mp-lost.log "FAIL|  - " "the pool rule kept 1 image(s) single-layer that a view-masked pass then attached (first img #693, rp #12)"
 absent "mvpool: no rule fired -> silent" "$BASE" mvpool
+plfmt=1
+for frag in '"mv: %ux%u fmt=%u usage=0x%x kept SINGLE-LAYER from here — X4 dropped the "' \
+            '"doubled one %u times in a row without using it (%.1f MiB, more than its pool "' \
+            '"mv: %ux%u fmt=%u usage=0x%x: X4 drops it with one layer too (%.1f MiB) — its "'; do
+    grep -qF -- "$frag" layer/x4vr_layer.cpp || { plfmt=0; echo "        missing: $frag"; }
+done
+[ $plfmt -eq 1 ] && ok "mvpool learned: the planted lines match the layer's formats" \
+    || bad "mvpool learned: the layer's lines changed — replant the lines below"
+pll='[  99990.000] layer   mv: 3200x3143 fmt=97 usage=0x17 kept SINGLE-LAYER from here — X4 dropped the doubled one 3 times in a row without using it (156.2 MiB, more than its pool block on this card). Copies into it keep the left eye'"'"'s view, so it is flat in VR'
+plant /tmp/census-pl-ok.log "$pll"
+want "mvpool learned: said" /tmp/census-pl-ok.log mvpool "3200x3143 fmt=97 usage=0x17: single-layer from its 3th drop — doubled it needs 156.2 MiB"
+absent "mvpool learned: no FAIL" /tmp/census-pl-ok.log "FAIL  X4's pool block"
+plant /tmp/census-pl-bad.log "$pll" '[  99991.000] layer   mv: 4224x4149 fmt=97 usage=0x17: X4 drops it with one layer too (134.1 MiB) — its pool block on this card is smaller than that, with or without the mod, and what it draws stays empty at this eye size'
+want "mvpool learned: one layer is too big too -> FAIL" /tmp/census-pl-bad.log "FAIL" "smaller than 4224x4149 fmt=97 with ONE layer (134.1 MiB)"
+mlreq() { for i in $(seq "$1"); do printf '[  9999%s.000] layer   mem: req img #%s %s fmt=97 DOUBLED size=156.2 MiB align=1024 types=0x3\n' 2 "$i" "$2"; done; }
+{ cat "$BASE"; mlreq 60 3200x3143; } > /tmp/census-ml-drop.log
+want "memlog: asked for 60 times, never bound (457f) -> FAIL" /tmp/census-ml-drop.log "FAIL" "X4 asked for 3200x3143 fmt=97 DOUBLED (156.2 MiB) 60 times and never bound one"
+{ cat /tmp/census-ml-drop.log; printf '%s\n' '[  99993.000] layer   mem: bind img #789 3200x3143 fmt=97 DOUBLED memory 0x733d0d02c340 offset 0.0 MiB -> ok (0)'; } > /tmp/census-ml-bound.log
+absent "memlog: bound once -> no FAIL" /tmp/census-ml-bound.log "FAIL  X4 asked for"
 
 # X4VR_COMPLOG: what each compute dispatch touches (take 379).
 for f in '"comp: module c%u local %ux%ux%u, %zu bytes | resources:%s%s%s"' '"comp: dispatch %s"' '"img #%u %ux%u fmt=%u usage=0x%x %s, view %s from layer %u, %u layer(s)"'; do

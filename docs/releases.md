@@ -28,6 +28,11 @@ on the remote beside their `take-NNN-name` twins.
   picture were cut away along lines from its centre and kept old frames, spiralling outwards as
   the head moved. The Quest 3 and the Steam Frame never had it. All headsets now work as those two
   do.
+* **The map's 3D view no longer comes up empty on cards with less memory.** X4 puts the map's image
+  in fixed-size blocks, and the mod doubles that image, one for each eye. On an 8 GB card the
+  blocks are half the size they are on a 24 GB one, so above about 2900 per eye the doubled image
+  didn't fit and the map stayed empty. The mod now notices and gives X4 back the single image:
+  the map is then flat instead of in depth, but it's there.
 
 ## v1.0.0-rc9 — 2026-11-23 — Ninth release candidate: the headset's frames back on NVIDIA
 

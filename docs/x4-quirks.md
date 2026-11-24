@@ -28832,6 +28832,17 @@ The shipping line at 4224² with X4VR_MEMLOG=1 and X4VR_MV_INVENTORY=1. Load,
   img #54, a doubled target, with `vkCmdCopyImage` (1215 regions, all
   widened to both layers). So the map is stereo through a copy.
 
+> **2026-11-24: the block is not 255.8 MiB on every card.** Takes 457e (3600²) and
+> 457f (3200²), an 8 GB RTX 3070 laptop, WiVRn, `X4VR_MEMLOG=1`: the map's doubled
+> image (196.9 and 156.2 MiB) was asked for 627 and 546 times, never allocated,
+> never bound, with 0.1 and 1.4 GB free and no allocation failing; the map was
+> empty. Take 457z (2816²): 121.0 MiB, bound. X4's device-local blocks there are
+> 128.0 MiB. How X4 picks the size is not known (255.8 of 24560 MiB, 128.0 of
+> 8192), so `mv_pool_dropped` learns it: a doubled image of 64 MiB or more that X4
+> destroys without a view, three times in a row for one kind, keeps one layer
+> from then on. One layer at 4224² is 134 MiB, so there the map stays empty on
+> such a card whatever the mod does; the layer says so and the scorer FAILs.
+
 **The fix: the pool rule** (layer/x4vr_layer.cpp, `mv_exceeds_x4_pool`).
 * The layer creates a candidate image doubled, reads its real memory
   requirement, and keeps the one layer X4 asked for when, doubled, it would

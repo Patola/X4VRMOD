@@ -9,6 +9,9 @@ target_link_libraries(x4vr_test_exit_teardown PRIVATE Vulkan::Vulkan)
 add_executable(x4vr_test_multiview_double multiview_double.cpp)
 target_link_libraries(x4vr_test_multiview_double PRIVATE Vulkan::Vulkan)
 
+add_executable(x4vr_test_multiview_pool multiview_pool.cpp)
+target_link_libraries(x4vr_test_multiview_pool PRIVATE Vulkan::Vulkan)
+
 add_executable(x4vr_test_multiview_render multiview_render.cpp)
 target_link_libraries(x4vr_test_multiview_render PRIVATE Vulkan::Vulkan)
 

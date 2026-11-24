@@ -6582,6 +6582,19 @@ def main(path):
                          r"\((\d+) image\(s\) so far\)", text)
     mp_lost = re.findall(r"mv: POOL-SINGLE img #(\d+) is attachment (\d+) of a "
                          r"view-masked pass \(rp #(\d+)\)", text)
+    # The learned half (457e, 457f): X4 dropped the doubled one unused.
+    mp_learned = re.findall(r"mv: (\d+x\d+) fmt=(\d+) usage=(0x[0-9a-f]+) kept SINGLE-LAYER from "
+                            r"here — X4 dropped the doubled one (\d+) times in a row without using "
+                            r"it \(([\d.]+) MiB", text)
+    for wh, f, u, n, mib in mp_learned:
+        print(f"mvpool  {wh} fmt={f} usage={u}: single-layer from its {n}th drop — doubled it needs "
+              f"{mib} MiB, more than X4's pool block on this card; flat in VR")
+    for wh, f, u, mib in re.findall(
+            r"mv: (\d+x\d+) fmt=(\d+) usage=(0x[0-9a-f]+): X4 drops it with one layer too "
+            r"\(([\d.]+) MiB\)", text):
+        fails.append(f"X4's pool block on this card is smaller than {wh} fmt={f} with ONE layer "
+                     f"({mib} MiB): what X4 draws there stays empty at this eye size, with or "
+                     f"without the mod — go lower")
     if mp_kept or mp_lost:
         sigs = {}
         for wh, f, u, mib, n in mp_kept:
@@ -6629,6 +6642,16 @@ def main(path):
         for key, n in sig.most_common(6):
             print(f"memlog    {n:5d} x {key}" + "".join(
                 f"  ({k} in {c})" for k, c in ded[key].items()))
+        # X4 asking for one kind over and over and never binding it: its pool
+        # block won't take it (377 at 4224 on 24 GB, 457e and 457f on 8 GB).
+        bound = collections.Counter(m.group(1) for b in ml_bind for m in
+                                    [re.search(r"(\d+x\d+ fmt=\d+)", b[0])] if m)
+        for key, n in sig.items():
+            m = re.match(r"(\d+x\d+ fmt=\d+)( DOUBLED)? ([\d.]+) MiB", key)
+            if m and n >= 50 and not bound[m.group(1)]:
+                fails.append(f"X4 asked for {m.group(1)}{m.group(2) or ''} ({m.group(3)} MiB) {n} "
+                             f"times and never bound one: its pool block on this card is smaller, "
+                             f"so what it draws there (the map's 3D view, for one) is empty")
         af = [a for a in ml_alloc if a[3] == "FAILED"]
         bf = [b for b in ml_bind if b[2] == "FAILED"]
         big = [a for a in ml_alloc if a[3] == "ok"]

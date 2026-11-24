@@ -1506,6 +1506,8 @@ struct ImageInfo {
     // Kept single-layer by the pool rule (mv_exceeds_x4_pool), not by
     // mv_double_candidate: such an image must never back a view-masked pass.
     bool pool_single = false;
+    // X4 made a view of it, so it bound memory to it: X4's pool took it.
+    bool viewed = false;
     // Came from vkGetSwapchainImagesKHR, not vkCreateImage. Worth carrying
     // because the usage and layer count here are what the swapchain
     // guarantees, not what a create info said.
@@ -4756,6 +4758,97 @@ bool mv_exceeds_x4_pool(DeviceData *d, VkDevice device, VkImage doubled,
     return true;
 }
 
+// **X4's block is not 255.8 MiB everywhere (takes 457e, 457f, 2026-11-24).** On
+// the RTX 3070 laptop (8 GB) the blocks are 128.0 MiB, so the map's doubled 3D
+// view fits at 2816 per eye (121.0 MiB, bound) and not at 3200 (156.2 MiB): X4
+// re-created it 546 times and the map was empty, with 1.4 GB free. The limit
+// above only knows the Radeon's block, and X4's rule for choosing it is not
+// known. So the layer learns from X4 as well: an image it doubled, of 64 MiB or
+// more, that X4 destroys without ever making a view of it, three times in a row
+// for the same size, format and usage, is one X4's pool will not take, and from
+// then on that kind keeps the one layer X4 asked for. Any view of one starts the
+// count again. Not the eye targets (INPUT_ATTACHMENT), as above. Held under
+// g_img_mu. X4VR_MV_POOL_LEARN_MIB lowers the 64, for the GPU harness.
+struct PoolLearn {
+    uint32_t dropped = 0;  // doubled, destroyed unused, in a row
+    uint32_t dropped1 = 0; // the same once it has one layer
+    bool single = false;
+};
+using PoolSig = std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>;
+std::map<PoolSig, PoolLearn> &g_pool_learn = x4vr::immortal<std::map<PoolSig, PoolLearn>>();
+constexpr uint32_t kPoolDrops = 3;
+
+float mv_pool_learn_mib() {
+    static const float v = [] {
+        const char *e = getenv("X4VR_MV_POOL_LEARN_MIB");
+        return e && *e ? (float)atof(e) : 64.0f;
+    }();
+    return v;
+}
+
+PoolSig pool_sig(const VkExtent3D &e, VkFormat f, VkImageUsageFlags u) {
+    return {e.width, e.height, (uint32_t)f, (uint32_t)u};
+}
+
+// At vkCreateImage: whether X4 has shown it won't take this kind doubled.
+bool mv_pool_learned_single(const VkImageCreateInfo *ci) {
+    if (ci->usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)
+        return false;
+    std::lock_guard<std::mutex> lock(g_img_mu);
+    auto it = g_pool_learn.find(pool_sig(ci->extent, ci->format, ci->usage));
+    return it != g_pool_learn.end() && it->second.single;
+}
+
+// At vkCreateImageView, under g_img_mu: X4 took this one.
+void mv_pool_viewed_locked(ImageInfo &info) {
+    if (info.viewed)
+        return;
+    info.viewed = true;
+    if (!info.doubled && !info.pool_single)
+        return;
+    auto it = g_pool_learn.find(pool_sig(info.extent, info.format, info.usage));
+    if (it != g_pool_learn.end())
+        (info.doubled ? it->second.dropped : it->second.dropped1) = 0;
+}
+
+// At vkDestroyImage: X4 gave this one up unused.
+void mv_pool_dropped(DeviceData *d, VkDevice device, VkImage img, const ImageInfo &info) {
+    if (info.viewed || info.swapchain || (!info.doubled && !info.pool_single) ||
+        (info.usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT) || !d->GetImageMemoryRequirements)
+        return;
+    VkMemoryRequirements req{};
+    d->GetImageMemoryRequirements(device, img, &req);
+    const double mib = (double)req.size / (1 << 20);
+    if (info.doubled && mib < mv_pool_learn_mib())
+        return;
+    bool learned = false, hopeless = false;
+    {
+        std::lock_guard<std::mutex> lock(g_img_mu);
+        if (info.doubled) {
+            PoolLearn &l = g_pool_learn[pool_sig(info.extent, info.format, info.usage)];
+            if (++l.dropped >= kPoolDrops && !l.single)
+                learned = l.single = true;
+        } else {
+            // Kept single by this rule or by the fixed limit above.
+            PoolLearn &l = g_pool_learn[pool_sig(info.extent, info.format, info.usage)];
+            hopeless = ++l.dropped1 == kPoolDrops;
+        }
+    }
+    if (learned)
+        X4VR_LOG("mv: %ux%u fmt=%u usage=0x%x kept SINGLE-LAYER from here — X4 dropped the "
+                 "doubled one %u times in a row without using it (%.1f MiB, more than its pool "
+                 "block on this card). Copies into it keep the left eye's view, so it is flat "
+                 "in VR",
+                 info.extent.width, info.extent.height, (uint32_t)info.format,
+                 (uint32_t)info.usage, kPoolDrops, mib);
+    if (hopeless)
+        X4VR_LOG("mv: %ux%u fmt=%u usage=0x%x: X4 drops it with one layer too (%.1f MiB) — its "
+                 "pool block on this card is smaller than that, with or without the mod, and "
+                 "what it draws stays empty at this eye size",
+                 info.extent.width, info.extent.height, (uint32_t)info.format,
+                 (uint32_t)info.usage, mib);
+}
+
 // An image the OpenXR runtime makes on X4's device, on a thread the layer is
 // calling it from (x4vr::xr::InRuntime: the XR thread throughout, X4's present
 // thread inside the copy, X4's own thread while the session comes up). It must be
@@ -4799,6 +4892,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImage(
                  ci->extent.width, ci->extent.height, ci->mipLevels, (uint32_t)ci->format,
                  (uint32_t)ci->usage);
     }
+    bool pool_single = false;
+    if (dbl && mv_pool_learned_single(ci)) {
+        dbl = false; // X4's pool won't take it doubled: one layer, as X4 asked
+        pool_single = true;
+    }
     VkImageCreateInfo mod = *ci;
     if (dbl)
         mod.arrayLayers = 2;
@@ -4818,7 +4916,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImage(
             g_mv_stats.fallbacks++;
         }
     }
-    bool pool_single = false;
     if (r == VK_SUCCESS && dbl && mv_exceeds_x4_pool(d, device, *out, ci)) {
         // Too big, doubled, for X4's pool: one layer, as X4 asked.
         d->DestroyImage(device, *out, ac);
@@ -4882,6 +4979,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyImage(VkDevice device, VkImage img,
         std::lock_guard<std::mutex> lock(g_mu);
         d = &g_devices.at(dispatch_key(device));
     }
+    ImageInfo gone{};
+    bool known = false;
     {
         std::lock_guard<std::mutex> lock(g_img_mu);
         auto it = g_images.find(img);
@@ -4891,9 +4990,14 @@ VKAPI_ATTR void VKAPI_CALL x4vr_DestroyImage(VkDevice device, VkImage img,
         // counting both inflates the doubling estimate.
         if (it != g_images.end() && g_mv_inventory)
             X4VR_LOG("img #%u: destroyed", it->second.serial);
-        if (it != g_images.end())
+        if (it != g_images.end()) {
+            gone = it->second;
+            known = true;
             g_images.erase(it);
+        }
     }
+    if (known)
+        mv_pool_dropped(d, device, img, gone); // before it is destroyed below
     ffx_forget_image(d, device, img);
     d->DestroyImage(device, img, ac);
 }
@@ -5261,6 +5365,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateImageView(
         std::lock_guard<std::mutex> lock(g_img_mu);
         auto it = g_images.find(ci->image);
         doubled = it != g_images.end() && it->second.doubled;
+        if (it != g_images.end())
+            mv_pool_viewed_locked(it->second);
     }
 
     // Non-array views over a doubled image need two things done to them.
