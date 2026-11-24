@@ -18457,11 +18457,12 @@ void vr_start_session_deferred() {
 // One line the scorer can key on, whatever else the run did.
 // **vram (2026-11-23).** How much of the graphics card's memory X4 uses and
 // how much the driver says it could still use (VK_EXT_memory_budget), for the
-// launcher's warning and the docs' sizes by GPU. Not "how much X4 needs": X4
-// keeps textures in whatever is free, so its use grows with the card. The
-// margin is the number that predicts trouble: the budget already leaves out
-// what other processes hold (SteamVR's compositor, WiVRn's server), and on the
-// RTX 3070 laptop 4000 per eye under SteamVR ran out (take 432). The largest
+// launcher's warning and the docs' sizes by GPU. The budget already leaves out
+// what other processes hold (SteamVR's compositor, WiVRn's server). On the RTX
+// 3070 laptop (8 GB, takes 457a-d) X4's use grew 1.1 GB as the save loaded at
+// 2816 per eye; at 3600 and 4000 under SteamVR it was at its ceiling from the
+// start menu, the load added nothing, and at 4000 textures were missing. That
+// X4 fills whatever memory is free was assumed here and not measured. The largest
 // device-local heap is the card's own memory. Read on whichever thread
 // reports; nothing here is X4's.
 static void vram_report(const char *when) {
