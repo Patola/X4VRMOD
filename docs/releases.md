@@ -27,6 +27,9 @@ on the remote beside their `take-NNN-name` twins.
   says so under the list, with the largest size that fits. If X4 ran out of graphics memory in an
   earlier session, it says that instead. The map's note is now right for your card: on cards with
   less memory the map goes flat at smaller sizes than 4000.
+* **The map keeps its depth wherever the card allows it.** The mod now works out the size of X4's
+  memory blocks from the card's memory, instead of trying and giving up after three failures: on a
+  32 GB card the map has depth at 4224 too.
 * **Settings by graphics card, in the launcher's help and the README:** starting points by card,
   the frame rates measured so far, and the largest size for each amount of memory.
 

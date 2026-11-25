@@ -2206,15 +2206,15 @@ want "memlog: asked, no line -> FAIL" /tmp/census-ml-base.log "FAIL|  - " "X4VR_
 absent "memlog: not asked -> silent" "$BASE" memlog
 
 # The pool rule: images kept single-layer for X4's pool block (take 378).
-for f in '"mv: %ux%u fmt=%u usage=0x%x kept SINGLE-LAYER — doubled it "' '"MiB): X4 would re-create it every frame and draw nothing. "' '"(%llu image(s) so far)",' '"mv: POOL-SINGLE img #%u is attachment %u of a "'; do
+for f in '"mv: %ux%u fmt=%u usage=0x%x kept SINGLE-LAYER — doubled it "' '"this card): X4 would re-create it every frame and draw nothing. "' '"mv: X4'"'"'s memory block on this card is %.1f MiB: what it would need "' '"(%llu image(s) so far)",' '"mv: POOL-SINGLE img #%u is attachment %u of a "'; do
     if grep -qF "$f" layer/x4vr_layer.cpp; then
         ok "mvpool: the layer still prints $f"
     else
         bad "mvpool: the layer's format moved: $f"
     fi
 done
-mpk1='[  999960.000] layer   mv: 4224x4149 fmt=97 usage=0x17 kept SINGLE-LAYER — doubled it needs 268.1 MiB, more than X4'"'"'s pool block holds (limit 248 MiB): X4 would re-create it every frame and draw nothing. Copies into it keep the left eye'"'"'s view, so it is flat in VR (1 image(s) so far)'
-mpk2='[  999970.000] layer   mv: 4224x4149 fmt=97 usage=0x17 kept SINGLE-LAYER — doubled it needs 268.1 MiB, more than X4'"'"'s pool block holds (limit 248 MiB): X4 would re-create it every frame and draw nothing. Copies into it keep the left eye'"'"'s view, so it is flat in VR (1000 image(s) so far)'
+mpk1='[  999960.000] layer   mv: 4224x4149 fmt=97 usage=0x17 kept SINGLE-LAYER — doubled it needs 268.1 MiB, more than X4'"'"'s pool block holds (255.8 MiB on this card): X4 would re-create it every frame and draw nothing. Copies into it keep the left eye'"'"'s view, so it is flat in VR (1 image(s) so far)'
+mpk2='[  999970.000] layer   mv: 4224x4149 fmt=97 usage=0x17 kept SINGLE-LAYER — doubled it needs 268.1 MiB, more than X4'"'"'s pool block holds (255.8 MiB on this card): X4 would re-create it every frame and draw nothing. Copies into it keep the left eye'"'"'s view, so it is flat in VR (1000 image(s) so far)'
 mpl='[  999975.000] layer   mv: POOL-SINGLE img #693 is attachment 0 of a view-masked pass (rp #12) — the pool rule kept it single-layer and this framebuffer is invalid'
 plant /tmp/census-mp-ok.log "$mpk1" "$mpk2"
 want "mvpool: summarised" /tmp/census-mp-ok.log mvpool "1 signature(s) kept single-layer for X4's pool block, 1000 image(s): 4224x4149 fmt=97 usage=0x17 (268.1 MiB doubled)"
@@ -2238,6 +2238,13 @@ pll='[  99990.000] layer   mv: 3200x3143 fmt=97 usage=0x17 kept SINGLE-LAYER fro
 plant /tmp/census-pl-ok.log "$pll"
 want "mvpool learned: said" /tmp/census-pl-ok.log mvpool "3200x3143 fmt=97 usage=0x17: single-layer from its 3th drop — doubled it needs 156.2 MiB"
 absent "mvpool learned: no FAIL" /tmp/census-pl-ok.log "FAIL  X4's pool block"
+# Learned although the rule knew the block: the rule is wrong for this card or X4.
+plblk='[  99989.000] layer   mv: X4'"'"'s memory block on this card is 170.5 MiB: what it would need more for, doubled, keeps one layer'
+plant /tmp/census-pl-rule.log "$plblk" "$pll"
+want "mvpool: learned against the rule -> FAIL" /tmp/census-pl-rule.log "FAIL|  - " "though its block is 170.5 MiB by X4's own rule"
+plant /tmp/census-pl-blk.log "$plblk"
+want "mvpool: the block is said" /tmp/census-pl-blk.log mvpool "X4's memory block on this card: 170.5 MiB"
+absent "mvpool: the block alone is no FAIL" /tmp/census-pl-blk.log "by X4's own rule"
 plant /tmp/census-pl-bad.log "$pll" '[  99991.000] layer   mv: 4224x4149 fmt=97 usage=0x17: X4 drops it with one layer too (134.1 MiB) — its pool block on this card is smaller than that, with or without the mod, and what it draws stays empty at this eye size'
 want "mvpool learned: one layer is too big too -> FAIL" /tmp/census-pl-bad.log "FAIL" "smaller than 4224x4149 fmt=97 with ONE layer (134.1 MiB)"
 mlreq() { for i in $(seq "$1"); do printf '[  9999%s.000] layer   mem: req img #%s %s fmt=97 DOUBLED size=156.2 MiB align=1024 types=0x3\n' 2 "$i" "$2"; done; }

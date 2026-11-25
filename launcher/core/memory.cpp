@@ -36,12 +36,11 @@ int images_mb(int eye, int render, bool nvidia, bool steamvr) {
 }
 
 // X4 places the map's image in a block of max(128 MiB, the card's memory / 96), and the mod
-// doubles that image, 16 bytes a pixel. The layer never doubles one above 248 MiB. Cards align
-// the image differently, by up to 3.1% (203.9 MiB at 3600 on the RTX 3070).
+// doubles that image, 16 bytes a pixel, where it fits (mv_pool_block in layer/x4vr_layer.cpp).
+// Cards align the image differently, by up to 3.1% (203.9 MiB at 3600 on the RTX 3070).
 static int map_side(uint32_t heap_mb, double bytes) {
     const double block = std::max(128.0, (double)heap_mb / 96.0);
-    const double mib = bytes > 8.0 ? std::min(block, 255.8) : block;
-    return (int)std::sqrt(mib / 1.031 * 1048576.0 / bytes) / 50 * 50;
+    return (int)std::sqrt(block / 1.031 * 1048576.0 / bytes) / 50 * 50;
 }
 int map_depth_up_to(uint32_t heap_mb) { return heap_mb ? map_side(heap_mb, 16.0) : 0; }
 int map_drawn_up_to(uint32_t heap_mb) { return heap_mb ? map_side(heap_mb, 8.0) : 0; }

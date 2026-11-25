@@ -66,9 +66,10 @@ run_case "X4VR_MV=1 (doubling on)" 2 clean \
 # three times in a row, that kind keeps one layer. The controls say what must
 # not: images X4 uses, eye targets, another kind, and images under 64 MiB.
 POOL="$BUILD/tests/x4vr_test_multiview_pool"
+POOL_ARG=""
 pool_case() { # <label> <want> env...
     local label="$1" want="$2" out errs got; shift 2
-    out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=$BOTH" X4VR_LOG= "$@" "$POOL" 2>&1)
+    out=$(env "VK_ADD_LAYER_PATH=$BUILD/layer" "VK_LOADER_LAYERS_ENABLE=$BOTH" X4VR_LOG= "$@" "$POOL" $POOL_ARG 2>&1)
     errs=$(grep -c "Validation Error" <<<"$out")
     got=$(grep -E "^[A-Z_]+=[12]$" <<<"$out" | tr '\n' ' ')
     if [[ "$got" == "$want " && $errs -eq 0 ]]; then
@@ -87,6 +88,18 @@ pool_case "pool: under 64 MiB, never" \
 pool_case "pool: X4VR_MV off (control)" \
     "FRESH=1 TWO_DROPS=1 THREE_DROPS=1 STAYS=1 USED_BETWEEN=1 ALWAYS_USED=1 EYE_TARGET=1 OTHER_KIND=1" \
     X4VR_MV=0 X4VR_MV_POOL_LEARN_MIB=0.1
+
+# X4's own rule for its blocks, at 5% to either side of it; eye targets are another
+# pool's. The last two are the controls: a block of 0 MiB catches the one inside too,
+# and an enormous one catches none.
+POOL_ARG=rule
+pool_case "block: inside doubled, past it one layer" \
+    "INSIDE=2 PAST=1 EYE_TARGET_PAST=2" X4VR_MV=1
+pool_case "block: the rule replaced by 0 MiB (control)" \
+    "INSIDE=1 PAST=1 EYE_TARGET_PAST=2" X4VR_MV=1 X4VR_MV_POOL_MIB=0
+pool_case "block: the rule replaced by 1 TiB (control)" \
+    "INSIDE=2 PAST=2 EYE_TARGET_PAST=2" X4VR_MV=1 X4VR_MV_POOL_MIB=1048576
+POOL_ARG=""
 
 echo
 if (( fails )); then

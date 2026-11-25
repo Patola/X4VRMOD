@@ -6574,8 +6574,8 @@ def main(path):
     # --- the pool rule: images kept single-layer for X4's pool block (378) --
     #
     # layer/x4vr_layer.cpp, mv_exceeds_x4_pool. An image that, doubled, would
-    # not fit X4's 255.8 MiB pool block keeps one layer (the map's 3D view
-    # above ~4068² per eye). The rule bets X4 fills it by copies; a
+    # not fit X4's pool block keeps one layer (the map's 3D view above a size
+    # the card decides; the block is logged since 2026-11-25). The rule bets X4 fills it by copies; a
     # POOL-SINGLE line is the bet lost (an invalid framebuffer) and FAILs.
     mp_kept = re.findall(r"mv: (\d+x\d+) fmt=(\d+) usage=(0x[0-9a-f]+) kept "
                          r"SINGLE-LAYER — doubled it needs ([\d.]+) MiB.*?"
@@ -6586,6 +6586,15 @@ def main(path):
     mp_learned = re.findall(r"mv: (\d+x\d+) fmt=(\d+) usage=(0x[0-9a-f]+) kept SINGLE-LAYER from "
                             r"here — X4 dropped the doubled one (\d+) times in a row without using "
                             r"it \(([\d.]+) MiB", text)
+    blk = re.search(r"mv: X4's memory block on this card is ([\d.]+) MiB", text)
+    if blk:
+        print(f"mvpool  X4's memory block on this card: {blk.group(1)} MiB")
+    # The rule says which images X4's block won't hold; one it had to learn as
+    # well means the rule is wrong for this card or this X4.
+    if blk and mp_learned:
+        fails.append(f"X4 dropped {mp_learned[0][0]} fmt={mp_learned[0][1]} doubled "
+                     f"({mp_learned[0][4]} MiB), though its block is {blk.group(1)} MiB by X4's own "
+                     f"rule — the rule is wrong here, and only the learning saved the map")
     for wh, f, u, n, mib in mp_learned:
         print(f"mvpool  {wh} fmt={f} usage={u}: single-layer from its {n}th drop — doubled it needs "
               f"{mib} MiB, more than X4's pool block on this card; flat in VR")

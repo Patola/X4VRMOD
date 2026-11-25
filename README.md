@@ -260,7 +260,8 @@ drawn at all above 4000. With no upscaler:
 | 10 or 12 GB ¹ | 4224 | 4000 | 2816 |
 | 16 GB ¹ | 4224 | 4000 | 3200 |
 | 20 GB ¹ | 4224 | 4000 | 3600 |
-| 24 GB or more | 4224 | 4000 | 4000 |
+| 24 GB | 4224 | 4000 | 4000 |
+| 32 GB ¹ | 4224 | 4000 | 4224 |
 
 ¹ Worked out from the 8 and 24 GB cards' numbers. An upscaler saves little memory: at 3600, FSR 1
 Quality left X4's images 2.9 GB instead of 3.2. The launcher does the same sum with the memory

@@ -4703,13 +4703,18 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass2(
 // to answer first is not "is layer 1 empty" but "does anything sample it", and
 // that answer lives at layer1_state(), not here.
 // **X4's pool block (take 377).** X4 sub-allocates the images it creates
-// after start-up from blocks of 255.8 MiB, and has no other path for them: an
-// image whose memory requirement exceeds the block is destroyed and created
-// again the next frame, forever. Doubled, the map's 3D view at 4224x4224 per
-// eye (4224x4149 RGBA16F) needs 268.1 MiB, so X4 re-created it ~40 times a
-// second and the map drew into nothing (takes 376/377: 1309 requirements, no
-// allocation, no bind). At 3200 it needs 153 MiB and works; without the layer
-// 134 MiB.
+// after start-up from blocks, and has no other path for them: an image whose
+// memory requirement exceeds the block is destroyed and created again the next
+// frame, forever. Doubled, the map's 3D view at 4224x4224 per eye (4224x4149
+// RGBA16F) needs 268.1 MiB, so X4 re-created it ~40 times a second and the map
+// drew into nothing (takes 376/377: 1309 requirements, no allocation, no bind).
+//
+// **The block is max(128 MiB, the card's memory / 96)**, read from X4's allocator
+// (docs/x4-quirks.md, "X4's memory"): 255.8 MiB on the Radeon (24560), 128 on an
+// 8 GB card, where the fixed 248 this used until 2026-11-25 let the map come up
+// empty at 3200 and 3600 (takes 457e, 457f). The card's memory is the heap behind
+// the first device-local memory type, in whole MiB, as X4 takes it. An image as
+// large as the block fits a new one (0x225fcf0); one byte more does not.
 //
 // So such an image keeps the one layer X4 asked for when, doubled, it would
 // not fit. X4 fills the map's from a doubled render target by vkCmdCopyImage,
@@ -4717,14 +4722,23 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateRenderPass2(
 // eye's view and both eyes sample it: the map is flat above that size, and
 // drawn. The eye targets carry INPUT_ATTACHMENT and live in X4's 512 MiB
 // blocks (the 4224x4224 RGBA16F ones, 272 MiB doubled, bind at offset 0 of
-// one), so they are left alone. The limit sits below the block for margin;
-// X4VR_MV_POOL_MIB overrides it (0 = every candidate, for the GPU harness).
-float mv_pool_limit_mib() {
-    static const float v = [] {
-        const char *e = getenv("X4VR_MV_POOL_MIB");
-        return e && *e ? (float)atof(e) : 248.0f;
-    }();
-    return v;
+// one), so they are left alone: on the laptop every doubled image of 60 MiB or
+// more but the map's carries it (457e, 457f, 457g, 457z). X4VR_MV_POOL_MIB
+// overrides the block (0 = every candidate, for the GPU harness).
+VkDeviceSize mv_pool_block(const DeviceData *d) {
+    static const char *const e = getenv("X4VR_MV_POOL_MIB");
+    if (e && *e)
+        return (VkDeviceSize)(atof(e) * (1 << 20));
+    VkDeviceSize card = 0;
+    for (uint32_t i = 0; i < d->memprops.memoryTypeCount; i++) {
+        const VkMemoryType &t = d->memprops.memoryTypes[i];
+        if ((t.propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
+            t.heapIndex < d->memprops.memoryHeapCount) {
+            card = d->memprops.memoryHeaps[t.heapIndex].size >> 20 << 20;
+            break;
+        }
+    }
+    return std::max((VkDeviceSize)128 << 20, card / 96);
 }
 
 bool mv_exceeds_x4_pool(DeviceData *d, VkDevice device, VkImage doubled,
@@ -4734,7 +4748,8 @@ bool mv_exceeds_x4_pool(DeviceData *d, VkDevice device, VkImage doubled,
     VkMemoryRequirements req{};
     d->GetImageMemoryRequirements(device, doubled, &req);
     const double mib = (double)req.size / (1 << 20);
-    if (mib <= mv_pool_limit_mib())
+    const VkDeviceSize block = mv_pool_block(d);
+    if (req.size <= block)
         return false;
     static std::mutex mu;
     // Never destroyed (tests/run-no-exit-destructors.sh).
@@ -4748,28 +4763,24 @@ bool mv_exceeds_x4_pool(DeviceData *d, VkDevice device, VkImage doubled,
             .second ||
         n % 1000 == 0)
         X4VR_LOG("mv: %ux%u fmt=%u usage=0x%x kept SINGLE-LAYER — doubled it "
-                 "needs %.1f MiB, more than X4's pool block holds (limit %.0f "
-                 "MiB): X4 would re-create it every frame and draw nothing. "
+                 "needs %.1f MiB, more than X4's pool block holds (%.1f MiB on "
+                 "this card): X4 would re-create it every frame and draw nothing. "
                  "Copies into it keep the left eye's view, so it is flat in VR "
                  "(%llu image(s) so far)",
                  ci->extent.width, ci->extent.height, (uint32_t)ci->format,
-                 (uint32_t)ci->usage, mib, mv_pool_limit_mib(),
+                 (uint32_t)ci->usage, mib, (double)block / (1 << 20),
                  (unsigned long long)n);
     return true;
 }
 
-// **X4's block is not 255.8 MiB everywhere (takes 457e, 457f, 2026-11-24).** On
-// the RTX 3070 laptop (8 GB) the blocks are 128.0 MiB, so the map's doubled 3D
-// view fits at 2816 per eye (121.0 MiB, bound) and not at 3200 (156.2 MiB): X4
-// re-created it 546 times and the map was empty, with 1.4 GB free. The limit
-// above only knows the Radeon's block. X4's rule, read since, is max(128 MiB, the
-// card's memory / 96) (docs/x4-quirks.md, "X4's memory"); the layer doesn't use it and
-// learns from X4 instead: an image it doubled, of 64 MiB or
-// more, that X4 destroys without ever making a view of it, three times in a row
-// for the same size, format and usage, is one X4's pool will not take, and from
-// then on that kind keeps the one layer X4 asked for. Any view of one starts the
-// count again. Not the eye targets (INPUT_ATTACHMENT), as above. Held under
-// g_img_mu. X4VR_MV_POOL_LEARN_MIB lowers the 64, for the GPU harness.
+// **Should X4's block be another than the rule above says (another build, another
+// card), the layer learns it from X4** (takes 457e, 457f, 2026-11-24, before the rule
+// was known: the map re-created 546 times and empty, with 1.4 GB free): an image it
+// doubled, of 64 MiB or more, that X4 destroys without ever making a view of it,
+// three times in a row for the same size, format and usage, is one X4's pool will
+// not take, and from then on that kind keeps the one layer X4 asked for. Any view
+// of one starts the count again. Not the eye targets (INPUT_ATTACHMENT), as above.
+// Held under g_img_mu. X4VR_MV_POOL_LEARN_MIB lowers the 64, for the GPU harness.
 struct PoolLearn {
     uint32_t dropped = 0;  // doubled, destroyed unused, in a row
     uint32_t dropped1 = 0; // the same once it has one layer
@@ -4830,7 +4841,7 @@ void mv_pool_dropped(DeviceData *d, VkDevice device, VkImage img, const ImageInf
             if (++l.dropped >= kPoolDrops && !l.single)
                 learned = l.single = true;
         } else {
-            // Kept single by this rule or by the fixed limit above.
+            // Kept single by this rule or by the one above.
             PoolLearn &l = g_pool_learn[pool_sig(info.extent, info.format, info.usage)];
             hopeless = ++l.dropped1 == kPoolDrops;
         }
@@ -19331,6 +19342,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
         if (auto gpmp = (PFN_vkGetPhysicalDeviceMemoryProperties)gipa(
                 inst, "vkGetPhysicalDeviceMemoryProperties"))
             gpmp(phys, &d.memprops);
+        if (g_active && g_mv)
+            X4VR_LOG("mv: X4's memory block on this card is %.1f MiB: what it would need "
+                     "more for, doubled, keeps one layer",
+                     (double)mv_pool_block(&d) / (1 << 20));
         // Task #59 needs maxBoundDescriptorSets and the uniform-buffer offset
         // alignment. Cached here for the same reason memprops is: the physical
         // device is in scope only during creation.

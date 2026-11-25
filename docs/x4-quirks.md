@@ -28837,7 +28837,7 @@ The shipping line at 4224² with X4VR_MEMLOG=1 and X4VR_MV_INVENTORY=1. Load,
 > image (196.9 and 156.2 MiB) was asked for 627 and 546 times, never allocated,
 > never bound, with 0.1 and 1.4 GB free and no allocation failing; the map was
 > empty. Take 457z (2816²): 121.0 MiB, bound. X4's device-local blocks there are
-> 128.0 MiB. How X4 picks the size is not known (255.8 of 24560 MiB, 128.0 of
+> 128.0 MiB. How X4 picks the size was not known yet (read since: "X4's memory" below; 255.8 of 24560 MiB, 128.0 of
 > 8192), so `mv_pool_dropped` learns it: a doubled image of 64 MiB or more that X4
 > destroys without a view, three times in a row for one kind, keeps one layer
 > from then on. One layer at 4224² is 134 MiB, so there the map stays empty on
@@ -30275,8 +30275,16 @@ second gate (0x21dfa30) holds five kinds of memory each to its own limit.
 the class is 64, 128 or 256 MiB, or 512 for three pools on cards of more than 6144 MiB. At most 96
 blocks to a pool. So 8 GB has blocks of 85.3 (the 64 class) and 128.0 MiB, and 24560 MiB has
 255.8: both seen in the takes' memory logs. The map's image lives in the 128 class. 10 and 12 GB
-cards therefore have the 8 GB card's limit, 16 GB has 170.5, 20 GB 213.2, and 32 GB 339.7 (there
-the layer's own 248 MiB limit decides).
+cards therefore have the 8 GB card's limit, 16 GB has 170.5, 20 GB 213.2, and 32 GB 339.7. "The
+card's memory" is the heap behind the first device-local memory type (0x21fd0e0, kept in MiB).
+
+An image larger than its pool's block is refused outright (0x2260260), so the map's, doubled, comes
+up empty there. One no larger fits a new block, exactly (0x2260565: placed in the block just made,
+no margin); an existing block is tried only if 1.25 times the image is less than what it has free.
+Since 2026-11-25 the layer uses this rule (`mv_pool_block`) instead of a fixed 248 MiB, keeping the
+learning of 457e/457f for a card or a build where it doesn't hold. Every other doubled image of
+60 MiB or more on the laptop is an eye target and carries INPUT_ATTACHMENT (0x97, 0xa7), which the
+rule leaves alone.
 
 **What's in place before the first texture** is decided by the eye size alone. With no upscaler, on
 the RTX 3070 laptop: 233 MB + 228 MB a megapixel through WiVRn (1159, 2040, 2550, 3235, 3884 at 2016,

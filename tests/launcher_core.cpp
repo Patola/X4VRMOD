@@ -1067,7 +1067,9 @@ static void test_memory() {
     check(map_depth_up_to(24560) >= 4000 && map_depth_up_to(24560) < 4224, "map: 24 GB");
     check(map_drawn_up_to(24560) >= 4224, "map: 24 GB draws it at every size");
     check(map_depth_up_to(16368) >= 3200 && map_depth_up_to(16368) < 3600, "map: 16 GB");
-    check(map_depth_up_to(32607) < 4224, "map: the layer doubles none above 248 MiB, on any card");
+    check(map_depth_up_to(32607) >= 4224, "map: 32 GB keeps its depth at every size listed");
+    check(map_depth_up_to(12282) >= 2816 && map_depth_up_to(12282) < 3072 &&
+              map_drawn_up_to(12282) < 4224, "map: 12 GB as 8 GB, both blocks are 128 MiB");
     check(map_depth_up_to(0) == 0, "map: a card not asked says nothing");
 
     // The estimate, with what the launcher's own probe found on that laptop: 6409 MB through

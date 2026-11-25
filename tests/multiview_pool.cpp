@@ -11,6 +11,7 @@
 #include <vulkan/vulkan.h>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 static VkDevice dev;
@@ -88,7 +89,27 @@ static int layers(uint32_t w, uint32_t h, VkImageUsageFlags u) {
     return got * 4 > two * 3 ? 2 : 1;
 }
 
-int main() {
+// X4's own rule for its blocks (docs/x4-quirks.md, "X4's memory"): max(128 MiB, the heap
+// behind the first device-local memory type / 96). Images just inside and just past it,
+// none of them given memory: only their requirements are asked.
+static void rule() {
+    VkDeviceSize card = 0;
+    for (uint32_t i = 0; i < mp.memoryTypeCount && !card; i++)
+        if (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+            card = mp.memoryHeaps[mp.memoryTypes[i].heapIndex].size >> 20 << 20;
+    const VkDeviceSize block = card / 96 > (128u << 20) ? card / 96 : (128u << 20);
+    // Doubled, 16 bytes a pixel. 5% to either side, past any alignment of the driver's.
+    const uint32_t w = 8192;
+    const uint32_t h = (uint32_t)(block / (w * 16));
+    const uint32_t in = h * 95 / 100, out = h * 105 / 100;
+    printf("BLOCK_MIB=%.1f (card %llu MiB)\n", (double)block / (1 << 20),
+           (unsigned long long)(card >> 20));
+    printf("INSIDE=%d\n", layers(w, in, MAP));
+    printf("PAST=%d\n", layers(w, out, MAP));
+    printf("EYE_TARGET_PAST=%d\n", layers(w, out, MAP | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT));
+}
+
+int main(int argc, char **argv) {
     VkApplicationInfo app{};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app.pApplicationName = "X4";
@@ -115,6 +136,12 @@ int main() {
     dci.pQueueCreateInfos = &q;
     if (vkCreateDevice(phys[0], &dci, nullptr, &dev) != VK_SUCCESS) { printf("FAIL=device:0\n"); return 1; }
 
+    if (argc > 1 && !strcmp(argv[1], "rule")) {
+        rule();
+        vkDestroyDevice(dev, nullptr);
+        vkDestroyInstance(inst, nullptr);
+        return 0;
+    }
     // Each case has its own extent, so its own kind.
     printf("FRESH=%d\n", layers(512, 512, MAP));
     drop(512, 504, MAP, 2);
