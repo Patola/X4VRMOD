@@ -2231,6 +2231,12 @@ plant /tmp/census-df-no.log "$dfn" "$dfo"
 want "declfield: refused, and ours declared -> FAIL" /tmp/census-df-no.log "FAIL|  - " "allows no field of view but its own"
 plant /tmp/census-df-nr.log "$dfn" "$dfr"
 absent "declfield: refused, and the runtime's declared -> no FAIL" /tmp/census-df-nr.log "allows no field of view but its own"
+dfra='[  99803.000] layer   declfield: the RUNTIME'"'"'S field is declared, with the part of the image it falls on (X4VR_DECLARE_FIELD=ab, from this recentre on)'
+dfoa='[  99804.000] layer   declfield: X4'"'"'s own field is declared, with the whole image (X4VR_DECLARE_FIELD=ab, from this recentre on)'
+{ sed 's/env: run = /env: run = X4VR_DECLARE_FIELD=ab /' "$BASE"; printf '%s\n' "$dfy" "$dfoa" "$dfra" "$dfra" "$dfra"; } > /tmp/census-df-ab461.log
+want "declfield: ab that never turned in play (461) -> FAIL" /tmp/census-df-ab461.log "FAIL|  - " "never alternated in play"
+{ sed 's/env: run = /env: run = X4VR_DECLARE_FIELD=ab /' "$BASE"; printf '%s\n' "$dfy" "$dfoa" "$dfra" "$dfoa" "$dfra"; } > /tmp/census-df-ab.log
+absent "declfield: ab that turned -> no FAIL" /tmp/census-df-ab.log "never alternated in play"
 plant /tmp/census-df-cant.log "$eyc"
 want "declfield: canted eyes -> FAIL" /tmp/census-df-cant.log "FAIL|  - " "the runtime's eyes are 10.000 deg apart"
 plant /tmp/census-df-swap.log "$eys"
@@ -2260,7 +2266,8 @@ absent "mvpool: no rule fired -> silent" "$BASE" mvpool
 plfmt=1
 for frag in '"mv: %ux%u fmt=%u usage=0x%x kept SINGLE-LAYER from here — X4 dropped the "' \
             '"doubled one %u times in a row without using it (%.1f MiB, more than its pool "' \
-            '"mv: %ux%u fmt=%u usage=0x%x: X4 drops it with one layer too (%.1f MiB) — its "'; do
+            '"mv: %ux%u fmt=%u usage=0x%x: X4 drops it with one layer too (%.1f MiB) — its "' \
+            '"mv: %ux%u fmt=%u usage=0x%x: X4 drops it with one layer too (%.1f MiB), though "'; do
     grep -qF -- "$frag" layer/x4vr_layer.cpp || { plfmt=0; echo "        missing: $frag"; }
 done
 [ $plfmt -eq 1 ] && ok "mvpool learned: the planted lines match the layer's formats" \
@@ -2278,6 +2285,9 @@ want "mvpool: the block is said" /tmp/census-pl-blk.log mvpool "X4's memory bloc
 absent "mvpool: the block alone is no FAIL" /tmp/census-pl-blk.log "by X4's own rule"
 plant /tmp/census-pl-bad.log "$pll" '[  99991.000] layer   mv: 4224x4149 fmt=97 usage=0x17: X4 drops it with one layer too (134.1 MiB) — its pool block on this card is smaller than that, with or without the mod, and what it draws stays empty at this eye size'
 want "mvpool learned: one layer is too big too -> FAIL" /tmp/census-pl-bad.log "FAIL" "smaller than 4224x4149 fmt=97 with ONE layer (134.1 MiB)"
+plant /tmp/census-pl-full.log "$pll" '[  99991.000] layer   mv: 3200x3143 fmt=97 usage=0x17: X4 drops it with one layer too (78.1 MiB), though its block on this card holds 128.0 — it had no memory left for a new one: the card'"'"'s memory is full at this eye size'
+want "mvpool: one layer fits, dropped all the same (461) -> FAIL says memory" /tmp/census-pl-full.log "FAIL" "though its 128.0 MiB block holds it: no memory left"
+absent "mvpool: ...and not that the block is too small" /tmp/census-pl-full.log "smaller than 3200x3143"
 mlreq() { for i in $(seq "$1"); do printf '[  9999%s.000] layer   mem: req img #%s %s fmt=97 DOUBLED size=156.2 MiB align=1024 types=0x3\n' 2 "$i" "$2"; done; }
 { cat "$BASE"; mlreq 60 3200x3143; } > /tmp/census-ml-drop.log
 want "memlog: asked for 60 times, never bound (457f) -> FAIL" /tmp/census-ml-drop.log "FAIL" "X4 asked for 3200x3143 fmt=97 DOUBLED (156.2 MiB) 60 times and never bound one"

@@ -4854,12 +4854,21 @@ void mv_pool_dropped(DeviceData *d, VkDevice device, VkImage img, const ImageInf
                  "in VR",
                  info.extent.width, info.extent.height, (uint32_t)info.format,
                  (uint32_t)info.usage, kPoolDrops, mib);
-    if (hopeless)
+    // One that fits X4's block and is dropped all the same: X4 had no memory for a new block
+    // (its budget, docs/x4-quirks.md "X4's memory"). Take 461, SteamVR at 3200 on 8 GB.
+    const double block = (double)mv_pool_block(d) / (1 << 20);
+    if (hopeless && mib > block)
         X4VR_LOG("mv: %ux%u fmt=%u usage=0x%x: X4 drops it with one layer too (%.1f MiB) — its "
                  "pool block on this card is smaller than that, with or without the mod, and "
                  "what it draws stays empty at this eye size",
                  info.extent.width, info.extent.height, (uint32_t)info.format,
                  (uint32_t)info.usage, mib);
+    else if (hopeless)
+        X4VR_LOG("mv: %ux%u fmt=%u usage=0x%x: X4 drops it with one layer too (%.1f MiB), though "
+                 "its block on this card holds %.1f — it had no memory left for a new one: the "
+                 "card's memory is full at this eye size",
+                 info.extent.width, info.extent.height, (uint32_t)info.format,
+                 (uint32_t)info.usage, mib, block);
 }
 
 // An image the OpenXR runtime makes on X4's device, on a thread the layer is
@@ -16613,9 +16622,13 @@ static bool decl_field_native(const x4vr::FieldRect part[2]) {
     static uint64_t phase_epoch = ~0ull;
     const DeclField m = decl_field_mode();
     const bool covered = part[0].ok && part[1].ok;
+    // By the mod's forward latches, one at the panel and one at each recentre: the runtime's
+    // own recentre moves g_space_epoch too, so that counts two a recentre (take 461, where
+    // the A/B never turned).
+    const uint64_t phase = forward_latch_on() ? g_fwd.latches : g_space_epoch;
     const bool asked = m == DeclField::Native ||
                        (m == DeclField::Auto && g_vrs.rt.fov_mutable == 0) ||
-                       (m == DeclField::Ab && (g_space_epoch & 1));
+                       (m == DeclField::Ab && (phase & 1));
     const bool native = asked && covered;
     if (said < 0) {
         const float k = 57.2957795130823f;
@@ -16629,8 +16642,8 @@ static bool decl_field_native(const x4vr::FieldRect part[2]) {
         else
             X4VR_LOG("declfield: the runtime's own field reaches past X4's, so X4's is declared");
     }
-    const bool turn = m == DeclField::Ab && phase_epoch != g_space_epoch;
-    phase_epoch = g_space_epoch;
+    const bool turn = m == DeclField::Ab && phase_epoch != phase;
+    phase_epoch = phase;
     if (said != (int)native || turn)
         X4VR_LOG("declfield: %s%s%s", native ? "the RUNTIME'S field is declared, with the part of "
                                                "the image it falls on"

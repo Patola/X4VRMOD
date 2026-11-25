@@ -5493,8 +5493,10 @@ def main(path):
         elif "the RUNTIME'S" not in df:
             fails.append("X4VR_DECLARE_FIELD was asked for and the runtime's field was never "
                          "declared — X4's doesn't cover it (X4VR_FOV=1.80 on the Steam Frame)")
-        elif df_mode.group(1) == "ab" and "X4's own" not in df:
-            fails.append("X4VR_DECLARE_FIELD=ab and X4's own field was never declared")
+        elif df_mode.group(1) == "ab" and "X4's own" not in df[df.index("the RUNTIME'S"):]:
+            # Take 461: X4's own before play, the runtime's for all of it.
+            fails.append("X4VR_DECLARE_FIELD=ab and the fields never alternated in play: X4's own "
+                         "only before the first latch, so there was nothing to compare")
     ep = re.search(r"xr: the runtime's eyes — ([\d.]+) deg between their orientations \((.*?)\); from "
                    r"the middle, in eye 0's axes: eye 0 at \(([-+\d.]+), ([-+\d.]+), ([-+\d.]+)\) mm, "
                    r"eye 1 at \(([-+\d.]+), ([-+\d.]+), ([-+\d.]+)\) mm", text)
@@ -6637,9 +6639,15 @@ def main(path):
     for wh, f, u, n, mib in mp_learned:
         print(f"mvpool  {wh} fmt={f} usage={u}: single-layer from its {n}th drop — doubled it needs "
               f"{mib} MiB, more than X4's pool block on this card; flat in VR")
+    for wh, f, u, mib, blk_ in re.findall(
+            r"mv: (\d+x\d+) fmt=(\d+) usage=(0x[0-9a-f]+): X4 drops it with one layer too "
+            r"\(([\d.]+) MiB\), though its block on this card holds ([\d.]+)", text):
+        fails.append(f"X4 dropped {wh} fmt={f} with ONE layer ({mib} MiB) though its {blk_} MiB "
+                     f"block holds it: no memory left for a new block — the card's memory is full "
+                     f"at this eye size")
     for wh, f, u, mib in re.findall(
             r"mv: (\d+x\d+) fmt=(\d+) usage=(0x[0-9a-f]+): X4 drops it with one layer too "
-            r"\(([\d.]+) MiB\)", text):
+            r"\(([\d.]+) MiB\) —", text):
         fails.append(f"X4's pool block on this card is smaller than {wh} fmt={f} with ONE layer "
                      f"({mib} MiB): what X4 draws there stays empty at this eye size, with or "
                      f"without the mod — go lower")
