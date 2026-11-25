@@ -5470,6 +5470,45 @@ def main(path):
     elif "vram: not measured" in text:
         print("vram    not measured — the driver offers no VK_EXT_memory_budget")
 
+    # --- declfield: whose field of view the frames are declared with (issue #3) --
+    #
+    # X4's symmetric one, unless the runtime allows only its own (fovMutable
+    # false); and the runtime's eyes as the mod takes them, parallel and eye 0
+    # on the left (2026-11-25).
+    fm = re.search(r"xr: a field of view of our own is (allowed|NOT allowed|not answered for)", text)
+    df = re.findall(r"declfield: (the RUNTIME'S|X4's own) field is declared", text)
+    df_mode = re.search(r"\bX4VR_DECLARE_FIELD=(\S+)", run or "")
+    if fm:
+        print(f"declfield a field of our own is {fm.group(1)} by the runtime; declared: "
+              + (", then ".join(df[:6]) if df else "nothing yet"))
+        for part in re.findall(r"declfield: (the runtime's own field [^\n]*)", text)[:1]:
+            print(f"declfield {part}")
+        if fm.group(1) == "NOT allowed" and df and df[-1] != "the RUNTIME'S" and not df_mode:
+            fails.append("the runtime allows no field of view but its own, and X4's was declared "
+                         "(it reaches past X4's): a runtime that ignores ours shows double vision")
+    if df_mode and df_mode.group(1) in ("native", "ab"):
+        if "declfield:" not in text:
+            fails.append("X4VR_DECLARE_FIELD was asked for and the layer never mentioned declfield: "
+                         "a build from before it ignored the variable")
+        elif "the RUNTIME'S" not in df:
+            fails.append("X4VR_DECLARE_FIELD was asked for and the runtime's field was never "
+                         "declared — X4's doesn't cover it (X4VR_FOV=1.80 on the Steam Frame)")
+        elif df_mode.group(1) == "ab" and "X4's own" not in df:
+            fails.append("X4VR_DECLARE_FIELD=ab and X4's own field was never declared")
+    ep = re.search(r"xr: the runtime's eyes — ([\d.]+) deg between their orientations \((.*?)\); from "
+                   r"the middle, in eye 0's axes: eye 0 at \(([-+\d.]+), ([-+\d.]+), ([-+\d.]+)\) mm, "
+                   r"eye 1 at \(([-+\d.]+), ([-+\d.]+), ([-+\d.]+)\) mm", text)
+    if ep:
+        print(f"eyes    {ep.group(1)} deg between the runtime's two ({ep.group(2)}); eye 0 at "
+              f"({ep.group(3)}, {ep.group(4)}, {ep.group(5)}) mm, eye 1 at ({ep.group(6)}, "
+              f"{ep.group(7)}, {ep.group(8)}) mm")
+        if float(ep.group(1)) > 0.5:
+            fails.append(f"the runtime's eyes are {ep.group(1)} deg apart ({ep.group(2)}): the mod "
+                         f"takes them for parallel, and eye 0's orientation for the head's")
+        if float(ep.group(3)) > float(ep.group(6)):
+            fails.append("the runtime's eye 0 is to the RIGHT of its eye 1: the mod takes eye 0 for "
+                         "the left one")
+
     # --- issue #4: the residual through shaders that don't conjugate ----------
     #
     # Up to rc9 a headset narrower than X4's field was given a residual

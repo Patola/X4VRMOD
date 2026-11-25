@@ -376,6 +376,9 @@ static void test_probes_format() {
     for (XrStatus s : {XrStatus::NoLoader, XrStatus::NoRuntime, XrStatus::NoHeadset})
         check((p.status = s, xr_probe_parse(xr_probe_format(p)).status == s),
               std::string("xr: status ") + xr_status_name(s));
+    p.fov_mutable = 0;
+    check(xr_probe_parse(xr_probe_format(p)).fov_mutable == 0, "xr: fovMutable survives");
+    check(xr_probe_parse("X4VRMOD_XR_STATUS=ready\n").fov_mutable == -1, "xr: ...unsaid is -1");
     q = xr_probe_parse("");
     check(q.status == XrStatus::Failed && !q.detail.empty(),
           "xr: a probe that died says so, and isn't taken for ready");

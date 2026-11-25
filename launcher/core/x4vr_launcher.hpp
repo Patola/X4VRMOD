@@ -180,6 +180,7 @@ struct XrProbe {
     XrStatus status = XrStatus::NotRun;
     std::string runtime, system, detail;
     unsigned eye_w = 0, eye_h = 0;
+    int fov_mutable = -1; // the runtime lets X4's field be declared: 1, 0, or -1 unsaid
 };
 // In this process: what `x4vrmod probe xr` runs. Instance, xrGetSystem, view
 // sizes, destroy. No session.

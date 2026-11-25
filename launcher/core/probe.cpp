@@ -94,6 +94,7 @@ XrProbe xr_probe_here(bool verbose) {
         p.status = XrStatus::Ready;
         p.eye_w = rt.views[0].recommendedImageRectWidth;
         p.eye_h = rt.views[0].recommendedImageRectHeight;
+        p.fov_mutable = rt.fov_mutable;
     } else if (e.rfind("dlopen", 0) == 0 || e.rfind("loader would not", 0) == 0) {
         p.status = XrStatus::NoLoader;
     } else if (e.rfind("no active OpenXR runtime", 0) == 0 ||
@@ -122,6 +123,7 @@ std::string xr_probe_format(const XrProbe &p) {
     s += "X4VRMOD_XR_RUNTIME=" + one_line(p.runtime) + "\n";
     s += "X4VRMOD_XR_SYSTEM=" + one_line(p.system) + "\n";
     s += "X4VRMOD_XR_EYE=" + std::to_string(p.eye_w) + "x" + std::to_string(p.eye_h) + "\n";
+    s += "X4VRMOD_XR_FOV_MUTABLE=" + std::to_string(p.fov_mutable) + "\n";
     s += "X4VRMOD_XR_DETAIL=" + one_line(p.detail) + "\n";
     return s;
 }
@@ -138,6 +140,7 @@ XrProbe xr_probe_parse(const std::string &text) {
     p.system = value_of(text, "X4VRMOD_XR_SYSTEM");
     p.detail = value_of(text, "X4VRMOD_XR_DETAIL");
     sscanf(value_of(text, "X4VRMOD_XR_EYE").c_str(), "%ux%u", &p.eye_w, &p.eye_h);
+    sscanf(value_of(text, "X4VRMOD_XR_FOV_MUTABLE").c_str(), "%d", &p.fov_mutable);
     if (st.empty() && p.detail.empty())
         p.detail = "the probe stopped before answering";
     return p;

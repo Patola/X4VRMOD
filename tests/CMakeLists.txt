@@ -216,6 +216,7 @@ endif()
 add_executable(x4vr_test_lua_scan lua_scan.cpp)
 
 add_executable(x4vr_test_guard_budget guard_budget.cpp)
+add_executable(x4vr_test_declared_field declared_field.cpp)
 
 # The IsHUDActive teardown guard's decoder (X4's exit crash was ours). Checks
 # the refusals and, when X4 is installed, the real prologue. Self-checking.

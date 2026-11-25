@@ -120,6 +120,7 @@ struct Api {
     PFN_xrEnumerateViewConfigurations EnumerateViewConfigurations = nullptr;
     PFN_xrEnumerateViewConfigurationViews EnumerateViewConfigurationViews =
         nullptr;
+    PFN_xrGetViewConfigurationProperties GetViewConfigurationProperties = nullptr;
     PFN_xrEnumerateEnvironmentBlendModes EnumerateEnvironmentBlendModes =
         nullptr;
     PFN_xrCreateSession CreateSession = nullptr;
@@ -271,6 +272,7 @@ inline void api_resolve_instance(Api &api, XrInstance inst) {
     X4VR_XR_RESOLVE(GetSystemProperties);
     X4VR_XR_RESOLVE(EnumerateViewConfigurations);
     X4VR_XR_RESOLVE(EnumerateViewConfigurationViews);
+    X4VR_XR_RESOLVE(GetViewConfigurationProperties);
     X4VR_XR_RESOLVE(EnumerateEnvironmentBlendModes);
     X4VR_XR_RESOLVE(CreateSession);
     X4VR_XR_RESOLVE(DestroySession);
@@ -324,6 +326,9 @@ struct Runtime {
     uint32_t view_count = 0;
     XrViewConfigurationView views[kMaxViews] = {};
     XrEnvironmentBlendMode blend = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    // Whether the application may declare a field of its own (fovMutable): 1 yes, 0 no, -1 the
+    // runtime didn't say. x4vr_field.hpp says what the mod does with a no.
+    int fov_mutable = -1;
 
     XrGraphicsRequirementsVulkan2KHR vk_req = {};
 
@@ -543,6 +548,18 @@ inline bool runtime_open(Runtime &rt, Sink sink, void *user) {
             rt.views[i].maxImageRectWidth, rt.views[i].maxImageRectHeight,
             rt.views[i].recommendedSwapchainSampleCount,
             rt.views[i].maxSwapchainSampleCount);
+
+    XrViewConfigurationProperties vp{};
+    vp.type = XR_TYPE_VIEW_CONFIGURATION_PROPERTIES;
+    if (rt.api.GetViewConfigurationProperties &&
+        rt.api.GetViewConfigurationProperties(rt.instance, rt.system,
+                                              XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+                                              &vp) == XR_SUCCESS)
+        rt.fov_mutable = vp.fovMutable ? 1 : 0;
+    say("xr: a field of view of our own is %s (fovMutable)",
+        rt.fov_mutable == 1   ? "allowed"
+        : rt.fov_mutable == 0 ? "NOT allowed: the runtime's own has to be declared"
+                              : "not answered for");
 
     uint32_t bn = 0;
     XrEnvironmentBlendMode modes[8] = {};

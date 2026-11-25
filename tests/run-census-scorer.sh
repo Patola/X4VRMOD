@@ -2205,6 +2205,37 @@ want "memlog: the failed allocation named" /tmp/census-ml-ok.log memlog "FAILED:
 want "memlog: asked, no line -> FAIL" /tmp/census-ml-base.log "FAIL|  - " "X4VR_MEMLOG=1 but no mem: line"
 absent "memlog: not asked -> silent" "$BASE" memlog
 
+# Whose field of view is declared, and the runtime's eyes (issue #3, 2026-11-25).
+for f in '"xr: a field of view of our own is %s (fovMutable)"' '"NOT allowed: the runtime'"'"'s own has to be declared"'; do
+    grep -qF "$f" common/x4vr_xr.hpp && ok "declfield: the runtime's answer still reads $f" \
+        || bad "declfield: the runtime's answer moved: $f"
+done
+for f in '"xr: the runtime'"'"'s eyes — %.3f deg between their orientations (yaw %+.3f, "' '"pitch %+.3f, roll %+.3f); from the middle, in eye 0'"'"'s axes: eye 0 at "' '"the RUNTIME'"'"'S field is declared, with the part of "' '"X4'"'"'s own field is declared, with the whole image"'; do
+    grep -qF "$f" layer/x4vr_layer.cpp && ok "declfield: the layer still prints $f" \
+        || bad "declfield: the layer's format moved: $f"
+done
+dfy='[  99800.000] layer   xr: a field of view of our own is allowed (fovMutable)'
+dfn='[  99800.000] layer   xr: a field of view of our own is NOT allowed: the runtime'"'"'s own has to be declared (fovMutable)'
+dfo='[  99801.000] layer   declfield: X4'"'"'s own field is declared, with the whole image'
+dfr='[  99802.000] layer   declfield: the RUNTIME'"'"'S field is declared, with the part of the image it falls on — the runtime allows no other'
+eyp='[  99800.500] layer   xr: the runtime'"'"'s eyes — 0.000 deg between their orientations (yaw +0.000, pitch +0.000, roll +0.000); from the middle, in eye 0'"'"'s axes: eye 0 at (-31.7, +0.0, +0.0) mm, eye 1 at (+31.7, +0.0, +0.0) mm'
+eyc='[  99800.500] layer   xr: the runtime'"'"'s eyes — 10.000 deg between their orientations (yaw -10.000, pitch +0.000, roll +0.000); from the middle, in eye 0'"'"'s axes: eye 0 at (-31.7, +0.0, +0.0) mm, eye 1 at (+31.7, +0.0, +0.0) mm'
+eys='[  99800.500] layer   xr: the runtime'"'"'s eyes — 0.000 deg between their orientations (yaw +0.000, pitch +0.000, roll +0.000); from the middle, in eye 0'"'"'s axes: eye 0 at (+31.7, +0.0, +0.0) mm, eye 1 at (-31.7, +0.0, +0.0) mm'
+plant /tmp/census-df-ok.log "$dfy" "$eyp" "$dfo"
+want "declfield: ours, allowed -> said" /tmp/census-df-ok.log declfield "a field of our own is allowed by the runtime; declared: X4's own"
+want "declfield: the eyes said" /tmp/census-df-ok.log eyes "0.000 deg between the runtime's two"
+absent "declfield: ours, allowed -> no FAIL" /tmp/census-df-ok.log "allows no field of view but its own"
+absent "declfield: parallel eyes -> no FAIL" /tmp/census-df-ok.log "takes them for parallel"
+absent "declfield: eye 0 on the left -> no FAIL" /tmp/census-df-ok.log "to the RIGHT of its eye 1"
+plant /tmp/census-df-no.log "$dfn" "$dfo"
+want "declfield: refused, and ours declared -> FAIL" /tmp/census-df-no.log "FAIL|  - " "allows no field of view but its own"
+plant /tmp/census-df-nr.log "$dfn" "$dfr"
+absent "declfield: refused, and the runtime's declared -> no FAIL" /tmp/census-df-nr.log "allows no field of view but its own"
+plant /tmp/census-df-cant.log "$eyc"
+want "declfield: canted eyes -> FAIL" /tmp/census-df-cant.log "FAIL|  - " "the runtime's eyes are 10.000 deg apart"
+plant /tmp/census-df-swap.log "$eys"
+want "declfield: swapped eyes -> FAIL" /tmp/census-df-swap.log "FAIL|  - " "to the RIGHT of its eye 1"
+
 # The pool rule: images kept single-layer for X4's pool block (take 378).
 for f in '"mv: %ux%u fmt=%u usage=0x%x kept SINGLE-LAYER — doubled it "' '"this card): X4 would re-create it every frame and draw nothing. "' '"mv: X4'"'"'s memory block on this card is %.1f MiB: what it would need "' '"(%llu image(s) so far)",' '"mv: POOL-SINGLE img #%u is attachment %u of a "'; do
     if grep -qF "$f" layer/x4vr_layer.cpp; then

@@ -47,6 +47,7 @@
 #include "../common/x4vr_sbs.hpp"
 #include "../common/x4vr_spirv.hpp"
 #include "../common/x4vr_guard.hpp"
+#include "../common/x4vr_field.hpp"
 #include "../common/x4vr_view.hpp"
 #include "../common/x4vr_immortal.hpp"
 #include "x4vr_sbs.hpp"
@@ -15166,6 +15167,32 @@ inline XrFovf vr_declared_fov() {
 const XrFovf g_vr_fov = vr_declared_fov();
 VrState &g_vrs = x4vr::immortal<VrState>();
 
+// **declfield: X4's whole field, or the part of it the headset shows** (issue #3,
+// 2026-11-25: double vision on a Reverb G2 through SteamVR's Oasis driver, with a
+// picture whose eyes measure right on screen). What a frame is declared with is X4's
+// symmetric 110 degrees and its whole image; a runtime may refuse any field but its
+// own (fovMutable false), and shown as the G2's own field that picture puts straight
+// ahead 12 degrees outwards in each eye. Then the same image is declared by the part
+// its own field falls on (x4vr_field.hpp), where X4's covers it, as on every headset
+// narrower than 110 degrees. X4VR_DECLARE_FIELD: unset, the runtime's only where it
+// refuses ours; own, always ours; native, the runtime's wherever X4's covers it; ab,
+// the two in turn, changing at each recentre and at the mod's own at the panel (so the
+// loading's frames are ours, and play begins with the runtime's).
+enum class DeclField { Auto, Own, Native, Ab };
+DeclField decl_field_mode() {
+    static const DeclField m = [] {
+        const char *e = getenv("X4VR_DECLARE_FIELD");
+        if (e && !strcmp(e, "own"))
+            return DeclField::Own;
+        if (e && !strcmp(e, "native"))
+            return DeclField::Native;
+        if (e && !strcmp(e, "ab"))
+            return DeclField::Ab;
+        return DeclField::Auto;
+    }();
+    return m;
+}
+
 bool vr_located_fov(float out[2][4]) {
     if (!g_vr || !g_vrs.fov_seen.load(std::memory_order_acquire))
         return false;
@@ -16580,6 +16607,61 @@ static void ipd_from_headset(float meas) {
 // q (#75's position half; see the eye loop in vr_thread): the neutral point
 // plus our own eye offset turned by q, plus the head's offset in the room --
 // or, without that, the runtime's own eye position.
+// Both eyes or neither: one eye's own field and the other's would be two frames.
+static bool decl_field_native(const x4vr::FieldRect part[2]) {
+    static int said = -1;
+    static uint64_t phase_epoch = ~0ull;
+    const DeclField m = decl_field_mode();
+    const bool covered = part[0].ok && part[1].ok;
+    const bool asked = m == DeclField::Native ||
+                       (m == DeclField::Auto && g_vrs.rt.fov_mutable == 0) ||
+                       (m == DeclField::Ab && (g_space_epoch & 1));
+    const bool native = asked && covered;
+    if (said < 0) {
+        const float k = 57.2957795130823f;
+        if (covered)
+            X4VR_LOG("declfield: the runtime's own field falls on columns %d-%d, rows %d-%d of eye "
+                     "0's image and %d-%d, %d-%d of eye 1's (%.2f to %.2f and %.2f to %.2f deg "
+                     "across)",
+                     part[0].x, part[0].x + part[0].w, part[0].y, part[0].y + part[0].h, part[1].x,
+                     part[1].x + part[1].w, part[1].y, part[1].y + part[1].h, part[0].left * k,
+                     part[0].right * k, part[1].left * k, part[1].right * k);
+        else
+            X4VR_LOG("declfield: the runtime's own field reaches past X4's, so X4's is declared");
+    }
+    const bool turn = m == DeclField::Ab && phase_epoch != g_space_epoch;
+    phase_epoch = g_space_epoch;
+    if (said != (int)native || turn)
+        X4VR_LOG("declfield: %s%s%s", native ? "the RUNTIME'S field is declared, with the part of "
+                                               "the image it falls on"
+                                             : "X4's own field is declared, with the whole image",
+                 m == DeclField::Auto  ? (native ? " — the runtime allows no other" : "")
+                 : m == DeclField::Own ? " (X4VR_DECLARE_FIELD=own)"
+                 : m == DeclField::Ab  ? " (X4VR_DECLARE_FIELD=ab, from this recentre on)"
+                                       : " (X4VR_DECLARE_FIELD=native)",
+                 asked && !covered ? " — asked for the runtime's, which X4's doesn't cover" : "");
+    said = (int)native;
+    return native;
+}
+
+static void declare_field(uint32_t e, XrCompositionLayerProjectionView *pv) {
+    static x4vr::FieldRect part[2];
+    static bool native = false;
+    if (e == 0) {
+        if (!g_vrs.fov_seen.load(std::memory_order_acquire))
+            return;
+        for (int i = 0; i < 2; i++)
+            part[i] = x4vr::field_rect(g_vr_fov.angleRight, (int)g_vrs.sc.width,
+                                       (int)g_vrs.sc.height, g_vrs.fov_rad[i]);
+        native = decl_field_native(part);
+    }
+    if (!native)
+        return;
+    const x4vr::FieldRect &r = part[e];
+    pv->fov = {r.left, r.right, r.up, r.down};
+    pv->subImage.imageRect = {{r.x, r.y}, {r.w, r.h}};
+}
+
 static XrVector3f declared_eye_position(const float q[4], uint32_t e, const XrView &view) {
     XrVector3f p = view.pose.position;
     if (declare_rendered_pos() && g_reye.valid.load(std::memory_order_acquire)) {
@@ -16917,6 +16999,24 @@ void vr_thread() {
             // here -- the runtime's field just arrived and X4's came from the
             // config we served it.
             pose_budget_establish(g_vrs.fov_rad);
+            // The mod takes eye 0's orientation for the head's, and both eyes for parallel
+            // (probe run 2, on WiVRn): said by every log, so a runtime where it isn't so shows.
+            {
+                const auto &a = views[0].pose, &b = views[1].pose;
+                const float q0[4] = {a.orientation.x, a.orientation.y, a.orientation.z,
+                                     a.orientation.w};
+                const float q1[4] = {b.orientation.x, b.orientation.y, b.orientation.z,
+                                     b.orientation.w};
+                const float p0[3] = {a.position.x, a.position.y, a.position.z};
+                const float p1[3] = {b.position.x, b.position.y, b.position.z};
+                const x4vr::EyePair ep = x4vr::eye_pair(q0, q1, p0, p1);
+                X4VR_LOG("xr: the runtime's eyes — %.3f deg between their orientations (yaw %+.3f, "
+                         "pitch %+.3f, roll %+.3f); from the middle, in eye 0's axes: eye 0 at "
+                         "(%+.1f, %+.1f, %+.1f) mm, eye 1 at (%+.1f, %+.1f, %+.1f) mm",
+                         ep.deg, ep.yaw, ep.pitch, ep.roll, ep.at[0][0] * 1e3f, ep.at[0][1] * 1e3f,
+                         ep.at[0][2] * 1e3f, ep.at[1][0] * 1e3f, ep.at[1][1] * 1e3f,
+                         ep.at[1][2] * 1e3f);
+            }
             const float k = 57.2957795130823f;
             X4VR_LOG("vr fov: runtime reports eye0 l=%.2f r=%.2f u=%.2f "
                      "d=%.2f, eye1 l=%.2f r=%.2f u=%.2f d=%.2f deg — latched "
@@ -17789,6 +17889,8 @@ void vr_thread() {
                     {0, 0},
                     {(int32_t)g_vrs.sc.width, (int32_t)g_vrs.sc.height}};
                 pv[e].subImage.imageArrayIndex = e;
+                if (!oat.on)
+                    declare_field(e, &pv[e]);
             }
             proj.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION;
             proj.space = g_vrs.session.space;
