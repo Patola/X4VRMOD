@@ -325,10 +325,12 @@ std::string eye_note(const EyeSettings &s, bool steamvr, const GpuInfo &g,
 // ------------------------------------------------------------- the card's memory
 // X4's and the mod's images, in MB: all that's in place before the first texture.
 int images_mb(int eye, int render, bool nvidia, bool steamvr);
-// The least left for textures that isn't warned about, in MB of what the driver offered
-// before X4 started. Takes on the 8 GB laptop: 2065, 1928 and more were fine; with 1307 X4
-// was out of memory from the start menu on (457b), with 559 textures were missing (457c).
-constexpr int kTexturesNeedMb = 1700;
+// The least left for textures that isn't warned about, in MB of what the driver offers with
+// VR up and X4 not started: 6409 through WiVRn and 5061 through SteamVR on the 8 GB laptop
+// (2026-11-25), 200 to 500 more than X4 finds once gamescope is there too. Of those, 2248 and
+// more were fine (457g); with 1562 X4 was out of memory from the start menu on (457b), with 796
+// textures were missing (457c).
+constexpr int kTexturesNeedMb = 1900;
 // The largest eye size whose map keeps its depth, and is drawn at all; 0 = not known.
 int map_depth_up_to(uint32_t heap_mb);
 int map_drawn_up_to(uint32_t heap_mb);

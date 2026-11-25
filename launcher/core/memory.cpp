@@ -25,13 +25,13 @@ double mpx(int side) { return (double)side * (double)side / 1e6; }
 
 // Measured on an RTX 3070 laptop with no upscaler, 2016 to 4000 per eye, the use steady
 // before the start menu: 1159, 2040, 2550, 3235, 3884 MB through WiVRn and 2232, 2796, 3547,
-// 4268 through SteamVR. That is 233 MB and 228 or 252 a megapixel, within 50 MB. Of those,
-// 122 are images of the size X4 renders (the list of them in take 457g); the rest have the
-// eye's size whatever the upscaler. A Radeon took about 500 more with none (2531 MB at 2816,
-// take 459) and 860 more with FSR 1 Quality (2737 at 3200), but its blocks are of 256 MB.
+// 4268 through SteamVR. That is 233 MB and 228 or 252 a megapixel, within 50 MB. An upscaler
+// saves little: with FSR 1 Quality, 2907 at 3600 through WiVRn (take 460), so 39 of those a
+// rendered megapixel and the rest an eye's. Only that mode is measured. A Radeon took 490 more
+// with none (2531 at 2816, take 459) and 400 more with FSR 1 Quality (2737 at 3200).
 int images_mb(int eye, int render, bool nvidia, bool steamvr) {
-    const double per_eye = steamvr ? 130.0 : 106.0;
-    return (int)std::lround(233.0 + per_eye * mpx(eye) + 122.0 * mpx(render) +
+    const double per_eye = steamvr ? 213.0 : 189.0;
+    return (int)std::lround(233.0 + per_eye * mpx(eye) + 39.0 * mpx(render) +
                             (nvidia ? 0.0 : 500.0));
 }
 
@@ -166,7 +166,7 @@ std::string memory_note(const EyeSettings &s, bool steamvr, const GpuInfo &g,
         if (p.ran_out() && then <= now)
             return fmt(tr_("In an earlier session at %1, X4 ran out of graphics memory before the "
                            "save was loaded, and some textures may have been missing. Choose a "
-                           "smaller size or an upscaler."),
+                           "smaller size."),
                        {std::to_string(p.eye)});
         if (!p.ran_out() && then >= now)
             return "";
@@ -181,13 +181,9 @@ std::string memory_note(const EyeSettings &s, bool steamvr, const GpuInfo &g,
         fmt(tr_("At this size X4's images alone take about %1 GB, and your graphics card has %2 "
                 "GB free. What's left is too little for the textures, and some may be missing."),
             {gb(now), gb((int)g.budget_mb)});
-    const std::string top = std::to_string(fits);
-    if (!fits)
-        note += std::string(" ") + tr_("Close other programs that use the graphics card.");
-    else if (s.upscaler == "none")
-        note += " " + fmt(tr_("Choose %1 or less, or an upscaler."), {top});
-    else
-        note += " " + fmt(tr_("Choose %1 or less."), {top});
+    // No upscaler suggested: it saves about a tenth (take 460).
+    note += " " + (fits ? fmt(tr_("Choose %1 or less."), {std::to_string(fits)})
+                        : std::string(tr_("Close other programs that use the graphics card.")));
     return note;
 }
 

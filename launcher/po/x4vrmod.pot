@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-24 21:08+0100\n"
+"POT-Creation-Date: 2026-11-25 17:27+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -475,8 +475,7 @@ msgstr ""
 #, qt-format
 msgid ""
 "In an earlier session at %1, X4 ran out of graphics memory before the save "
-"was loaded, and some textures may have been missing. Choose a smaller size "
-"or an upscaler."
+"was loaded, and some textures may have been missing. Choose a smaller size."
 msgstr ""
 
 #: launcher/core/memory.cpp
@@ -489,17 +488,12 @@ msgstr ""
 
 #: launcher/core/memory.cpp
 #, qt-format
-msgid "Close other programs that use the graphics card."
-msgstr ""
-
-#: launcher/core/memory.cpp
-#, qt-format
-msgid "Choose %1 or less, or an upscaler."
-msgstr ""
-
-#: launcher/core/memory.cpp
-#, qt-format
 msgid "Choose %1 or less."
+msgstr ""
+
+#: launcher/core/memory.cpp
+#, qt-format
+msgid "Close other programs that use the graphics card."
 msgstr ""
 
 #: launcher/core/memory.cpp

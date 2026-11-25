@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-24 21:08+0100\n"
+"POT-Creation-Date: 2026-11-25 17:27+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -499,11 +499,6 @@ msgstr ""
 
 #: launcher/core/memory.cpp
 #, qt-format
-msgid "Choose %1 or less, or an upscaler."
-msgstr "Выберите %1 или меньше либо апскейлер."
-
-#: launcher/core/memory.cpp
-#, qt-format
 msgid "Choose %1 or less."
 msgstr "Выберите %1 или меньше."
 
@@ -516,12 +511,10 @@ msgstr "Закройте другие программы, которые исп�
 #, qt-format
 msgid ""
 "In an earlier session at %1, X4 ran out of graphics memory before the save "
-"was loaded, and some textures may have been missing. Choose a smaller size "
-"or an upscaler."
+"was loaded, and some textures may have been missing. Choose a smaller size."
 msgstr ""
 "В прошлом сеансе при %1 у X4 закончилась видеопамять ещё до загрузки "
-"сохранения, и части текстур могло не быть. Выберите разрешение меньше или "
-"апскейлер."
+"сохранения, и части текстур могло не быть. Выберите разрешение меньше."
 
 #: launcher/core/memory.cpp
 #, qt-format

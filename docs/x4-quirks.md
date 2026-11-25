@@ -30281,9 +30281,10 @@ the layer's own 248 MiB limit decides).
 **What's in place before the first texture** is decided by the eye size alone. With no upscaler, on
 the RTX 3070 laptop: 233 MB + 228 MB a megapixel through WiVRn (1159, 2040, 2550, 3235, 3884 at 2016,
 2816, 3200, 3600, 4000) and 234 + 252 through SteamVR (2232, 2796, 3547, 4268 from 2816 up), all
-within 50 MB. From take 457g's list about 122 MB a megapixel of that follows the rendered size and the
-rest the eye's. **Not measured on NVIDIA: any upscaler.** On the Radeon 2531 at 2816 (459) and 2737
-at 3200 + FSR 1 Quality (Patola's sessions of 2026-11-23), in blocks of 256.
+within 50 MB. **An upscaler saves about a tenth:** 2907 at 3600 + FSR 1 Quality through WiVRn (take
+460), where reading 457g's image list had predicted 2310, so the sum is 189 (WiVRn) or 213 (SteamVR)
+an eye's megapixel and 39 a rendered one. No other mode is measured. On the Radeon 2531 at 2816
+(459) and 2737 at 3200 + FSR 1 Quality (Patola's sessions of 2026-11-23), in blocks of 256.
 
 **What textures got** (the budget at X4's start, less those images), on the laptop:
 
@@ -30295,7 +30296,9 @@ at 3200 + FSR 1 Quality (Patola's sessions of 2026-11-23), in blocks of 256.
 | 457g SteamVR 3200 | 2065 | 90 free at the least, textures fine |
 | 457a SteamVR 2816 | 2633 | 399 free at the least |
 
-So the launcher warns under 1700. **A short take understates what X4 takes:** Patola's four
+The launcher asks before X4 and gamescope start, and finds more: 6409 MB through WiVRn and 5061
+through SteamVR on that laptop (2026-11-25). In its numbers those rows are 796, 1562, 2528, 2248 and
+2830, and it warns under 1900. **A short take understates what X4 takes:** Patola's four
 sessions of 32 to 58 minutes on the Radeon (3200 + FSR 1 Quality) grew to between 9.4 and 12.2 GB,
 where the takes end near 5. X4 also lets go of some (by 256 MB steps down as well as up). A small
 card reaches its ceiling in any long session, so "at its ceiling" isn't a fault by itself; being

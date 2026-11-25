@@ -1056,9 +1056,9 @@ static void test_memory() {
                                                     std::to_string(est) + " for " +
                                                     std::to_string(r.measured));
     }
-    check(images_mb(3600, 2400, true, false) < images_mb(3600, 3600, true, false) &&
-              images_mb(3600, 2400, true, false) > images_mb(2400, 2400, true, false),
-          "an upscaler saves some of it, not all: the rest has the eye's size");
+    check(std::abs(images_mb(3600, 2400, true, false) - 2907) <= 60,
+          "images, take 460 (3600, FSR 1 Quality): " +
+              std::to_string(images_mb(3600, 2400, true, false)) + " for 2907");
 
     // The map: 8 GB keeps its depth at 2816 (121.0 MiB in 128) and not at 3072 or 3200; it is
     // drawn at 4000 and not at 4224. 24 GB: depth at 4000, not at 4224.
@@ -1070,7 +1070,8 @@ static void test_memory() {
     check(map_depth_up_to(32607) < 4224, "map: the layer doubles none above 248 MiB, on any card");
     check(map_depth_up_to(0) == 0, "map: a card not asked says nothing");
 
-    // The estimate, with what X4 was offered at its start in each run.
+    // The estimate, with what the launcher's own probe found on that laptop: 6409 MB through
+    // WiVRn, 5061 through SteamVR (Patola, 2026-11-25).
     const auto warn = [](int eye, bool steamvr, uint32_t budget, const char *up = "none",
                          const std::vector<SessionMemory> &past = {}) {
         GpuInfo g;
@@ -1080,17 +1081,18 @@ static void test_memory() {
         s.upscaler = up;
         return memory_note(s, steamvr, g, past);
     };
-    check(warn(4000, true, 4827).find("textures") != std::string::npos, "457c: textures missing");
-    check(!warn(3600, true, 4854).empty(), "457b: out of memory from the start menu on");
-    for (const auto &[eye, sv, budget] :
-         {std::tuple<int, bool, uint32_t>{2816, true, 4865}, {3200, true, 4861}, {2016, false, 6151},
-          {2816, false, 6062}, {3200, false, 5999}, {3600, false, 5921}, {4000, false, 5812}})
-        check(warn(eye, sv, budget).empty(),
-              "no false alarm at " + std::to_string(eye) + (sv ? " through SteamVR" : ""));
-    check(warn(4000, true, 4827).find("3200 or less, or an upscaler") != std::string::npos,
-          "...it names the largest that fits: " + warn(4000, true, 4827));
-    check(warn(4224, true, 4850, "fsr_quality").find("or less.") != std::string::npos,
-          "...and no upscaler to someone who has one");
+    constexpr uint32_t kWivrn = 6409, kSteamvr = 5061;
+    check(warn(4000, true, kSteamvr).find("textures") != std::string::npos, "457c: textures missing");
+    check(!warn(3600, true, kSteamvr).empty(), "457b: out of memory from the start menu on");
+    for (int eye : {2016, 2816, 3200, 3600, 4000})
+        check(warn(eye, false, kWivrn).empty(), "no false alarm at " + std::to_string(eye));
+    for (int eye : {2816, 3200})
+        check(warn(eye, true, kSteamvr).empty(),
+              "no false alarm at " + std::to_string(eye) + " through SteamVR");
+    check(warn(4000, true, kSteamvr).find("3200 or less") != std::string::npos,
+          "...it names the largest that fits: " + warn(4000, true, kSteamvr));
+    check(warn(4000, true, kSteamvr, "fsr_quality").find("3200 or less") != std::string::npos,
+          "...with the upscaler it has, which saves about a tenth");
     check(warn(3600, true, 0).empty(), "nothing said without the driver's answer");
     check(warn(1600, true, 900).find("Close other programs") != std::string::npos,
           "with no size that fits, the card is full of something else");
@@ -1148,16 +1150,16 @@ static void test_memory() {
           "a session that ran out is said, whatever the estimate");
     check(warn(4000, true, 6100, "none", {bad}).find("earlier session") != std::string::npos,
           "...at any size needing more");
-    check(warn(3200, true, 4861, "none", {bad}).empty(), "...and not at one needing less");
-    check(warn(3600, false, 6000, "none", {bad}).empty(), "...nor with another runtime");
+    check(warn(3200, true, kSteamvr, "none", {bad}).empty(), "...and not at one needing less");
+    check(warn(3600, false, kWivrn, "none", {bad}).empty(), "...nor with another runtime");
     SessionMemory good = bad;
     good.menu_free = 500;
-    check(warn(3600, true, 4854, "none", {good}).empty(),
+    check(warn(3600, true, kSteamvr, "none", {good}).empty(),
           "a session that had room silences the estimate");
-    check(!warn(4000, true, 4827, "none", {good}).empty(), "...up to its own size");
+    check(!warn(4000, true, kSteamvr, "none", {good}).empty(), "...up to its own size");
     good.card_mb = 24560;
-    check(!warn(3600, true, 4854, "none", {good}).empty(), "...on the same card");
-    check(warn(3600, true, 4854, "none", {bad, good}).find("earlier") != std::string::npos,
+    check(!warn(3600, true, kSteamvr, "none", {good}).empty(), "...on the same card");
+    check(warn(3600, true, kSteamvr, "none", {bad, good}).find("earlier") != std::string::npos,
           "the newest session decides");
 }
 

@@ -1447,3 +1447,9 @@ XR_RUNTIME_JSON=/home/patola/.local/share/Steam/steamapps/common/SteamVR/steamxr
 "gameplay is normal and smooth, no textures missing, no issues". The map opened, no image was kept
 single-layer, "residual none", gameplay 8.86 ms; X4 used at most 5347 MB of 24560, with 16.9 GB free,
 so it doesn't fill what is free. Not walked. PASS.
+
+**Take 460 (code d4a5a13), the RTX 3070 laptop, WiVRn, Steam Frame, 3600 + FSR 1 Quality, start menu
+only:** X4's images 2907 MB before the first texture (3235 without the upscaler, 457e). Predicted
+2310: an upscaler saves about a tenth, not a quarter. The launcher's own reading there was 6409 MB
+free through WiVRn and 5061 through SteamVR, and its warning appeared at 4000 with no upscaler, as
+it should. No save loaded, so the scorer's head-look FAILs don't apply.
