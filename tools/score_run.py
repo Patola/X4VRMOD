@@ -5509,6 +5509,34 @@ def main(path):
         elif len({k for _, k in fphases}) < 2:
             fails.append("X4VR_FACING_AB=recentre and the two phases did not both run: nothing to "
                          "compare (a build without it, or no recentre)")
+    # The census (after take 467): X4's own matrices for its near/far-faded effects.
+    cpipes = re.findall(r"facing census (?:first present|periodic|final): (\d+) vertex module\(s\) and "
+                        r"(\d+) pipeline\(s\) of X4's near/far-faded effects", text)
+    cdraws = re.findall(r"facing census (?:first present|periodic|final): (\d+) draw\(s\) of X4's "
+                        r"near/far-faded effects read at submit: (\d+) valid \(WVP = VP\*W\), (\d+) not "
+                        r"matching, (\d+) unreadable, (\d+) with no camera; turned as the camera (\d+), "
+                        r"rolled about the view axis (\d+), otherwise (\d+) \| (.*)$", text, re.M)
+    if cpipes:
+        print(f"facing  census: {cpipes[-1][0]} vertex module(s), {cpipes[-1][1]} pipeline(s) of X4's "
+              f"near/far-faded effects")
+    if cdraws:
+        dr, va, mm, ur, nc, c0, c1, c2, rest = cdraws[-1]
+        print(f"facing  census: {dr} draw(s) read, {va} valid, {mm} not matching, {ur} unreadable, "
+              f"{nc} no camera; turned as the camera {c0}, rolled {c1}, otherwise {c2}")
+        print(f"facing  census: {rest}")
+        for smp in re.findall(r"facing census sample \(([^)]*)\): (.*)$", text, re.M)[:9]:
+            print(f"facing  census sample ({smp[0]}): {smp[1]}")
+    census_build = "the census reads their matrices" in text
+    if collapse and census_build and cpipes and int(cpipes[-1][1]) > 0:
+        if not cdraws or int(cdraws[-1][0]) == 0:
+            fails.append("facing census: X4's near/far-faded pipelines existed and no draw of theirs "
+                         "reached the census (the bind or descriptor tracking missed them)")
+        elif int(cdraws[-1][1]) == 0:
+            fails.append("facing census: draws read and none valid (WVP = VP*W never held): the "
+                         "census read the wrong slots or at the wrong time, so it says nothing")
+    elif collapse and census_build and not cpipes:
+        fails.append("facing census: the collapse diagnostic ran and the census printed nothing")
+
     # X4's fog blobs (after take 466): the froxel pass, its blobs' frames turned.
     ff = re.findall(r"facing fog (?:periodic|final): (\d+) froxel module\(s\) turn X4's fog blobs to "
                     r"the ship \((\d+) product\(s\)\), (\d+) refused", text)

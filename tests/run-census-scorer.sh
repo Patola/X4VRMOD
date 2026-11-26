@@ -2265,6 +2265,32 @@ want "facing: collapse build, two arms -> FAIL" /tmp/census-fc-ab2k.log "FAIL|  
 { sed 's/env: run = /env: run = X4VR_FACING_AB=recentre X4VR_FACING_DEBUG=collapse /' "$BASE"; printf '%s\n' "$fcon" "$fpa" "$fpb"; } > /tmp/census-fc-ab466.log
 absent "facing: a two-arm collapse build (466) -> no three-arm FAIL" /tmp/census-fc-ab466.log "FAIL .*the three arms"
 
+# The census of X4's near/far-faded effects (after take 467).
+for f in '"facing census %s: %zu vertex module(s) and %zu pipeline(s) of X4'"'"'s "' \
+         '"facing census %s: %llu draw(s) of X4'"'"'s near/far-faded effects read at submit: %llu "' \
+         '"facing census sample (%s): %s"'; do
+    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "census: the layer still prints $f" \
+        || bad "census: the layer's format moved: $f"
+done
+cpl='[  99900.003] layer   facing census final: 72 vertex module(s) and 40 pipeline(s) of X4'"'"'s near/far-faded effects'
+cdl='[  99900.004] layer   facing census final: 500 draw(s) of X4'"'"'s near/far-faded effects read at submit: 480 valid (WVP = VP*W), 20 not matching, 0 unreadable, 0 with no camera; turned as the camera 0, rolled about the view axis 430, otherwise 50 | normal off the view axis, deg: <0.1 430, <1 0, <5 10, <20 20, more 20 | normal off the card'"'"'s direction, deg: <0.1 1, <1 2, <5 3, <20 100, more 374'
+cdz='[  99900.004] layer   facing census final: 0 draw(s) of X4'"'"'s near/far-faded effects read at submit: 0 valid (WVP = VP*W), 0 not matching, 0 unreadable, 0 with no camera; turned as the camera 0, rolled about the view axis 0, otherwise 0 | normal off the view axis, deg: <0.1 0, <1 0, <5 0, <20 0, more 0 | normal off the card'"'"'s direction, deg: <0.1 0, <1 0, <5 0, <20 0, more 0'
+cdi='[  99900.004] layer   facing census final: 50 draw(s) of X4'"'"'s near/far-faded effects read at submit: 0 valid (WVP = VP*W), 50 not matching, 0 unreadable, 0 with no camera; turned as the camera 0, rolled about the view axis 0, otherwise 0 | normal off the view axis, deg: <0.1 0, <1 0, <5 0, <20 0, more 0 | normal off the card'"'"'s direction, deg: <0.1 0, <1 0, <5 0, <20 0, more 0'
+csm='[  99900.005] layer   facing census sample (rolled about the view axis): Q/|col| rows [+0.866 -0.500 +0.000 | +0.500 +0.866 +0.000 | +0.000 +0.000 +1.000], col norms 336.0 336.0 1.0, normal 0.00 deg off the view axis, 31.00 deg off the card'"'"'s direction, roll 30.0 deg, at 1500 m'
+flkc="$flk, and every draw of X4's near/far-faded effects; the census reads their matrices"
+cbase() { sed 's/env: run = /env: run = X4VR_FACING_AB=recentre X4VR_FACING_DEBUG=collapse /' "$BASE"; printf '%s\n' "$fcon" "$flkc" "$fpa" "$fpb" "$fpk"; }
+{ cbase; printf '%s\n' "$cpl" "$cdl" "$csm"; } > /tmp/census-cs-ok.log
+want "census: classes said" /tmp/census-cs-ok.log facing "turned as the camera 0, rolled 430, otherwise 50"
+want "census: a sample said" /tmp/census-cs-ok.log facing "census sample (rolled about the view axis): Q/|col| rows [+0.866"
+absent "census: valid draws -> no FAIL" /tmp/census-cs-ok.log "FAIL .*facing census"
+{ cbase; printf '%s\n' "$cpl" "$cdz"; } > /tmp/census-cs-zero.log
+want "census: pipelines, no draw -> FAIL" /tmp/census-cs-zero.log "FAIL|  - " "no draw of theirs reached the census"
+{ cbase; printf '%s\n' "$cpl" "$cdi"; } > /tmp/census-cs-inv.log
+want "census: none valid -> FAIL" /tmp/census-cs-inv.log "FAIL|  - " "none valid"
+{ cbase; } > /tmp/census-cs-none.log
+want "census: collapse ran, census silent -> FAIL" /tmp/census-cs-none.log "FAIL|  - " "the census printed nothing"
+absent "census: a build before the census (467) -> no census FAIL" /tmp/census-fc-abk.log "FAIL .*facing census"
+
 # Whose field of view is declared, and the runtime's eyes (issue #3, 2026-11-25).
 for f in '"xr: a field of view of our own is %s (fovMutable)"' '"NOT allowed: the runtime'"'"'s own has to be declared"'; do
     grep -qF "$f" common/x4vr_xr.hpp && ok "declfield: the runtime's answer still reads $f" \

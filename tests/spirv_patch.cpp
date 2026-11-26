@@ -1218,7 +1218,7 @@ int main(int argc, char **argv) {
             printf("FAIL=patch_refused\n");
             return 1;
         }
-        printf("INPUTS=%u PARTIAL=%u\n", rep.inputs, rep.partial);
+        printf("INPUTS=%u PARTIAL=%u FADE=%d\n", rep.inputs, rep.partial, rep.fade ? 1 : 0);
         // The look slot's rows ARE the rows the injector writes into X4's camera.
         {
             double far_off = 0.0;
@@ -1299,10 +1299,14 @@ int main(int argc, char **argv) {
         const float ships[][3] = {{0, 0, 0}, {37, -12, 8}, {-140, 60, -30}};
         const float looks[][2] = {{0, 0}, {30, 0}, {-45, 20}, {120, -50}, {-10, 74}};
         const float scales[][3] = {{1, 1, 1}, {3.5f, 3.5f, 3.5f}, {2, 5, 0.5f}, {4, 4, -4}};
+        // X4's cards keep a roll of their own about the view axis (takes 466-467: the
+        // diagonal test missed them).
+        const float rolls[] = {0.f, 25.f, -140.f};
         const float trans[][3] = {{120, -40, 900}, {-2500, 300, -1800}};
         const float corners[][3] = {{-64, -64, 0}, {64, -64, 0}, {64, 64, 0}, {-30, 50, 2}};
         const float normal_in[4] = {0.f, 0.f, -1.f, 0.f};
-        int checked = 0, bad = 0, ctrl_seen = 0, ctrl_runs = 0, ortho_kept = 0, ortho_runs = 0;
+        int checked = 0, bad = 0, ctrl_seen = 0, ctrl_runs = 0, ortho_kept = 0, ortho_runs = 0,
+            k_right = 0, k_runs = 0;
         double worst = 0.0;
         std::string why;
         // An orthographic camera (a menu, the HUD): clip w is 1, column 2's w is 0.
@@ -1337,6 +1341,7 @@ int main(int argc, char **argv) {
         };
         for (const auto &sh : ships)
             for (const auto &lk : looks)
+                for (const float roll : rolls)
                 for (const auto &sc : scales)
                     for (const auto &t : trans)
                         for (const auto &pc : corners) {
@@ -1350,7 +1355,7 @@ int main(int argc, char **argv) {
                 for (int c = 0; c < 3; c++)
                     rows[c * 3 + r] = pb.look[c * 4 + r];
             const M3 cam = mul(body, tr(rows));
-            const M3 S{sc[0], 0, 0, 0, sc[1], 0, 0, 0, sc[2]};
+            const M3 S = mul(rot(0, 0, roll), M3{sc[0], 0, 0, 0, sc[1], 0, 0, 0, sc[2]});
             float view[16], world[16], vw[16], wvp[16], ownw[16];
             m4(tr(cam), nullptr, view); // camera-relative: X4's view has no translation
             m4(mul(cam, S), t, world);  // the card, turned to the camera
@@ -1414,6 +1419,33 @@ int main(int argc, char **argv) {
                 mul4(P, objvw, objwvp);
                 if (!run(code, view, objw, objwvp, pb, pc, g2, n2, cl2))
                     return printf("FAIL=interp %s\n", why.c_str()), 1;
+                // 5: the collapse diagnostic's K (a zero look slot) on that ordinary
+                // object: collapsed to its origin in a near/far-faded module, as X4
+                // drew it in any other.
+                {
+                    x4vr::PoseBlock zero = pb;
+                    memset(zero.look, 0, sizeof zero.look);
+                    float g5[3], n5[3], cl5[4], ob5[3];
+                    if (!run(code, view, objw, objwvp, zero, pc, g5, n5, cl5))
+                        return printf("FAIL=interp %s\n", why.c_str()), 1;
+                    mv(mul(body, S), pc, ob5);
+                    k_runs++;
+                    double e5 = 0.0;
+                    for (int k = 0; k < 3; k++)
+                        e5 = std::max(e5, (double)fabsf(g5[k] - (rep.fade ? t[k] : t[k] + ob5[k])));
+                    if (lk[0] == 0 && lk[1] == 0) {
+                        // Head straight: an object turned as the ship IS turned as the
+                        // camera, a card to the test, which K collapses in any module.
+                        double e5c = 0.0;
+                        for (int k = 0; k < 3; k++)
+                            e5c = std::max(e5c, (double)fabsf(g5[k] - t[k]));
+                        e5 = std::min(e5, e5c);
+                    }
+                    if (e5 <= 1e-3 * scale)
+                        k_right++;
+                    else
+                        bad++;
+                }
                 mv(mul(body, S), pc, ob);
                 const bool head_straight = lk[0] == 0 && lk[1] == 0;
                 for (int k = 0; k < 3; k++)
@@ -1451,8 +1483,9 @@ int main(int argc, char **argv) {
                 (void)ownw;
             }
         }
-        printf("CHECKED=%d BAD=%d WORST=%.2e CONTROL_CAUGHT=%d/%d ORTHO_KEPT=%d/%d\n", checked, bad,
-               worst, ctrl_seen, ctrl_runs, ortho_kept, ortho_runs);
+        printf("CHECKED=%d BAD=%d WORST=%.2e CONTROL_CAUGHT=%d/%d ORTHO_KEPT=%d/%d K_%s=%d/%d\n",
+               checked, bad, worst, ctrl_seen, ctrl_runs, ortho_kept, ortho_runs,
+               rep.fade ? "COLLAPSED" : "KEPT", k_right, k_runs);
         printf(bad == 0 && ctrl_runs > 0 && ctrl_seen == ctrl_runs && rep.inputs >= 2 ? "PASS\n"
                                                                                        : "FAIL\n");
         return bad == 0 && ctrl_seen == ctrl_runs ? 0 : 1;

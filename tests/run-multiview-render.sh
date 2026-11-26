@@ -1344,14 +1344,18 @@ fi
 # camera must come out turned to the ship, the head-look in the injector's own
 # convention, with X4's identity, an ordinary object and the unpatched module as
 # controls; and the patched module must validate.
-fout="$PATCHDIR/facing.spv"
-out=$("$PATCHER" vert-facing-check "$BUILD/tests/sample_billboard.vert.spv" "$fout" 2>&1)
-if grep -qx PASS <<<"$out" && spirv-val "$fout" >/dev/null 2>&1; then
-    printf 'ok   %-38s %s\n' "facing: billboards turned to the ship" "$(grep CHECKED <<<"$out")"
-else
-    printf 'FAIL %-38s %s\n' "facing: billboards turned to the ship" "$(tr '\n' ' ' <<<"$out")"
-    fails=$((fails + 1))
-fi
+# Twice: as an ordinary world module, and as one of X4's near/far-faded effects, where
+# the collapse diagnostic removes every draw, card or not.
+for fs in sample_billboard:0 sample_billboard_fade:1; do
+    fout="$PATCHDIR/facing.spv"
+    out=$("$PATCHER" vert-facing-check "$BUILD/tests/${fs%%:*}.vert.spv" "$fout" 2>&1)
+    if grep -qx PASS <<<"$out" && grep -q "FADE=${fs#*:}" <<<"$out" && spirv-val "$fout" >/dev/null 2>&1; then
+        printf 'ok   %-38s %s\n' "facing: billboards turned (${fs%%:*})" "$(grep CHECKED <<<"$out")"
+    else
+        printf 'FAIL %-38s %s\n' "facing: billboards turned (${fs%%:*})" "$(tr '\n' ' ' <<<"$out")"
+        fails=$((fails + 1))
+    fi
+done
 
 # X4's fog blobs face the ship, not the head (after take 466): the froxel pass's
 # view-to-blob frame, built along the camera's axes, must come out along the ship's,

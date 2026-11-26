@@ -1090,18 +1090,23 @@ inline bool patch_vertex_pose_clip(std::vector<uint32_t> &code, uint32_t set,
 /// rotate simultaneously proportionally to my head's rotation"; the stars, part
 /// of the sky, stay put).
 ///
-/// Such a card is drawn by a world matrix whose turn is the camera's:
-/// `mat3(M_view) * mat3(M_world)` is diagonal, its diagonal D the card's scale,
-/// under a perspective camera (an orthographic one, a menu's or the HUD's, has
-/// that diagonal too: take 466's collapse removed X4's menus).
-/// No ordinary object is turned exactly as the camera is. For those cards this
-/// turns each vertex in the card's own frame by `C = D^-1 * L * D`, L being the
-/// pose block's `look` (the head-look undone), so the card stands as X4 would
-/// draw it with the head straight: facing the ship's forward. Its position and
-/// size are unchanged, and everything downstream (X4's precomputed
-/// world-view-projection, its jitter, the per-eye patches) is X4's and the
-/// mod's as before, because only the vertex's input is turned. Any other draw
-/// gets the identity.
+/// Such a card is drawn by a world matrix whose turn is the camera's, up to a roll
+/// of its own: Q = `mat3(M_view) * mat3(M_world)` keeps the card's normal (its z)
+/// on the view axis and its x and y in the view plane, under a perspective camera
+/// (an orthographic one, a menu's or the HUD's, is excluded: take 466's collapse
+/// removed X4's menus). Takes 466-467: requiring Q diagonal, no roll, took none of
+/// the Turquoise Sea's cards. For those cards this turns each vertex in the card's
+/// own frame by `C = Q^-1 * L * Q`, L being the pose block's `look` (the head-look
+/// undone), so the card stands as X4 would draw it with the head straight: facing
+/// the ship's forward, with its roll. Its position and size are unchanged, and
+/// everything downstream (X4's precomputed world-view-projection, its jitter, the
+/// per-eye patches) is X4's and the mod's as before, because only the vertex's
+/// input is turned. Any other draw gets the identity (Q is made the identity before
+/// the inverse, so it is always defined).
+///
+/// In a module of X4's near/far-faded effects (it declares
+/// `U_camera_fade_range_near_start`; X4's fog cards are among them), a look slot of
+/// zero -- the collapse diagnostic's K -- collapses every draw, card or not.
 ///
 /// C is computed once, at the top of the vertex entry, into a Private variable;
 /// then every whole read of the named inputs is replaced by C times it (vec4:
@@ -1117,6 +1122,7 @@ inline bool patch_vertex_pose_clip(std::vector<uint32_t> &code, uint32_t set,
 struct FacingReport {
     uint32_t inputs = 0;  // whole reads turned
     uint32_t partial = 0; // reads through an access chain, left
+    bool fade = false;    // one of X4's near/far-faded effects (the collapse removes all)
     const char *why = ""; // a refusal's reason
 };
 inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_set,
@@ -1143,8 +1149,8 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
         return s;
     };
 
-    uint32_t entry_fn = 0, t_float = 0, t_int = 0, t_bool = 0, t_v3 = 0, t_v4 = 0,
-             t_mat3 = 0, t_mat4 = 0;
+    uint32_t entry_fn = 0, glsl = 0, t_float = 0, t_int = 0, t_bool = 0, t_v3 = 0, t_v4 = 0,
+             t_bv3 = 0, t_mat3 = 0, t_mat4 = 0;
     std::unordered_map<uint32_t, std::string> names;
     std::map<std::pair<uint32_t, uint32_t>, std::string> member_names;
     std::unordered_map<uint32_t, std::vector<uint32_t>> struct_members;
@@ -1177,6 +1183,10 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
             if (in.len >= 3)
                 names[w[1]] = str_of(in, 2);
             break;
+        case OpExtInstImport:
+            if (in.len >= 3 && str_of(in, 2) == "GLSL.std.450")
+                glsl = w[1];
+            break;
         case OpMemberName:
             if (in.len >= 4)
                 member_names[{w[1], w[2]}] = str_of(in, 3);
@@ -1207,6 +1217,8 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
                 t_v3 = w[1];
             if (in.len >= 4 && w[2] == t_float && w[3] == 4)
                 t_v4 = w[1];
+            if (in.len >= 4 && w[2] == t_bool && t_bool && w[3] == 3)
+                t_bv3 = w[1];
             break;
         case OpTypeMatrix:
             if (in.len >= 4 && w[2] == t_v3 && t_v3 && w[3] == 3)
@@ -1239,6 +1251,13 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
         return rep.why = "no vertex entry", false;
     if (!t_float || !t_v4 || !t_mat4 || !have_first_fn)
         return rep.why = "no mat4", false;
+    if (!glsl)
+        return rep.why = "GLSL.std.450 not imported", false;
+    // X4's near/far-faded effects (its fog cards among them), by a member their
+    // materials declare: the collapse diagnostic removes all their draws.
+    for (const auto &[k, n] : member_names)
+        if (n == "U_camera_fade_range_near_start")
+            rep.fade = true;
 
     // A mat4 member by name of the block at (set, binding).
     auto block_member = [&](uint32_t set, uint32_t binding, const char *name, uint32_t *var,
@@ -1320,6 +1339,10 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
         t_bool = new_id();
         emit(decls, OpTypeBool, {t_bool});
     }
+    if (!t_bv3) {
+        t_bv3 = new_id();
+        emit(decls, OpTypeVector, {t_bv3, t_bool, 3});
+    }
     auto fconst = [&](float f) {
         const uint32_t id = new_id();
         uint32_t bits;
@@ -1336,7 +1359,8 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
     // Off the diagonal under a millionth of on it (0.06 deg). And no axis scaled
     // to nothing: the division by d_i is undone by the world matrix's own d_i, so
     // only a true zero matters (a ten-thousandth of the largest, squared).
-    const uint32_t f_eps = fconst(1e-6f), f_flat = fconst(1e-8f);
+    const uint32_t f_eps = fconst(1e-6f), f_flat = fconst(1e-8f), f_flat2 = fconst(1e-16f),
+                   f_half = fconst(0.5f);
     const uint32_t c_view = iconst(view_m), c_world = iconst(world_m), c_zero = iconst(0),
                    c_proj = iconst(proj_m);
     const uint32_t f_quarter = fconst(0.25f);
@@ -1346,8 +1370,8 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
         emit(decls, OpConstantComposite,
              {t_v3, e[k], k == 0 ? f1 : f0, k == 1 ? f1 : f0, k == 2 ? f1 : f0});
     }
-    const uint32_t ones = new_id();
-    emit(decls, OpConstantComposite, {t_v3, ones, f1, f1, f1});
+    const uint32_t zero3 = new_id();
+    emit(decls, OpConstantComposite, {t_v3, zero3, f0, f0, f0});
     const uint32_t ident = new_id();
     emit(decls, OpConstantComposite, {t_mat3, ident, e[0], e[1], e[2]});
     const uint32_t ptr_uni_mat4 = new_id();
@@ -1399,36 +1423,38 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
     const uint32_t v3m = new_id();
     emit(calc, OpCompositeConstruct, {t_mat3, v3m, vc[0], vc[1], vc[2]});
     // B = V * W, by columns; b[col][row].
-    uint32_t b[3][3];
+    uint32_t bcol[3], b[3][3];
     for (uint32_t j = 0; j < 3; j++) {
-        const uint32_t bj = op2(OpMatrixTimesVector, t_v3, v3m, wc[j]);
+        bcol[j] = op2(OpMatrixTimesVector, t_v3, v3m, wc[j]);
         for (uint32_t i = 0; i < 3; i++) {
             b[j][i] = new_id();
-            emit(calc, OpCompositeExtract, {t_float, b[j][i], bj, i});
+            emit(calc, OpCompositeExtract, {t_float, b[j][i], bcol[j], i});
         }
     }
     auto sq = [&](uint32_t x) { return op2(OpFMul, t_float, x, x); };
-    uint32_t off2 = 0, on2 = 0;
+    auto add = [&](uint32_t acc, uint32_t x) { return acc ? op2(OpFAdd, t_float, acc, x) : x; };
+    // A card turned to the camera, whatever its roll about the view axis: its normal
+    // (its own z) on the view axis, its own x and y in the view plane (takes 466-467:
+    // X4's cards are not turned exactly as the camera is, and the diagonal test missed
+    // them). Under a millionth of the whole, squared (0.06 deg).
+    uint32_t on2 = 0, off2 = 0;
     for (uint32_t j = 0; j < 3; j++)
         for (uint32_t i = 0; i < 3; i++) {
-            const uint32_t s = sq(b[j][i]);
-            uint32_t &acc = i == j ? on2 : off2;
-            acc = acc ? op2(OpFAdd, t_float, acc, s) : s;
+            const uint32_t q = sq(b[j][i]);
+            on2 = add(on2, q);
+            if ((j == 2 && i < 2) || (j < 2 && i == 2))
+                off2 = add(off2, q);
         }
-    auto sel = [&](uint32_t cond, uint32_t a, uint32_t bb) {
-        const uint32_t id = new_id();
-        emit(calc, OpSelect, {t_float, id, cond, a, bb});
-        return id;
-    };
-    const uint32_t lim = op2(OpFMul, t_float, on2, f_eps);
-    uint32_t s = sel(op2(OpFOrdGreaterThan, t_bool, lim, off2), f1, f0);
-    const uint32_t flat = op2(OpFMul, t_float, on2, f_flat);
-    uint32_t d[3];
-    for (uint32_t k = 0; k < 3; k++) {
-        const uint32_t ok = op2(OpFOrdGreaterThan, t_bool, sq(b[k][k]), flat);
-        s = op2(OpFMul, t_float, s, sel(ok, f1, f0));
-        d[k] = sel(ok, b[k][k], f1); // never a division by nearly zero
-    }
+    uint32_t s = op2(OpFOrdGreaterThan, t_bool, op2(OpFMul, t_float, on2, f_eps), off2);
+    // And invertible: the normal's scale, and the in-plane block's determinant.
+    const uint32_t dz_ok =
+        op2(OpFOrdGreaterThan, t_bool, sq(b[2][2]), op2(OpFMul, t_float, on2, f_flat));
+    const uint32_t a2 = op2(OpFSub, t_float, op2(OpFMul, t_float, b[0][0], b[1][1]),
+                            op2(OpFMul, t_float, b[1][0], b[0][1]));
+    const uint32_t a_ok = op2(OpFOrdGreaterThan, t_bool, sq(a2),
+                              op2(OpFMul, t_float, op2(OpFMul, t_float, on2, on2), f_flat2));
+    s = op2(OpLogicalAnd, t_bool, s, dz_ok);
+    s = op2(OpLogicalAnd, t_bool, s, a_ok);
     {
         // Perspective when clip w takes view z: column 2's w, 1 in magnitude in X4's
         // projection, 0 in an orthographic one.
@@ -1440,20 +1466,46 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
         emit(calc, OpCompositeExtract, {t_v4, pc2, pm, 2});
         const uint32_t pw = new_id();
         emit(calc, OpCompositeExtract, {t_float, pw, pc2, 3});
-        const uint32_t persp = op2(OpFOrdGreaterThan, t_bool, sq(pw), f_quarter);
-        s = op2(OpFMul, t_float, s, sel(persp, f1, f0));
+        s = op2(OpLogicalAnd, t_bool, s, op2(OpFOrdGreaterThan, t_bool, sq(pw), f_quarter));
     }
-    const uint32_t dv = new_id();
-    emit(calc, OpCompositeConstruct, {t_v3, dv, d[0], d[1], d[2]});
-    const uint32_t invd = op2(OpFDiv, t_v3, ones, dv);
+    const uint32_t s3 = new_id();
+    emit(calc, OpCompositeConstruct, {t_bv3, s3, s, s, s});
+    // C = Q^-1 L Q for a card, of a Q made the identity elsewhere so the inverse is
+    // always defined; then the identity for anything not a card.
+    uint32_t qs[3];
+    for (uint32_t j = 0; j < 3; j++) {
+        qs[j] = new_id();
+        emit(calc, OpSelect, {t_v3, qs[j], s3, bcol[j], e[j]});
+    }
+    const uint32_t qm = new_id(), lm = new_id();
+    emit(calc, OpCompositeConstruct, {t_mat3, qm, qs[0], qs[1], qs[2]});
+    emit(calc, OpCompositeConstruct, {t_mat3, lm, lc[0], lc[1], lc[2]});
+    const uint32_t qinv = new_id();
+    emit(calc, OpExtInst, {t_mat3, qinv, glsl, 34 /* MatrixInverse */, qm});
+    const uint32_t lq = op2(OpMatrixTimesMatrix, t_mat3, lm, qm);
+    const uint32_t cd = op2(OpMatrixTimesMatrix, t_mat3, qinv, lq);
+    // X4VR_FACING_DEBUG=collapse's K: a zero look slot, and in a module of X4's
+    // near/far-faded effects every draw collapses, card or not (take 467's removal
+    // could only reach what the test above calls a card).
+    uint32_t alive3 = 0;
+    if (rep.fade) {
+        const uint32_t det = new_id();
+        emit(calc, OpExtInst, {t_float, det, glsl, 33 /* Determinant */, lm});
+        const uint32_t alive = op2(OpFOrdGreaterThan, t_bool, det, f_half);
+        alive3 = new_id();
+        emit(calc, OpCompositeConstruct, {t_bv3, alive3, alive, alive, alive});
+    }
     uint32_t col[3];
     for (uint32_t j = 0; j < 3; j++) {
-        // column j of D^-1 L D: L's column j times d_j, each row i over d_i
-        const uint32_t scaled = op2(OpVectorTimesScalar, t_v3, lc[j], d[j]);
-        const uint32_t cj = op2(OpFMul, t_v3, scaled, invd);
-        // identity unless a billboard: e_j + s * (c_j - e_j)
-        const uint32_t diff = op2(OpFSub, t_v3, cj, e[j]);
-        col[j] = op2(OpFAdd, t_v3, e[j], op2(OpVectorTimesScalar, t_v3, diff, s));
+        const uint32_t cdj = new_id();
+        emit(calc, OpCompositeExtract, {t_v3, cdj, cd, j});
+        col[j] = new_id();
+        emit(calc, OpSelect, {t_v3, col[j], s3, cdj, e[j]});
+        if (alive3) {
+            const uint32_t k = new_id();
+            emit(calc, OpSelect, {t_v3, k, alive3, col[j], zero3});
+            col[j] = k;
+        }
     }
     const uint32_t cm = new_id();
     emit(calc, OpCompositeConstruct, {t_mat3, cm, col[0], col[1], col[2]});

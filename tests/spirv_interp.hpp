@@ -38,7 +38,7 @@ constexpr uint32_t ExtInst = 12, TypeVoid = 19, TypeBool = 20, TypeInt = 21,
                    FMul = 133, FDiv = 136, VectorTimesScalar = 142,
                    Transpose = 84, MatrixTimesVector = 145, MatrixTimesMatrix = 146,
                    Select = 169,
-                   FOrdGreaterThan = 186, Label = 248, Return = 253,
+                   LogicalAnd = 167, FOrdGreaterThan = 186, Label = 248, Return = 253,
                    EntryPoint = 15;
 } // namespace op
 
@@ -529,6 +529,9 @@ private:
             return true;
         case op::FOrdGreaterThan:
             put(w[1], w[2], {in(w[3])[0] > in(w[4])[0] ? 1.f : 0.f});
+            return true;
+        case op::LogicalAnd:
+            put(w[1], w[2], {in(w[3])[0] != 0.f && in(w[4])[0] != 0.f ? 1.f : 0.f});
             return true;
         case op::Select: {
             // A scalar condition picks a whole operand; a vector one, per component.
