@@ -21,6 +21,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -450,13 +451,20 @@ struct PoseBlock {
     // would draw it with the head straight (patch_vertex_facing_body). Identity
     // leaves every card as X4 turned it.
     float look[16];
+    // **The smoke's knobs** (layer/fog_walk.comp, after take 480): x scales its density
+    // (0: no smoke), y its glow; z and w are slack. (1, 1) is the smoke as built, and an
+    // A/B's phases switch it here without a new pipeline.
+    float fog[4];
 };
-static_assert(sizeof(PoseBlock) == 288,
-              "std140: three mat4 at 0, 64, 128, vec4s at 192 and 208, a mat4 at 224");
+static_assert(sizeof(PoseBlock) == 304, "std140: three mat4 at 0, 64, 128, vec4s at 192 and "
+                                        "208, a mat4 at 224, a vec4 at 288");
 // Where head_fwd sits, for the SPIR-V patch's second member.
 constexpr uint32_t kPoseHeadFwdOffset = 208;
 // Where look sits, for patch_vertex_facing_body.
 constexpr uint32_t kPoseLookOffset = 224;
+// Where fog sits, for layer/fog_walk.comp (which writes the number itself).
+constexpr uint32_t kPoseFogOffset = 288;
+static_assert(offsetof(PoseBlock, fog) == kPoseFogOffset, "fog_walk.comp reads fog at 288");
 // The offset the SPIR-V patch decorates its one-member view with. Named here so
 // the shader-side constant and the struct cannot drift apart silently.
 constexpr uint32_t kPoseEyeOfsOffset = 192;
@@ -623,6 +631,8 @@ inline PoseBlock pose_identity() {
     p.eye_ofs[2] = 0.0f;
     p.eye_ofs[3] = 0.0f;
     pose_set_look(p, 0.0f, 0.0f, false);
+    p.fog[0] = 1.0f; // the smoke as built
+    p.fog[1] = 1.0f;
     return p;
 }
 

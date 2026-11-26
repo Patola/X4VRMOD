@@ -5625,10 +5625,31 @@ def main(path):
         print(f"fogprobe {ln}")
     for ln in re.findall(r"fog smoke: (X4's volume_walk .*|a module like .*)$", text, re.M)[:2]:
         print(f"fogsmoke {ln}")
+    replaced = re.search(r"fog smoke: X4's volume_walk for \d+ medium\(s\) \(\d+ bytes\) replaced "
+                         r"by ours", text)
     if re.search(r"\bX4VR_FOG_PROBE=smoke\b", run or "") and "headlook write: ARMED" in text \
-            and not re.search(r"fog smoke: X4's volume_walk", text):
+            and not replaced:
         fails.append("fog smoke: asked for, and X4's volume_walk was not replaced (the log says "
                      "why, or X4 created no fog walk)")
+    if "fog smoke: WARNING — the walk's pipeline layout has no set of the layer's" in text:
+        fails.append("fog smoke: the walk's pipeline was created without the layer's set, so "
+                     "its block was unbound: the run is not evidence")
+    # The smoke's A/B (X4VR_FOG_AB=recentre, after take 480): V, X4's cards; S, the smoke;
+    # S+, the smoke denser. Each phase's frame time says what the smoke costs.
+    sphases = re.findall(r"fog smoke: phase #(\d+) — (V|S\+|S)(?=[ ,])", text)
+    if sphases:
+        print("fogsmoke phases: " + ", ".join(f"#{n} {k}" for n, k in sphases[:16])
+              + (" ..." if len(sphases) > 16 else ""))
+    for ln in re.findall(r"fog smoke final: (frame time by phase .*)$", text, re.M)[-1:]:
+        print(f"fogsmoke {ln}")
+    for ln in re.findall(r"fog probe final: (where each blend's volume was built .*)$", text,
+                         re.M)[-1:]:
+        print(f"fogprobe {ln}")
+    if (re.search(r"\bX4VR_FOG_AB=recentre\b", run or "")
+            and re.search(r"\bX4VR_FOG_PROBE=smoke\b", run or "") and replaced
+            and "headlook write: ARMED" in text and not sphases):
+        fails.append("fog smoke: A/B asked for, and no phase was drawn (the residual pose never "
+                     "ran)")
 
     # X4's fog blobs (after take 466): the froxel pass, its blobs' frames turned.
     ff = re.findall(r"facing fog (?:periodic|final): (\d+) froxel module\(s\) turn X4's fog blobs to "

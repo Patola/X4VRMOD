@@ -1400,6 +1400,20 @@ else
     fails=$((fails + 1))
 fi
 
+# After take 480 our walk reads the layer's block, written at set 31 and moved by the layer
+# to the device's set: one decoration moves, the module still validates and names the new
+# set; a module with nothing at 31 moves nothing.
+rt=$("$PATCHER" retarget-set "$ROOT/layer/fog_walk1.comp.spv" 31 7 "$PATCHDIR/fw7.spv" 2>&1)
+rt0=$("$PATCHER" retarget-set "$ROOT/layer/fog_volume.comp.spv" 31 7 "$PATCHDIR/fv7.spv" 2>&1)
+rtdis=$(spirv-dis "$PATCHDIR/fw7.spv" 2>/dev/null)
+if [[ $rt == MOVED=1 && $rt0 == MOVED=0 ]] && spirv-val --target-env vulkan1.0 "$PATCHDIR/fw7.spv" >/dev/null 2>&1 && \
+    grep -q 'OpDecorate %pose DescriptorSet 7' <<<"$rtdis" && ! grep -q 'DescriptorSet 31' <<<"$rtdis"; then
+    printf 'ok   %-38s %s\n' "fog smoke: the layer's block moved to its set" "$rt; none in the probe: $rt0"
+else
+    printf 'FAIL %-38s %s | %s\n' "fog smoke: the layer's block moved to its set" "$rt" "$rt0"
+    fails=$((fails + 1))
+fi
+
 # X4's fog blobs face the ship, not the head (after take 466): the froxel pass's
 # view-to-blob frame, built along the camera's axes, must come out along the ship's,
 # with X4's identity, the collapse diagnostic and the unpatched module as controls;

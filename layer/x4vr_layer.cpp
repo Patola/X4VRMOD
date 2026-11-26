@@ -2190,9 +2190,9 @@ std::unordered_set<VkShaderModule> &g_fog_vol_mods =
     x4vr::immortal<std::unordered_set<VkShaderModule>>();
 // **The smoke** (X4VR_FOG_PROBE=smoke, after take 479): X4's volume_walk replaced by
 // layer/fog_walk.comp, which computes the smoke's density itself and makes it glow. Its
-// modules, under g_fog_probe_mu, and its parameters (X4VR_FOG_SCALE, _COVER, _SOFT,
-// _DETAIL, _SHARP, _HAZE, _DETAIL_FAR, _SIGMA, _BRIGHT, _DRIFT, _FAR, _STRETCH, _CURL,
-// _MASK).
+// modules, under g_fog_probe_mu, and its parameters: the shader's specialisation
+// constants in order, each with the variable that overrides it where one does (after
+// take 480: the look is chosen in an offline model of X4's grid, so most are fixed).
 std::unordered_set<VkShaderModule> &g_fog_walk_mods =
     x4vr::immortal<std::unordered_set<VkShaderModule>>();
 std::atomic<uint32_t> g_fog_walk_modules{0};
@@ -2203,22 +2203,47 @@ static bool fog_smoke_on() {
     }();
     return on;
 }
-static std::array<float, 14> fog_smoke_params() {
-    std::array<float, 14> v = {500.f, 0.57f, 0.14f, 110.f, 6.f,    0.18f, 900.f,
-                               0.008f, 0.6f, 4.f,   2500.f, 2.f, 1.4f, 0.7f};
-    static const char *const kName[14] = {
-        "X4VR_FOG_SCALE",  "X4VR_FOG_COVER", "X4VR_FOG_SOFT",       "X4VR_FOG_DETAIL",
-        "X4VR_FOG_SHARP",  "X4VR_FOG_HAZE",  "X4VR_FOG_DETAIL_FAR", "X4VR_FOG_SIGMA",
-        "X4VR_FOG_BRIGHT", "X4VR_FOG_DRIFT", "X4VR_FOG_FAR",        "X4VR_FOG_STRETCH",
-        "X4VR_FOG_CURL",   "X4VR_FOG_MASK"};
-    for (int i = 0; i < 14; i++)
-        if (const char *e = getenv(kName[i]); e && *e) {
+constexpr int kSmokeParams = 25;
+struct SmokeParam {
+    const char *env; // nullptr: fixed
+    float def;
+};
+static constexpr SmokeParam kSmoke[kSmokeParams] = {
+    {"X4VR_FOG_SCALE", 700.f}, {"X4VR_FOG_PATCH", 1500.f}, {"X4VR_FOG_COVER", 0.55f},
+    {nullptr, 0.12f},          {nullptr, 1.5f},            {"X4VR_FOG_GAIN", 4.5f},
+    {nullptr, 6.f},            {nullptr, 2.5f},            {"X4VR_FOG_DETAIL", 110.f},
+    {nullptr, 1.5f},           {nullptr, 1.f},             {nullptr, 0.25f},
+    {nullptr, 700.f},          {nullptr, 0.45f},           {"X4VR_FOG_SIGMA", 0.0015f},
+    {"X4VR_FOG_BRIGHT", 0.3f}, {"X4VR_FOG_FAR", 2500.f},   {nullptr, 0.25f},
+    {nullptr, 40.f},           {nullptr, 300.f},           {nullptr, 6.f},
+    {nullptr, 0.03f},          {nullptr, 8.f},             {"X4VR_FOG_DRIFT", 4.f},
+    {"X4VR_FOG_TINT", 3.f}};
+static std::array<float, kSmokeParams> fog_smoke_params() {
+    std::array<float, kSmokeParams> v{};
+    for (int i = 0; i < kSmokeParams; i++) {
+        v[i] = kSmoke[i].def;
+        if (const char *e = kSmoke[i].env ? getenv(kSmoke[i].env) : nullptr; e && *e) {
             const float f = strtof(e, nullptr);
             if (f >= 0.f)
                 v[i] = f;
         }
+    }
     return v;
 }
+// X4VR_FOG_AB=recentre (after take 480, DIAGNOSTIC): each recentre moves to the next of
+// three phases -- V, X4's own cards and no smoke; S, the smoke and no cards; S+, the
+// smoke denser (kFogDenser) -- starting at one drawn at random, so X4's look and ours
+// are compared within one run, by a switch. Its phase, for the cards' removal and the
+// frame times.
+static bool fog_ab() {
+    static const bool ab = [] {
+        const char *e = getenv("X4VR_FOG_AB");
+        return fog_smoke_on() && e && !strcmp(e, "recentre");
+    }();
+    return ab;
+}
+constexpr float kFogDenser = 2.5f;
+std::atomic<int> g_fog_arm{1}; // 0 V, 1 S, 2 S+
 std::unordered_set<VkPipeline> &g_fog_probe_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
 std::unordered_map<VkCommandBuffer, bool> &g_fog_probe_cb =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
@@ -2227,7 +2252,11 @@ std::unordered_map<VkCommandBuffer, bool> &g_fog_probe_cb =
 struct FogProbeDispatch {
     ViewSlot cam;
     uint32_t x, y, z;
+    uint64_t seq; // g_fog_seq at recording: the order against the blends
 };
+// Under g_track.mu: one count over the froxel dispatches and the blends as they are
+// recorded, so the submit can read them in the GPU's order (after take 480).
+uint64_t g_fog_seq = 0;
 std::unordered_map<VkCommandBuffer, std::vector<FogProbeDispatch>> &g_fog_probe_pending =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, std::vector<FogProbeDispatch>>>();
 struct FogProbeSeen {
@@ -2247,10 +2276,14 @@ std::unordered_set<VkShaderModule> &g_fog_apply_mods =
 std::unordered_set<VkPipeline> &g_fog_apply_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
 std::unordered_map<VkCommandBuffer, bool> &g_fog_apply_cb =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
-// Under g_track.mu: the blends' camera slots to read at submit, the last volume's camera
-// turn, and the angle between them.
-std::unordered_map<VkCommandBuffer, std::vector<ViewSlot>> &g_fog_apply_pending =
-    x4vr::immortal<std::unordered_map<VkCommandBuffer, std::vector<ViewSlot>>>();
+// Under g_track.mu: the blends' camera slots to read at submit, in recording order (seq),
+// the last volume's camera turn, and the angle between them.
+struct FogBlend {
+    ViewSlot cam;
+    uint64_t seq;
+};
+std::unordered_map<VkCommandBuffer, std::vector<FogBlend>> &g_fog_apply_pending =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, std::vector<FogBlend>>>();
 // **The sun's direction** (after take 478: the puffs held still with the head, yet their
 // light "changes gradually" as it turns): X4 lights its fog by the angle between the view
 // ray and V_light_direction_view, the sun in the view's axes; it should be mat3(M_view)
@@ -2261,13 +2294,25 @@ struct FogSunCheck {
     double sum[4] = {}, max[4] = {};
 };
 FogSunCheck g_fog_sun;
+// After take 480 (mean 0.437 deg): that check read every blend of a submit before its
+// dispatches, so a blend whose volume was built in the same submit was compared with the
+// previous one -- a frame of head motion by construction. Now in the GPU's order, and by
+// where the volume a blend reads was built: 0 in its own command buffer, 1 in an earlier
+// one of the same vkQueueSubmit, 2 in an earlier vkQueueSubmit. `after`: blends recorded
+// before a dispatch in their own command buffer.
 struct FogSameCamera {
     bool have_volume = false;
     float volume_turn[9] = {};
     uint64_t n = 0, bins[5] = {}; // deg: <0.01, <0.1, <1, <5, more
     double sum = 0.0, max = 0.0;
+    uint64_t vol_call = 0, call = 0, after = 0;
+    uint32_t vol_sub = 0, vol_cb = 0;
+    uint64_t wn[3] = {}, wsmall[3] = {}; // per where: blends, and those under 0.01 deg
+    double wsum[3] = {}, wmax[3] = {};
 };
 FogSameCamera g_fog_same;
+// Under g_track.mu: the frame times of each phase of the smoke's A/B (V, S, S+), ms.
+std::array<std::vector<float>, 3> &g_fog_arm_ms = x4vr::immortal<std::array<std::vector<float>, 3>>();
 
 // **The census** (with X4VR_FACING_DEBUG=collapse, after take 467): X4's own matrices for
 // the draws of its near/far-faded effects (its fog cards among them), read at submit --
@@ -2683,7 +2728,8 @@ static void fix_draw(float *o_dst, float *o, const float *c, int mode,
         return;
     }
     bool remove = g_fix_kill.load(std::memory_order_relaxed);
-    if (fog_cards_off() && !remove) {
+    // In the smoke's A/B, X4's cards stay in its V phase.
+    if (fog_cards_off() && !remove && !(fog_ab() && g_fog_arm.load(std::memory_order_relaxed) == 0)) {
         double dist2 = 0.0;
         for (int row = 0; row < 3; row++) {
             double pv = c[12 + row];
@@ -3042,7 +3088,7 @@ void credit_draw(VkCommandBuffer cb) {
         auto vb = g_track.bound.find(cb);
         auto &pend = g_fog_apply_pending[cb];
         if (vb != g_track.bound.end() && !vb->second.empty() && pend.size() < 16)
-            pend.push_back(vb->second.front());
+            pend.push_back({vb->second.front(), ++g_fog_seq});
     }
     if (census_fade) {
         auto ob = g_census_obj.find(cb);
@@ -3122,6 +3168,11 @@ void frame_timing(uint64_t frame) {
     if (prev.tv_sec) {
         ms.push_back((float)(now.tv_sec - prev.tv_sec) * 1000.0f +
                      (float)(now.tv_nsec - prev.tv_nsec) / 1.0e6f);
+        if (fog_ab()) {
+            auto &arm = g_fog_arm_ms[g_fog_arm.load(std::memory_order_relaxed) % 3];
+            if (arm.size() < 500000)
+                arm.push_back(ms.back());
+        }
     }
     prev = now;
     if (ms.size() < 600)
@@ -5281,6 +5332,41 @@ void shader_knob_report(const char *when) {
                  (unsigned long long)fs.bins[0], (unsigned long long)fs.bins[1],
                  (unsigned long long)fs.bins[2], (unsigned long long)fs.bins[3],
                  (unsigned long long)fs.bins[4], g_fog_apply_mods.size());
+        // Where the volume each blend read was built (after take 480): the angle only
+        // means "the fog lags the head" where X4 built it in an earlier frame.
+        auto wh = [&fs](int w, char *out, size_t cap) {
+            snprintf(out, cap, "%llu (%llu under 0.01 deg), mean %.3f deg, max %.2f",
+                     (unsigned long long)fs.wn[w], (unsigned long long)fs.wsmall[w],
+                     fs.wn[w] ? fs.wsum[w] / fs.wn[w] : 0.0, fs.wmax[w]);
+        };
+        char w0[96], w1[96], w2[96];
+        wh(0, w0, sizeof w0);
+        wh(1, w1, sizeof w1);
+        wh(2, w2, sizeof w2);
+        X4VR_LOG("fog probe %s: where each blend's volume was built — its own command "
+                 "buffer: %s; an earlier one of its submit: %s; an earlier submit: %s; %llu "
+                 "blend(s) recorded before a dispatch of their own buffer",
+                 when, w0, w1, w2, (unsigned long long)fs.after);
+        if (fog_ab()) {
+            // What the smoke costs against X4's cards: each phase's frame times.
+            std::string row;
+            static const char *const kArm[3] = {"V", "S", "S+"};
+            for (int a = 0; a < 3; a++) {
+                std::vector<float> v = g_fog_arm_ms[a];
+                char t[128];
+                if (v.empty()) {
+                    snprintf(t, sizeof t, "%s%s: no frames", a ? "; " : "", kArm[a]);
+                } else {
+                    std::sort(v.begin(), v.end());
+                    const float med = v[v.size() / 2], p90 = v[(size_t)(0.9 * (v.size() - 1))];
+                    snprintf(t, sizeof t, "%s%s: median %.2f ms (%.1f fps), p90 %.2f, %zu frames",
+                             a ? "; " : "", kArm[a], med, med > 0.f ? 1000.f / med : 0.f, p90,
+                             v.size());
+                }
+                row += t;
+            }
+            X4VR_LOG("fog smoke %s: frame time by phase — %s", when, row.c_str());
+        }
         X4VR_LOG("fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(es), "
                  "%llu read (%llu camera-relative), %llu unreadable; last grid "
                  "%.0fx%.0fx%.0f, range %.1f..%.1f m",
@@ -8698,21 +8784,45 @@ std::vector<uint32_t> fog_volume_module(const VkShaderModuleCreateInfo *ci) {
                              "%s — X4's own stays", (size_t)ci->codeSize, wr.why);
             return code;
         }
+        // Ours reads the layer's block (its knobs, after take 480), so only with the
+        // channel up: a module bound with no block there would read nothing defined.
+        if (!pose_active()) {
+            if (++g_fog_vol_refused <= 3)
+                X4VR_LOG("fog smoke: X4's volume_walk (%zu bytes) left as X4's — the smoke "
+                         "reads the layer's block, and the pose channel is %s",
+                         (size_t)ci->codeSize,
+                         !pose_wanted()   ? "off (X4VR_POSE=1 turns it on)"
+                         : pose_collided() ? "off (it collided with X4's sets)"
+                                           : "not up yet");
+            return code;
+        }
         if (wr.media == 1)
             code.assign(x4vr::kFogWalk1Comp,
                         x4vr::kFogWalk1Comp + sizeof x4vr::kFogWalk1Comp / sizeof(uint32_t));
         else
             code.assign(x4vr::kFogWalk2Comp,
                         x4vr::kFogWalk2Comp + sizeof x4vr::kFogWalk2Comp / sizeof(uint32_t));
+        if (x4vr::spv::retarget_descriptor_set(code, 31, pose_set_index()) != 1) {
+            if (++g_fog_vol_refused <= 3)
+                X4VR_LOG("fog smoke: our walk has no block at set 31 to move to set %u — "
+                         "X4's own stays (a build fault)", pose_set_index());
+            code.clear();
+            return code;
+        }
         tl_fog_vol = true;
         const auto p = fog_smoke_params();
         if (++g_fog_walk_modules <= 3)
             X4VR_LOG("fog smoke: X4's volume_walk for %d medium(s) (%zu bytes) replaced by ours — "
-                     "glowing smoke: bodies %.0f m (cover %.2f, edge %.2f), filaments %.0f m "
-                     "(sharp %.1f, haze %.2f, to %.0f m, stretch %.1f, curl %.1f, mask %.1f), "
-                     "extinction %.4f/m, glow %.2f, drift %.1f m/s, out to %.0f m — DIAGNOSTIC",
-                     wr.media, (size_t)ci->codeSize, p[0], p[1], p[2], p[3], p[4], p[5], p[6],
-                     p[11], p[12], p[13], p[7], p[8], p[9], p[10]);
+                     "glowing smoke: ribbons %.0f m in patches %.0f m (cover %.2f, thinness "
+                     "%.1f), streaks %.0f m to %.0f m, extinction %.4f/m, glow %.2f, tint %.1f, "
+                     "drift %.1f m/s, out to %.0f m; each column stepped at most %.0f%% of the "
+                     "distance apart (%.0f m at least, %.0f steps a slice), nothing thinner "
+                     "than %.1f columns; its knobs in the layer's block at set %u%s — "
+                     "DIAGNOSTIC",
+                     wr.media, (size_t)ci->codeSize, p[0], p[1], p[2], p[5], p[8], p[12],
+                     p[14], p[15], p[24], p[23], p[16], 100.f * p[21], p[20], p[22], p[7],
+                     pose_set_index(),
+                     fog_ab() ? "; phases V, S and S+ by recentre (X4VR_FOG_AB)" : "");
         return code;
     }
     x4vr::spv::VolumeBaseReport rep;
@@ -10079,6 +10189,30 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                          std::memory_order_relaxed);
         if (facing_enabled() && facing_ab())
             g_fix_phase.store(forward_latches(), std::memory_order_relaxed);
+        // The smoke's phases (X4VR_FOG_AB=recentre, after take 480): V, X4's cards and no
+        // smoke; S, the smoke and no cards; S+, the smoke denser. In turn from one drawn at
+        // random, once a run; the walk reads the density's scale from the block.
+        if (fog_ab()) {
+            static const uint64_t fdraw = ((uint64_t)std::chrono::steady_clock::now()
+                                               .time_since_epoch().count() >> 12) % 3;
+            const uint64_t phase = forward_latches();
+            const int fa = (int)((phase + fdraw) % 3u);
+            g_fog_arm.store(fa, std::memory_order_relaxed);
+            g_pose.value.fog[0] = fa == 0 ? 0.f : fa == 2 ? kFogDenser : 1.f;
+            g_pose.value.fog[1] = 1.f;
+            static uint64_t fsaid = ~0ull;
+            if (fsaid != phase) {
+                fsaid = phase;
+                if (fa == 2)
+                    X4VR_LOG("fog smoke: phase #%llu — S+, the smoke %.1fx denser, no cards "
+                             "(X4VR_FOG_AB=recentre)",
+                             (unsigned long long)phase, kFogDenser);
+                else
+                    X4VR_LOG("fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)",
+                             (unsigned long long)phase,
+                             fa == 0 ? "V, X4's own cards, no smoke" : "S, the smoke, no cards");
+            }
+        }
         x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face, arm == 4);
         // K only in flight (X4's camera angles valid): a start menu stays a menu.
         if (facing_enabled() && arm == 2 && cmd_valid)
@@ -10625,6 +10759,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
     std::vector<VkComputePipelineCreateInfo> csubs;
     // Our fog's pipelines: its parameters as specialisation constants (after take 474).
     std::vector<VkComputePipelineCreateInfo> fsubs;
+    std::vector<uint32_t> walk_at; // our walk's pipelines in ci, for the layout check
     static const VkSpecializationMapEntry kFogMap[10] = {
         {0, 0, 4},  {1, 4, 4},  {2, 8, 4},  {3, 12, 4}, {4, 16, 4},
         {5, 20, 4}, {6, 24, 4}, {7, 28, 4}, {8, 32, 4}, {9, 36, 4}};
@@ -10640,12 +10775,15 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
     }();
     static const VkSpecializationInfo kFogSpec = {10, kFogMap, sizeof(uint32_t) * 10,
                                                   fog_data.data()};
-    static const VkSpecializationMapEntry kWalkMap[14] = {
-        {0, 0, 4},   {1, 4, 4},   {2, 8, 4},   {3, 12, 4},  {4, 16, 4},
-        {5, 20, 4},  {6, 24, 4},  {7, 28, 4},  {8, 32, 4},  {9, 36, 4},
-        {10, 40, 4}, {11, 44, 4}, {12, 48, 4}, {13, 52, 4}};
-    static const std::array<float, 14> walk_data = fog_smoke_params();
-    static const VkSpecializationInfo kWalkSpec = {14, kWalkMap, sizeof(float) * 14,
+    static const std::array<VkSpecializationMapEntry, kSmokeParams> kWalkMap = [] {
+        std::array<VkSpecializationMapEntry, kSmokeParams> m{};
+        for (uint32_t i = 0; i < (uint32_t)kSmokeParams; i++)
+            m[i] = {i, 4 * i, 4};
+        return m;
+    }();
+    static const std::array<float, kSmokeParams> walk_data = fog_smoke_params();
+    static const VkSpecializationInfo kWalkSpec = {(uint32_t)kSmokeParams, kWalkMap.data(),
+                                                   sizeof(float) * kSmokeParams,
                                                    walk_data.data()};
     if (fog_probe_on()) {
         bool any = false;
@@ -10661,8 +10799,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
             for (uint32_t i = 0; i < count; i++) {
                 if (g_fog_vol_mods.count(ci[i].stage.module))
                     fsubs[i].stage.pSpecializationInfo = &kFogSpec;
-                if (g_fog_walk_mods.count(ci[i].stage.module))
+                if (g_fog_walk_mods.count(ci[i].stage.module)) {
                     fsubs[i].stage.pSpecializationInfo = &kWalkSpec;
+                    walk_at.push_back(i);
+                }
             }
             ci = fsubs.data();
         }
@@ -10676,6 +10816,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
             if (e != g_pose.extended.end()) {
                 csubs[i].layout = e->second;
                 g_pose.pipes_extended++;
+            } else if (std::find(walk_at.begin(), walk_at.end(), i) != walk_at.end()) {
+                // Our walk reads the layer's block: without our set in its layout the
+                // pipeline is invalid, and the run is not evidence.
+                X4VR_LOG("fog smoke: WARNING — the walk's pipeline layout has no set of the "
+                         "layer's (not extended): its block is unbound");
             }
         }
         ci = csubs.data();
@@ -10740,123 +10885,146 @@ static void fog_probe_dispatch(VkCommandBuffer cb, uint32_t x, uint32_t y, uint3
         pend.push_back({vb != g_track.bound.end() && !vb->second.empty()
                             ? vb->second.front()
                             : ViewSlot{VK_NULL_HANDLE, 0},
-                        x, y, z});
+                        x, y, z, ++g_fog_seq});
 }
 // At submit: X4's froxel volume as the camera block gives it -- grid, depth range, the
 // camera's position and whether the view's inverse carries it (camera-relative or not).
 static void fog_probe_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) {
     std::lock_guard<std::mutex> lock(g_track.mu);
     FogProbeSeen &sn = g_fog_probe_seen;
-    // The blends first: they compare with the volume built before them.
-    for (uint32_t i = 0; i < submitCount; i++)
-        for (uint32_t j = 0; j < submits[i].commandBufferCount; j++) {
-            auto it = g_fog_apply_pending.find(submits[i].pCommandBuffers[j]);
-            if (it == g_fog_apply_pending.end())
-                continue;
-            for (const ViewSlot &vs : it->second) {
-                const float *c = slot_host_ptr(vs);
-                if (!c || !g_fog_same.have_volume)
-                    continue;
-                float m[12];
-                std::memcpy(m, c + 128, sizeof m); // M_viewinverse, columns 0..2
-                double tr = 0.0;
-                for (int col = 0; col < 3; col++)
-                    for (int row = 0; row < 3; row++)
-                        tr += (double)m[col * 4 + row] * g_fog_same.volume_turn[col * 3 + row];
-                const double ang =
-                    std::acos(std::fmax(-1.0, std::fmin(1.0, (tr - 1.0) / 2.0))) * 57.2957795;
-                FogSameCamera &fs = g_fog_same;
-                fs.n++;
-                fs.sum += ang;
-                fs.max = std::max(fs.max, ang);
-                fs.bins[ang < 0.01 ? 0 : ang < 0.1 ? 1 : ang < 1.0 ? 2 : ang < 5.0 ? 3 : 4]++;
-            }
-            it->second.clear();
+    // Each blend against the volume built before it, in the GPU's order (after take 480),
+    // and by where that volume was built.
+    FogSameCamera &fs = g_fog_same;
+    const uint64_t call = ++fs.call;
+    auto blend = [&](const FogBlend &bl, uint32_t i, uint32_t j) {
+        const float *c = slot_host_ptr(bl.cam);
+        if (!c || !fs.have_volume)
+            return;
+        float m[12];
+        std::memcpy(m, c + 128, sizeof m); // M_viewinverse, columns 0..2
+        double tr = 0.0;
+        for (int col = 0; col < 3; col++)
+            for (int row = 0; row < 3; row++)
+                tr += (double)m[col * 4 + row] * fs.volume_turn[col * 3 + row];
+        const double ang =
+            std::acos(std::fmax(-1.0, std::fmin(1.0, (tr - 1.0) / 2.0))) * 57.2957795;
+        fs.n++;
+        fs.sum += ang;
+        fs.max = std::max(fs.max, ang);
+        fs.bins[ang < 0.01 ? 0 : ang < 0.1 ? 1 : ang < 1.0 ? 2 : ang < 5.0 ? 3 : 4]++;
+        const int where = fs.vol_call != call ? 2 : (fs.vol_sub == i && fs.vol_cb == j) ? 0 : 1;
+        fs.wn[where]++;
+        fs.wsmall[where] += ang < 0.01;
+        fs.wsum[where] += ang;
+        fs.wmax[where] = std::max(fs.wmax[where], ang);
+    };
+    auto dispatch = [&](const FogProbeDispatch &dp, uint32_t i, uint32_t j) {
+        const float *c = dp.cam.buffer ? slot_host_ptr(dp.cam) : nullptr;
+        if (!c) {
+            sn.unread++;
+            return;
         }
+        float cb[400];
+        std::memcpy(cb, c, sizeof cb); // through F_volume_scale (float 383)
+        for (int k = 0; k < 3; k++)
+            sn.vi_t[k] = cb[128 + 12 + k];
+        for (int k = 0; k < 4; k++) {
+            sn.campos[k] = cb[184 + k];
+            sn.range[k] = cb[236 + k];
+            sn.size[k] = cb[240 + k];
+        }
+        sn.ftime = cb[355];
+        {
+            // The sun: the world's (V_direction1, float 192) turned by the view
+            // (M_view, floats 0..15) against X4's own in the view's axes
+            // (V_light_direction_view[0], float 216).
+            double w[3] = {cb[192], cb[193], cb[194]}, v[3] = {0, 0, 0},
+                   x4[3] = {cb[216], cb[217], cb[218]};
+            double lw = 0, lv = 0, lx = 0, dot = 0;
+            for (int rr = 0; rr < 3; rr++)
+                for (int k = 0; k < 3; k++)
+                    v[rr] += (double)cb[k * 4 + rr] * w[k];
+            for (int k = 0; k < 3; k++) {
+                lw += w[k] * w[k];
+                lv += v[k] * v[k];
+                lx += x4[k] * x4[k];
+                dot += v[k] * x4[k];
+            }
+            float fy = 0.f, fp = 0.f;
+            if (lw > 0 && lv > 0 && lx > 0 && frame_look(&fy, &fp)) {
+                const double ang = std::acos(std::fmax(-1.0, std::fmin(1.0,
+                                       dot / std::sqrt(lv * lx)))) * 57.2957795;
+                const double hl = std::max(std::fabs(fy), std::fabs(fp));
+                const int b = hl < 2.0 ? 0 : hl < 10.0 ? 1 : hl < 30.0 ? 2 : 3;
+                g_fog_sun.n[b]++;
+                g_fog_sun.sum[b] += ang;
+                g_fog_sun.max[b] = std::max(g_fog_sun.max[b], ang);
+            }
+        }
+        g_fog_same.have_volume = true;
+        g_fog_same.vol_call = call;
+        g_fog_same.vol_sub = i;
+        g_fog_same.vol_cb = j;
+        for (int col = 0; col < 3; col++)
+            for (int row = 0; row < 3; row++)
+                g_fog_same.volume_turn[col * 3 + row] = cb[128 + col * 4 + row];
+        sn.off = cb[382];
+        sn.scale = cb[383];
+        sn.x = dp.x;
+        sn.y = dp.y;
+        sn.z = dp.z;
+        const bool rel = sn.vi_t[0] * sn.vi_t[0] + sn.vi_t[1] * sn.vi_t[1] +
+                             sn.vi_t[2] * sn.vi_t[2] < 1.f;
+        sn.relative += rel;
+        // How X4 lights the volume (after take 476: density 1 everywhere fogged
+        // the sky, 0.04 in puffs showed nothing): the sun's colour, the ambient,
+        // and each medium's extinction and scatter (camera block 752, 784, 1120,
+        // 1072).
+        if (sn.read < 3 || ((sn.read + 1) % 3000) == 0)
+            X4VR_LOG("fog probe: X4's light — sun (%.3g, %.3g, %.3g), ambient (%.3g, "
+                     "%.3g, %.3g); extinction per medium (%.3g, %.3g, %.3g) (%.3g, "
+                     "%.3g, %.3g) (%.3g, %.3g, %.3g); scatter (%.3g, %.3g, %.3g) "
+                     "(%.3g, %.3g, %.3g) (%.3g, %.3g, %.3g)",
+                     cb[196], cb[197], cb[198], cb[188], cb[189], cb[190], cb[280],
+                     cb[281], cb[282], cb[284], cb[285], cb[286], cb[288], cb[289],
+                     cb[290], cb[268], cb[269], cb[270], cb[272], cb[273], cb[274],
+                     cb[276], cb[277], cb[278]);
+        if (++sn.read <= 3 || (sn.read % 3000) == 0)
+            X4VR_LOG("fog probe: froxel dispatch %ux%ux%u, grid %.0fx%.0fx%.0f, range "
+                     "%.1f..%.1f m, volume off %.4g scale %.4g; the view's inverse "
+                     "moves by (%.1f, %.1f, %.1f)%s, the camera at (%.1f, %.1f, %.1f); "
+                     "time %.2f",
+                     dp.x, dp.y, dp.z, sn.size[0], sn.size[1], sn.size[2], sn.range[0],
+                     sn.range[1], sn.off, sn.scale, sn.vi_t[0], sn.vi_t[1], sn.vi_t[2],
+                     rel ? " — camera-relative: the puffs take V_cameraposition" : "",
+                     sn.campos[0], sn.campos[1], sn.campos[2], sn.ftime);
+    };
+    // The submit's command buffers in order, and in each its dispatches and blends as
+    // they were recorded.
     for (uint32_t i = 0; i < submitCount; i++)
         for (uint32_t j = 0; j < submits[i].commandBufferCount; j++) {
-            auto it = g_fog_probe_pending.find(submits[i].pCommandBuffers[j]);
-            if (it == g_fog_probe_pending.end())
-                continue;
-            for (const FogProbeDispatch &dp : it->second) {
-                const float *c = dp.cam.buffer ? slot_host_ptr(dp.cam) : nullptr;
-                if (!c) {
-                    sn.unread++;
-                    continue;
+            const VkCommandBuffer cb = submits[i].pCommandBuffers[j];
+            auto ap = g_fog_apply_pending.find(cb);
+            auto dp = g_fog_probe_pending.find(cb);
+            const FogBlend *bls = ap == g_fog_apply_pending.end() ? nullptr : ap->second.data();
+            const FogProbeDispatch *dps =
+                dp == g_fog_probe_pending.end() ? nullptr : dp->second.data();
+            const size_t nb = bls ? ap->second.size() : 0, nd = dps ? dp->second.size() : 0;
+            size_t a = 0, d = 0;
+            while (a < nb || d < nd) {
+                if (d < nd && (a == nb || dps[d].seq < bls[a].seq)) {
+                    dispatch(dps[d++], i, j);
+                } else {
+                    // A blend recorded before a dispatch in its own buffer reads a volume
+                    // built earlier than this buffer's.
+                    fs.after += d < nd;
+                    blend(bls[a++], i, j);
                 }
-                float cb[400];
-                std::memcpy(cb, c, sizeof cb); // through F_volume_scale (float 383)
-                for (int k = 0; k < 3; k++)
-                    sn.vi_t[k] = cb[128 + 12 + k];
-                for (int k = 0; k < 4; k++) {
-                    sn.campos[k] = cb[184 + k];
-                    sn.range[k] = cb[236 + k];
-                    sn.size[k] = cb[240 + k];
-                }
-                sn.ftime = cb[355];
-                {
-                    // The sun: the world's (V_direction1, float 192) turned by the view
-                    // (M_view, floats 0..15) against X4's own in the view's axes
-                    // (V_light_direction_view[0], float 216).
-                    double w[3] = {cb[192], cb[193], cb[194]}, v[3] = {0, 0, 0},
-                           x4[3] = {cb[216], cb[217], cb[218]};
-                    double lw = 0, lv = 0, lx = 0, dot = 0;
-                    for (int rr = 0; rr < 3; rr++)
-                        for (int k = 0; k < 3; k++)
-                            v[rr] += (double)cb[k * 4 + rr] * w[k];
-                    for (int k = 0; k < 3; k++) {
-                        lw += w[k] * w[k];
-                        lv += v[k] * v[k];
-                        lx += x4[k] * x4[k];
-                        dot += v[k] * x4[k];
-                    }
-                    float fy = 0.f, fp = 0.f;
-                    if (lw > 0 && lv > 0 && lx > 0 && frame_look(&fy, &fp)) {
-                        const double ang = std::acos(std::fmax(-1.0, std::fmin(1.0,
-                                               dot / std::sqrt(lv * lx)))) * 57.2957795;
-                        const double hl = std::max(std::fabs(fy), std::fabs(fp));
-                        const int b = hl < 2.0 ? 0 : hl < 10.0 ? 1 : hl < 30.0 ? 2 : 3;
-                        g_fog_sun.n[b]++;
-                        g_fog_sun.sum[b] += ang;
-                        g_fog_sun.max[b] = std::max(g_fog_sun.max[b], ang);
-                    }
-                }
-                g_fog_same.have_volume = true;
-                for (int col = 0; col < 3; col++)
-                    for (int row = 0; row < 3; row++)
-                        g_fog_same.volume_turn[col * 3 + row] = cb[128 + col * 4 + row];
-                sn.off = cb[382];
-                sn.scale = cb[383];
-                sn.x = dp.x;
-                sn.y = dp.y;
-                sn.z = dp.z;
-                const bool rel = sn.vi_t[0] * sn.vi_t[0] + sn.vi_t[1] * sn.vi_t[1] +
-                                     sn.vi_t[2] * sn.vi_t[2] < 1.f;
-                sn.relative += rel;
-                // How X4 lights the volume (after take 476: density 1 everywhere fogged
-                // the sky, 0.04 in puffs showed nothing): the sun's colour, the ambient,
-                // and each medium's extinction and scatter (camera block 752, 784, 1120,
-                // 1072).
-                if (sn.read < 3 || ((sn.read + 1) % 3000) == 0)
-                    X4VR_LOG("fog probe: X4's light — sun (%.3g, %.3g, %.3g), ambient (%.3g, "
-                             "%.3g, %.3g); extinction per medium (%.3g, %.3g, %.3g) (%.3g, "
-                             "%.3g, %.3g) (%.3g, %.3g, %.3g); scatter (%.3g, %.3g, %.3g) "
-                             "(%.3g, %.3g, %.3g) (%.3g, %.3g, %.3g)",
-                             cb[196], cb[197], cb[198], cb[188], cb[189], cb[190], cb[280],
-                             cb[281], cb[282], cb[284], cb[285], cb[286], cb[288], cb[289],
-                             cb[290], cb[268], cb[269], cb[270], cb[272], cb[273], cb[274],
-                             cb[276], cb[277], cb[278]);
-                if (++sn.read <= 3 || (sn.read % 3000) == 0)
-                    X4VR_LOG("fog probe: froxel dispatch %ux%ux%u, grid %.0fx%.0fx%.0f, range "
-                             "%.1f..%.1f m, volume off %.4g scale %.4g; the view's inverse "
-                             "moves by (%.1f, %.1f, %.1f)%s, the camera at (%.1f, %.1f, %.1f); "
-                             "time %.2f",
-                             dp.x, dp.y, dp.z, sn.size[0], sn.size[1], sn.size[2], sn.range[0],
-                             sn.range[1], sn.off, sn.scale, sn.vi_t[0], sn.vi_t[1], sn.vi_t[2],
-                             rel ? " — camera-relative: the puffs take V_cameraposition" : "",
-                             sn.campos[0], sn.campos[1], sn.campos[2], sn.ftime);
             }
-            it->second.clear();
+            if (ap != g_fog_apply_pending.end())
+                ap->second.clear();
+            if (dp != g_fog_probe_pending.end())
+                dp->second.clear();
         }
 }
 void note_dispatch(VkCommandBuffer cb) {

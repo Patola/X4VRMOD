@@ -7175,5 +7175,24 @@ inline bool patch_fragment_force_block_uint(std::vector<uint32_t> &code,
     return true;
 }
 
+// Our own modules that read the layer's block (layer/fog_walk.comp, after take 480): they
+// are written with `set = from`, a placeholder, and moved here to the set the layer binds
+// its block at, which follows the device (pose_set_index()). Every DescriptorSet
+// decoration naming `from` is rewritten; the count says how many (0: nothing changed).
+inline uint32_t retarget_descriptor_set(std::vector<uint32_t> &code, uint32_t from,
+                                        uint32_t to) {
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return 0;
+    uint32_t n = 0;
+    for (const auto &in : insts)
+        if (in.op == OpDecorate && in.len >= 4 && code[in.start + 2] == DecorationDescriptorSet &&
+            code[in.start + 3] == from) {
+            code[in.start + 3] = to;
+            n++;
+        }
+    return n;
+}
+
 } // namespace spv
 } // namespace x4vr

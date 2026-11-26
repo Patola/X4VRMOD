@@ -1941,6 +1941,20 @@ int main(int argc, char **argv) {
         printf("IS=%d MEDIA=%d WHY=%s\n", is ? 1 : 0, rep.media, is ? "" : rep.why);
         return 0;
     }
+    // retarget-set <in.spv> <from> <to> <out.spv>: our module's placeholder set moved to the
+    // layer's, and how many decorations moved.
+    if (strcmp(argv[1], "retarget-set") == 0 && argc >= 6) {
+        std::vector<uint32_t> code = load_spv(argv[2]);
+        const uint32_t n = code.empty() ? 0
+                           : x4vr::spv::retarget_descriptor_set(code, (uint32_t)atoi(argv[3]),
+                                                                 (uint32_t)atoi(argv[4]));
+        FILE *f = fopen(argv[5], "wb");
+        if (!f) { printf("FAIL=write\n"); return 1; }
+        fwrite(code.data(), 4, code.size(), f);
+        fclose(f);
+        printf("MOVED=%u\n", n);
+        return 0;
+    }
     // volume-base-offset <in.spv> <out.spv> <member-name> <new-offset>: a copy with one
     // member's Offset moved, the negative control for the check above.
     if (strcmp(argv[1], "volume-base-offset") == 0 && argc >= 6) {
