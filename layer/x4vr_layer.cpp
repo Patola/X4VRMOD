@@ -10596,6 +10596,19 @@ static void fog_probe_at_submit(uint32_t submitCount, const VkSubmitInfo *submit
                 const bool rel = sn.vi_t[0] * sn.vi_t[0] + sn.vi_t[1] * sn.vi_t[1] +
                                      sn.vi_t[2] * sn.vi_t[2] < 1.f;
                 sn.relative += rel;
+                // How X4 lights the volume (after take 476: density 1 everywhere fogged
+                // the sky, 0.04 in puffs showed nothing): the sun's colour, the ambient,
+                // and each medium's extinction and scatter (camera block 752, 784, 1120,
+                // 1072).
+                if (sn.read < 3 || ((sn.read + 1) % 3000) == 0)
+                    X4VR_LOG("fog probe: X4's light — sun (%.3g, %.3g, %.3g), ambient (%.3g, "
+                             "%.3g, %.3g); extinction per medium (%.3g, %.3g, %.3g) (%.3g, "
+                             "%.3g, %.3g) (%.3g, %.3g, %.3g); scatter (%.3g, %.3g, %.3g) "
+                             "(%.3g, %.3g, %.3g) (%.3g, %.3g, %.3g)",
+                             cb[196], cb[197], cb[198], cb[188], cb[189], cb[190], cb[280],
+                             cb[281], cb[282], cb[284], cb[285], cb[286], cb[288], cb[289],
+                             cb[290], cb[268], cb[269], cb[270], cb[272], cb[273], cb[274],
+                             cb[276], cb[277], cb[278]);
                 if (++sn.read <= 3 || (sn.read % 3000) == 0)
                     X4VR_LOG("fog probe: froxel dispatch %ux%ux%u, grid %.0fx%.0fx%.0f, range "
                              "%.1f..%.1f m, volume off %.4g scale %.4g; the view's inverse "

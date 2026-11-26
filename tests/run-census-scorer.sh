@@ -2354,7 +2354,8 @@ want "cpu fix: the head-look check said" /tmp/census-fx-ship.log facing "cpu shi
 for f in '"fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(es), "' \
          '"fog probe: froxel dispatch %ux%ux%u, grid %.0fx%.0fx%.0f, range "' \
          '"fog volume: X4'"'"'s volume_base (%zu bytes) replaced by ours — the probe'"'"'s puffs "' \
-         '"fog cards %s: off — %llu draw(s) of X4'"'"'s camera-turned cards removed "'; do
+         '"fog cards %s: off — %llu draw(s) of X4'"'"'s camera-turned cards removed "' \
+         '"fog probe: X4'"'"'s light — sun (%.3g, %.3g, %.3g), ambient (%.3g, "'; do
     grep -qF -- "$f" layer/x4vr_layer.cpp && ok "fog probe: the layer still prints $f" \
         || bad "fog probe: the layer's format moved: $f"
 done

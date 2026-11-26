@@ -5590,6 +5590,8 @@ def main(path):
               f"({prel} camera-relative), {punr} unreadable; grid {pgrid}, range {prange} m")
         for ln in re.findall(r"fog probe: (froxel dispatch .*)$", text, re.M)[:2]:
             print(f"fogprobe {ln}")
+        for ln in re.findall(r"fog probe: (X4's light .*)$", text, re.M)[-1:]:
+            print(f"fogprobe {ln}")
         if re.search(r"\bX4VR_FOG_PROBE=1\b", run or "") and "headlook write: ARMED" in text:
             if int(pm) == 0:
                 fails.append("fog probe: asked for, and X4's froxel fog's first stage was not replaced"
