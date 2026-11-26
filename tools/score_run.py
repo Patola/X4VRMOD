@@ -5623,6 +5623,12 @@ def main(path):
                      "without it)")
     for ln in re.findall(r"fog volume: (X4's volume_base .*|a module like .*)$", text, re.M)[:2]:
         print(f"fogprobe {ln}")
+    for ln in re.findall(r"fog smoke: (X4's volume_walk .*|a module like .*)$", text, re.M)[:2]:
+        print(f"fogsmoke {ln}")
+    if re.search(r"\bX4VR_FOG_PROBE=smoke\b", run or "") and "headlook write: ARMED" in text \
+            and not re.search(r"fog smoke: X4's volume_walk", text):
+        fails.append("fog smoke: asked for, and X4's volume_walk was not replaced (the log says "
+                     "why, or X4 created no fog walk)")
 
     # X4's fog blobs (after take 466): the froxel pass, its blobs' frames turned.
     ff = re.findall(r"facing fog (?:periodic|final): (\d+) froxel module\(s\) turn X4's fog blobs to "

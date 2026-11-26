@@ -1,0 +1,154 @@
+#version 450
+// SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
+//
+// The nebula's smoke, our own (after take 479): this takes the place of X4's
+// volume_walk.comp, the stage of its froxel fog that turns density into light. X4 lit
+// the fog by its sun alone, through a shadow volume looked up with M_texturematrix0 --
+// and that light changed as the head turned (takes 478-479), though X4's sun direction
+// was right (0.00 deg off at every head-look). X4's nebula cards glowed instead:
+// additive, strength 15. So this glows, in the sector's light colour, and absorbs what is
+// behind it; nothing in it depends on where the head points.
+//
+// Its density is computed here, at each cell's world position, not read from X4's input
+// volume: soft clouds about kScale metres (half the space clear), and inside them a haze
+// and thin ridged filaments about kDetail metres -- the shape of X4's own fog textures
+// (fog_patterncloud_02/04: about 40% of a card empty, mean opacity 0.2, most variation at
+// 85-130 m, filaments a few metres thick). Filaments fade to their mean beyond
+// kDetailFar, where X4's grid is too coarse for them; everything fades by kFar.
+//
+// X4's interface, exactly (x4vr::spv::is_x4_volume_walk checks X4's module first): the
+// camera block at set 1 binding 0, at the offsets below; the output's index at
+// OUT_IDX_OFFSET of the block at set 4 binding 0 (464 where X4 walks one medium, 480
+// where it walks two); the Rgba16f 3D storage-image table at set 0 binding 6; 8x8x1.
+// Each cell stores, as X4's does, the light gathered from the camera up to it (rgb) and
+// what of the scene behind still shows (a); X4's blend then does colour * a + rgb.
+#extension GL_ARB_enhanced_layouts : require
+
+#ifndef OUT_IDX_OFFSET
+#define OUT_IDX_OFFSET 464
+#endif
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 1, binding = 0, std140) uniform X4Camera {
+    layout(offset = 128) mat4 M_invprojection;
+    layout(offset = 512) mat4 M_viewinverse;
+    layout(offset = 736) vec4 V_cameraposition;
+    layout(offset = 784) vec4 V_lightcolor1;
+    layout(offset = 960) vec4 V_volume_size;
+    layout(offset = 1420) float F_time;
+    layout(offset = 1528) float F_volume_off;
+    layout(offset = 1532) float F_volume_scale;
+};
+layout(set = 4, binding = 0, std140) uniform X4Dynamic {
+    layout(offset = OUT_IDX_OFFSET) uint S_output_rt_idx;
+};
+layout(set = 0, binding = 6, rgba16f) uniform restrict writeonly image3D U_output_rt_decl[53306];
+
+// Chosen against X4's own fog textures, in an offline slice of this same function: soft
+// bodies with dark holes and a few long, curly, bright wisps -- where 4-octave ridges at
+// 70 m made a dense net of veins, like marble.
+layout(constant_id = 0) const float kScale = 500.0;     // cloud bodies, m
+layout(constant_id = 1) const float kCover = 0.57;      // where the bodies start
+layout(constant_id = 2) const float kSoft = 0.14;       // their edge
+layout(constant_id = 3) const float kDetail = 110.0;    // filaments, m
+layout(constant_id = 4) const float kSharp = 6.0;       // how thin the filaments are
+layout(constant_id = 5) const float kHaze = 0.18;       // the haze between them
+layout(constant_id = 6) const float kDetailFar = 900.0; // filaments fade out by here, m
+layout(constant_id = 7) const float kSigma = 0.008;     // extinction at full density, 1/m
+layout(constant_id = 8) const float kBright = 0.6;      // the glow of an opaque cloud
+layout(constant_id = 9) const float kDrift = 4.0;       // m/s
+layout(constant_id = 10) const float kFar = 2500.0;     // everything fades by here, m
+layout(constant_id = 11) const float kStretch = 2.0;    // filaments drawn out along x
+layout(constant_id = 12) const float kCurl = 1.4;       // how much the bodies' warp curls them
+layout(constant_id = 13) const float kMask = 0.7;       // filaments in only part of a body
+
+float hash31(vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.x + p.y) * p.z);
+}
+float vnoise(vec3 x) {
+    const vec3 i = floor(x), f = fract(x);
+    const vec3 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(hash31(i + vec3(0, 0, 0)), hash31(i + vec3(1, 0, 0)), u.x),
+                   mix(hash31(i + vec3(0, 1, 0)), hash31(i + vec3(1, 1, 0)), u.x), u.y),
+               mix(mix(hash31(i + vec3(0, 0, 1)), hash31(i + vec3(1, 0, 1)), u.x),
+                   mix(hash31(i + vec3(0, 1, 1)), hash31(i + vec3(1, 1, 1)), u.x), u.y),
+               u.z);
+}
+float fbm(vec3 x, int octaves) {
+    float a = 0.5, s = 0.0, norm = 0.0;
+    for (int o = 0; o < octaves; o++) {
+        s += a * vnoise(x);
+        norm += a;
+        x = x * 2.03 + vec3(17.1, 3.7, 29.3);
+        a *= 0.5;
+    }
+    return s / norm;
+}
+
+// The smoke's density, 0..1, at a world point at time t, seen from `dist` metres.
+float smoke(vec3 world, float t, float dist) {
+    // Kept small: the world is millions of metres across and a float has 24 bits.
+    const vec3 p = world - floor(world / 65536.0) * 65536.0;
+    vec3 q = p / kScale;
+    q.z += t * kDrift / kScale;
+    const vec3 w = vec3(fbm(q * 0.5 + vec3(5.2, 1.3, 7.7) + t * 0.010, 3),
+                        fbm(q * 0.5 + vec3(1.7, 9.2, 3.4) - t * 0.012, 3),
+                        fbm(q * 0.5 + vec3(8.3, 2.8, 4.6) + t * 0.008, 3));
+    const float body = smoothstep(kCover - kSoft, kCover + kSoft, fbm(q + 1.6 * (w - 0.5), 4));
+    if (body <= 0.001)
+        return 0.0;
+    // Filaments: two octaves of ridged noise, drawn out along x, curled by the bodies'
+    // own warp, and only in part of each body.
+    vec3 r = p / kDetail + (w - 0.5) * (kCurl * kScale / kDetail);
+    r.x /= kStretch;
+    r.y += t * 0.5 * kDrift / kDetail;
+    const float ridge = 1.0 - abs(2.0 * fbm(r, 2) - 1.0);
+    const float mask = smoothstep(0.45, 0.6, fbm(q * 2.0 + vec3(3.3, 7.1, 1.9), 3));
+    const float fil = pow(ridge, kSharp) * (1.0 - kMask + kMask * mask);
+    const float far = smoothstep(0.5 * kDetailFar, kDetailFar, dist);
+    const float inner = kHaze + (1.0 - kHaze) * mix(fil, 0.3, far);
+    return body * inner;
+}
+
+vec3 cell_view(vec3 uv) {
+    const vec3 cs = vec3(uv.xy * 2.0 - 1.0, uv.z * uv.z * F_volume_scale + F_volume_off);
+    const vec4 p = M_invprojection * vec4(cs, 1.0);
+    return p.xyz / p.w;
+}
+
+void main() {
+    const uvec2 id = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(id, uvec2(V_volume_size.xy))))
+        return;
+    const vec3 size1 = V_volume_size.xyz - 1.0;
+    const vec3 t4 = M_viewinverse[3].xyz;
+    const vec3 anchor = dot(t4, t4) < 1.0 ? V_cameraposition.xyz : vec3(0.0);
+    // The glow's colour: the sector's light, its hue kept, its brightest channel 1.
+    const vec3 lc = max(V_lightcolor1.rgb, vec3(1e-4));
+    const vec3 glow = kBright * lc / max(max(lc.r, lc.g), lc.b);
+
+    vec3 light = vec3(0.0);
+    float trans = 1.0;
+    // From the camera outwards: X4's last slice is the nearest (32 m), its first the
+    // farthest.
+    for (int z = int(V_volume_size.z) - 1; z >= 0; --z) {
+        const vec3 uv = vec3(vec2(id), float(z)) / size1;
+        const vec3 view = cell_view(uv);
+        const float dist = length(view);
+        const vec3 nuv = vec3(uv.xy, uv.z - 1.0 / V_volume_size.z);
+        const float step_len = length(cell_view(nuv) - view);
+        if (dist < kFar) {
+            const vec3 world = (M_viewinverse * vec4(view, 1.0)).xyz + anchor;
+            const float d = smoke(world, F_time, dist) * (1.0 - smoothstep(0.6 * kFar, kFar, dist));
+            if (d > 0.0) {
+                const float slice = exp(-kSigma * d * step_len);
+                light += trans * glow * (1.0 - slice);
+                trans *= slice;
+            }
+        }
+        imageStore(U_output_rt_decl[S_output_rt_idx], ivec3(ivec2(id), z), vec4(light, trans));
+    }
+}

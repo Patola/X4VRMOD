@@ -2358,7 +2358,8 @@ for f in '"fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(
          '"fog probe: X4'"'"'s light — sun (%.3g, %.3g, %.3g), ambient (%.3g, "' \
          '"fog probe %s: the blend against the camera that built the volume — %llu "' \
          '"fog probe %s: X4'"'"'s sun in the view against the world'"'"'s turned by the "' \
-         '"fog volume: X4'"'"'s volume_base (%zu bytes) replaced by ours — the smoke: "'; do
+         '"fog volume: X4'"'"'s volume_base (%zu bytes) replaced by ours — the smoke: "' \
+         '"fog smoke: X4'"'"'s volume_walk for %d medium(s) (%zu bytes) replaced by ours — "'; do
     grep -qF -- "$f" layer/x4vr_layer.cpp && ok "fog probe: the layer still prints $f" \
         || bad "fog probe: the layer's format moved: $f"
 done
@@ -2376,6 +2377,12 @@ want "fog probe: never dispatched -> FAIL" /tmp/census-fp-nod.log "FAIL|  - " "n
 { pbase; } > /tmp/census-fp-silent.log
 want "fog probe: asked, no line -> FAIL" /tmp/census-fp-silent.log "FAIL|  - " "printed no fog probe line"
 absent "fog probe: not asked -> silent" "$BASE" fogprobe
+fsm='[  99800.030] layer   fog smoke: X4'"'"'s volume_walk for 1 medium(s) (14548 bytes) replaced by ours — glowing smoke: bodies 500 m'
+{ sed 's/env: run = /env: run = X4VR_FOG_PROBE=smoke /' "$BASE"; printf '%s\n' "$farm" "$fsm" "$fpok"; } > /tmp/census-fs-ok.log
+want "fog smoke: replaced said" /tmp/census-fs-ok.log fogsmoke "X4's volume_walk for 1 medium(s)"
+absent "fog smoke: replaced -> no FAIL" /tmp/census-fs-ok.log "FAIL .*fog smoke"
+{ sed 's/env: run = /env: run = X4VR_FOG_PROBE=smoke /' "$BASE"; printf '%s\n' "$farm" "$fpok"; } > /tmp/census-fs-none.log
+want "fog smoke: asked, walk not replaced -> FAIL" /tmp/census-fs-none.log "FAIL|  - " "volume_walk was not replaced"
 fcok='[  99900.021] layer   fog cards final: off — 5000 draw(s) of X4'"'"'s camera-turned cards removed (farther than 50 m), 40 kept as nearer, 300 seen before learned — DIAGNOSTIC'
 fczero='[  99900.021] layer   fog cards final: off — 0 draw(s) of X4'"'"'s camera-turned cards removed (farther than 50 m), 0 kept as nearer, 300 seen before learned — DIAGNOSTIC'
 fcpx='[  99900.022] layer   facing cpu final: ON — 0 draw(s) of X4'"'"'s cards turned to the eye; 300 seen before their turn was learned, 0 refused, 0 not X4'"'"'s (WVP != VP*W), 0 out of flight, 0 past the table; 40 turn(s) learned of 40 kept'

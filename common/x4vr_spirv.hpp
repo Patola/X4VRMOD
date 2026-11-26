@@ -2518,6 +2518,179 @@ inline bool is_x4_volume_base(const std::vector<uint32_t> &code,
     return true;
 }
 
+/// **X4's volume_walk.comp, recognised** (after take 479): the stage of X4's froxel fog
+/// that turns density into light, column by column, writing Rgba16f cells (rgb the light
+/// gathered, a what still shows). The layer puts layer/fog_walk.comp in its place, so the
+/// module has to be X4's walk and its interface the one that shader was written against:
+/// a compute entry of 8x8x1; S_input_rt_idx at 448 (one index per medium, one or two) and
+/// S_shad_idx in the block at set 4 binding 0, S_output_rt_idx at 464 after one medium
+/// and 480 after two (the variant); at set 0 binding 6 a table of Rgba16f 3D storage
+/// images, 53306 long; the camera block at set 1 binding 0 with M_invprojection 128,
+/// M_viewinverse 512, V_cameraposition 736, V_lightcolor1 784, V_volume_size 960, F_time
+/// 1420, F_volume_off 1528, F_volume_scale 1532. Any difference refuses, with why.
+struct VolumeWalkReport {
+    const char *why = "";
+    int media = 0; // 1 or 2: which of our two shaders fits
+};
+inline bool is_x4_volume_walk(const std::vector<uint32_t> &code,
+                              VolumeWalkReport *report = nullptr) {
+    VolumeWalkReport dummy;
+    VolumeWalkReport &rep = report ? *report : dummy;
+    rep = VolumeWalkReport{};
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return rep.why = "not SPIR-V", false;
+    auto str_of = [&code](const Inst &in, uint32_t first) {
+        std::string s;
+        for (uint32_t i = first; i < in.len; i++)
+            for (int b = 0; b < 4; b++) {
+                const char c = (char)((code[in.start + i] >> (8 * b)) & 0xff);
+                if (!c)
+                    return s;
+                s.push_back(c);
+            }
+        return s;
+    };
+    uint32_t entry = 0;
+    bool size881 = false;
+    std::map<std::pair<uint32_t, uint32_t>, std::string> member_names;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> member_off;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> struct_members;
+    std::unordered_map<uint32_t, uint32_t> set_of, binding_of, array_elem, array_len_id, consts;
+    struct Img { uint32_t dim, format; };
+    std::unordered_map<uint32_t, Img> images;
+    struct PtrType { uint32_t storage, pointee; };
+    std::unordered_map<uint32_t, PtrType> ptr_types;
+    struct Var { uint32_t ptr, storage; };
+    std::unordered_map<uint32_t, Var> vars;
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        switch (in.op) {
+        case OpEntryPoint:
+            if (in.len >= 3 && w[1] == ExecutionModelGLCompute)
+                entry = w[2];
+            break;
+        case 16: // OpExecutionMode
+            if (in.len >= 6 && w[2] == 17 && w[3] == 8 && w[4] == 8 && w[5] == 1)
+                size881 = true;
+            break;
+        case OpMemberName:
+            if (in.len >= 4)
+                member_names[{w[1], w[2]}] = str_of(in, 3);
+            break;
+        case OpMemberDecorate:
+            if (in.len >= 5 && w[3] == DecorationOffset)
+                member_off[{w[1], w[2]}] = w[4];
+            break;
+        case OpDecorate:
+            if (in.len >= 4 && w[2] == DecorationDescriptorSet)
+                set_of[w[1]] = w[3];
+            if (in.len >= 4 && w[2] == DecorationBinding)
+                binding_of[w[1]] = w[3];
+            break;
+        case OpTypeImage:
+            if (in.len >= 9)
+                images[w[1]] = {w[3], w[8]};
+            break;
+        case OpTypeArray:
+            if (in.len >= 4) {
+                array_elem[w[1]] = w[2];
+                array_len_id[w[1]] = w[3];
+            }
+            break;
+        case OpTypeStruct:
+            struct_members[w[1]].assign(w + 2, w + in.len);
+            break;
+        case OpConstant:
+            if (in.len == 4)
+                consts[w[2]] = w[3];
+            break;
+        case OpTypePointer:
+            if (in.len >= 4)
+                ptr_types[w[1]] = {w[2], w[3]};
+            break;
+        case OpVariable:
+            if (in.len >= 4)
+                vars[w[2]] = {w[1], w[3]};
+            break;
+        default:
+            break;
+        }
+    }
+    if (!entry)
+        return rep.why = "no compute entry", false;
+    if (!size881)
+        return rep.why = "not 8x8x1 invocations", false;
+    auto pointees_at = [&](uint32_t set, uint32_t binding, uint32_t storage) {
+        std::vector<uint32_t> out;
+        for (auto &[id, v] : vars) {
+            if (v.storage != storage || !set_of.count(id) || !binding_of.count(id) ||
+                set_of[id] != set || binding_of[id] != binding)
+                continue;
+            auto pt = ptr_types.find(v.ptr);
+            if (pt != ptr_types.end())
+                out.push_back(pt->second.pointee);
+        }
+        return out;
+    };
+    bool out_table = false;
+    for (uint32_t t : pointees_at(0, 6, StorageClassUniformConstant)) {
+        if (!array_elem.count(t))
+            continue;
+        auto im = images.find(array_elem[t]);
+        auto len = consts.find(array_len_id[t]);
+        if (im != images.end() && im->second.dim == 2 && im->second.format == 2 /* Rgba16f */ &&
+            len != consts.end() && len->second == 53306)
+            out_table = true;
+    }
+    if (!out_table)
+        return rep.why = "no Rgba16f 3D image table, 53306 long, at set 0 binding 6", false;
+    auto member = [&](uint32_t st, const char *name, uint32_t *off, uint32_t *type) {
+        for (const auto &[k, n] : member_names)
+            if (k.first == st && n == name) {
+                auto o = member_off.find(k);
+                if (o == member_off.end())
+                    return false;
+                *off = o->second;
+                auto sm = struct_members.find(st);
+                *type = sm != struct_members.end() && k.second < sm->second.size()
+                            ? sm->second[k.second]
+                            : 0;
+                return true;
+            }
+        return false;
+    };
+    const std::vector<uint32_t> dyns = pointees_at(4, 0, StorageClassUniform);
+    if (dyns.size() != 1)
+        return rep.why = "no single block at set 4 binding 0", false;
+    uint32_t in_off = 0, in_type = 0, out_off = 0, out_type = 0, sh_off = 0, sh_type = 0;
+    if (!member(dyns[0], "S_input_rt_idx", &in_off, &in_type) || in_off != 448 ||
+        !array_elem.count(in_type))
+        return rep.why = "S_input_rt_idx is not an array at 448", false;
+    if (!member(dyns[0], "S_shad_idx", &sh_off, &sh_type))
+        return rep.why = "no S_shad_idx (not the walk)", false;
+    auto media = consts.find(array_len_id[in_type]);
+    if (media == consts.end() || (media->second != 1 && media->second != 2))
+        return rep.why = "not one or two media", false;
+    if (!member(dyns[0], "S_output_rt_idx", &out_off, &out_type) ||
+        out_off != (media->second == 1 ? 464u : 480u))
+        return rep.why = "S_output_rt_idx is not where our shader reads it", false;
+    const std::vector<uint32_t> cams = pointees_at(1, 0, StorageClassUniform);
+    if (cams.size() != 1)
+        return rep.why = "no single camera block at set 1 binding 0", false;
+    static const std::pair<const char *, uint32_t> kCam[] = {
+        {"M_invprojection", 128}, {"M_viewinverse", 512}, {"V_cameraposition", 736},
+        {"V_lightcolor1", 784},   {"V_volume_size", 960}, {"F_time", 1420},
+        {"F_volume_off", 1528},   {"F_volume_scale", 1532}};
+    for (const auto &[name, off] : kCam) {
+        uint32_t o = 0, t = 0;
+        if (!member(cams[0], name, &o, &t) || o != off)
+            return rep.why = "the camera block's members are not at the expected offsets", false;
+    }
+    rep.media = (int)media->second;
+    return true;
+}
+
 /// Task #33 — the head rotation, as the conjugation `P·R·P⁻¹`, emitted with
 /// the LIVE `sx`/`sy` instead of a baked matrix.
 ///

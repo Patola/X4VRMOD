@@ -1933,6 +1933,14 @@ int main(int argc, char **argv) {
         printf("IS=%d WHY=%s\n", is ? 1 : 0, is ? "" : rep.why);
         return 0;
     }
+    // volume-walk <in.spv>: is_x4_volume_walk's verdict, the media, and why.
+    if (strcmp(argv[1], "volume-walk") == 0 && argc >= 3) {
+        const std::vector<uint32_t> code = load_spv(argv[2]);
+        x4vr::spv::VolumeWalkReport rep;
+        const bool is = !code.empty() && x4vr::spv::is_x4_volume_walk(code, &rep);
+        printf("IS=%d MEDIA=%d WHY=%s\n", is ? 1 : 0, rep.media, is ? "" : rep.why);
+        return 0;
+    }
     // volume-base-offset <in.spv> <out.spv> <member-name> <new-offset>: a copy with one
     // member's Offset moved, the negative control for the check above.
     if (strcmp(argv[1], "volume-base-offset") == 0 && argc >= 6) {

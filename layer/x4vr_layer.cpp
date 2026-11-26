@@ -2188,6 +2188,37 @@ std::mutex g_fog_probe_mu;
 // X4's volume_base modules replaced by ours, under g_fog_probe_mu.
 std::unordered_set<VkShaderModule> &g_fog_vol_mods =
     x4vr::immortal<std::unordered_set<VkShaderModule>>();
+// **The smoke** (X4VR_FOG_PROBE=smoke, after take 479): X4's volume_walk replaced by
+// layer/fog_walk.comp, which computes the smoke's density itself and makes it glow. Its
+// modules, under g_fog_probe_mu, and its parameters (X4VR_FOG_SCALE, _COVER, _SOFT,
+// _DETAIL, _SHARP, _HAZE, _DETAIL_FAR, _SIGMA, _BRIGHT, _DRIFT, _FAR, _STRETCH, _CURL,
+// _MASK).
+std::unordered_set<VkShaderModule> &g_fog_walk_mods =
+    x4vr::immortal<std::unordered_set<VkShaderModule>>();
+std::atomic<uint32_t> g_fog_walk_modules{0};
+static bool fog_smoke_on() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_FOG_PROBE");
+        return e && !strcmp(e, "smoke");
+    }();
+    return on;
+}
+static std::array<float, 14> fog_smoke_params() {
+    std::array<float, 14> v = {500.f, 0.57f, 0.14f, 110.f, 6.f,    0.18f, 900.f,
+                               0.008f, 0.6f, 4.f,   2500.f, 2.f, 1.4f, 0.7f};
+    static const char *const kName[14] = {
+        "X4VR_FOG_SCALE",  "X4VR_FOG_COVER", "X4VR_FOG_SOFT",       "X4VR_FOG_DETAIL",
+        "X4VR_FOG_SHARP",  "X4VR_FOG_HAZE",  "X4VR_FOG_DETAIL_FAR", "X4VR_FOG_SIGMA",
+        "X4VR_FOG_BRIGHT", "X4VR_FOG_DRIFT", "X4VR_FOG_FAR",        "X4VR_FOG_STRETCH",
+        "X4VR_FOG_CURL",   "X4VR_FOG_MASK"};
+    for (int i = 0; i < 14; i++)
+        if (const char *e = getenv(kName[i]); e && *e) {
+            const float f = strtof(e, nullptr);
+            if (f >= 0.f)
+                v[i] = f;
+        }
+    return v;
+}
 std::unordered_set<VkPipeline> &g_fog_probe_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
 std::unordered_map<VkCommandBuffer, bool> &g_fog_probe_cb =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
@@ -5253,7 +5284,8 @@ void shader_knob_report(const char *when) {
         X4VR_LOG("fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(es), "
                  "%llu read (%llu camera-relative), %llu unreadable; last grid "
                  "%.0fx%.0fx%.0f, range %.1f..%.1f m",
-                 when, g_fog_vol_modules.load(), g_fog_vol_refused.load(),
+                 when, g_fog_vol_modules.load() + g_fog_walk_modules.load(),
+                 g_fog_vol_refused.load(),
                  (unsigned long long)sn.dispatches, (unsigned long long)sn.read,
                  (unsigned long long)sn.relative, (unsigned long long)sn.unread, sn.size[0],
                  sn.size[1], sn.size[2], sn.range[0], sn.range[1]);
@@ -8656,6 +8688,33 @@ std::vector<uint32_t> fog_volume_module(const VkShaderModuleCreateInfo *ci) {
     if (!memmem(ci->pCode, ci->codeSize, kName, sizeof kName - 1))
         return code;
     std::vector<uint32_t> x4(ci->pCode, ci->pCode + ci->codeSize / 4);
+    if (fog_smoke_on()) {
+        x4vr::spv::VolumeWalkReport wr;
+        if (!x4vr::spv::is_x4_volume_walk(x4, &wr)) {
+            if (strstr(wr.why, "offsets") || strstr(wr.why, "S_output_rt_idx is not") ||
+                strstr(wr.why, "media"))
+                if (++g_fog_vol_refused <= 3)
+                    X4VR_LOG("fog smoke: a module like X4's volume_walk (%zu bytes) REFUSED: "
+                             "%s — X4's own stays", (size_t)ci->codeSize, wr.why);
+            return code;
+        }
+        if (wr.media == 1)
+            code.assign(x4vr::kFogWalk1Comp,
+                        x4vr::kFogWalk1Comp + sizeof x4vr::kFogWalk1Comp / sizeof(uint32_t));
+        else
+            code.assign(x4vr::kFogWalk2Comp,
+                        x4vr::kFogWalk2Comp + sizeof x4vr::kFogWalk2Comp / sizeof(uint32_t));
+        tl_fog_vol = true;
+        const auto p = fog_smoke_params();
+        if (++g_fog_walk_modules <= 3)
+            X4VR_LOG("fog smoke: X4's volume_walk for %d medium(s) (%zu bytes) replaced by ours — "
+                     "glowing smoke: bodies %.0f m (cover %.2f, edge %.2f), filaments %.0f m "
+                     "(sharp %.1f, haze %.2f, to %.0f m, stretch %.1f, curl %.1f, mask %.1f), "
+                     "extinction %.4f/m, glow %.2f, drift %.1f m/s, out to %.0f m — DIAGNOSTIC",
+                     wr.media, (size_t)ci->codeSize, p[0], p[1], p[2], p[3], p[4], p[5], p[6],
+                     p[11], p[12], p[13], p[7], p[8], p[9], p[10]);
+        return code;
+    }
     x4vr::spv::VolumeBaseReport rep;
     if (!x4vr::spv::is_x4_volume_base(x4, &rep)) {
         // Every later fog stage names the scale too; only a module that looks like the
@@ -9413,7 +9472,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     }
     if (r == VK_SUCCESS && is_fog_vol) {
         std::lock_guard<std::mutex> lock(g_fog_probe_mu);
-        g_fog_vol_mods.insert(*out);
+        (fog_smoke_on() ? g_fog_walk_mods : g_fog_vol_mods).insert(*out);
     }
     // X4's bytes, not ours: the handle is whatever the game will bind, but the
     // code written out is what it supplied. A dump that quietly contained our
@@ -10581,19 +10640,30 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
     }();
     static const VkSpecializationInfo kFogSpec = {10, kFogMap, sizeof(uint32_t) * 10,
                                                   fog_data.data()};
+    static const VkSpecializationMapEntry kWalkMap[14] = {
+        {0, 0, 4},   {1, 4, 4},   {2, 8, 4},   {3, 12, 4},  {4, 16, 4},
+        {5, 20, 4},  {6, 24, 4},  {7, 28, 4},  {8, 32, 4},  {9, 36, 4},
+        {10, 40, 4}, {11, 44, 4}, {12, 48, 4}, {13, 52, 4}};
+    static const std::array<float, 14> walk_data = fog_smoke_params();
+    static const VkSpecializationInfo kWalkSpec = {14, kWalkMap, sizeof(float) * 14,
+                                                   walk_data.data()};
     if (fog_probe_on()) {
         bool any = false;
         {
             std::lock_guard<std::mutex> lock(g_fog_probe_mu);
             for (uint32_t i = 0; i < count; i++)
-                any = any || g_fog_vol_mods.count(ci[i].stage.module);
+                any = any || g_fog_vol_mods.count(ci[i].stage.module) ||
+                      g_fog_walk_mods.count(ci[i].stage.module);
         }
         if (any) {
             fsubs.assign(ci, ci + count);
             std::lock_guard<std::mutex> lock(g_fog_probe_mu);
-            for (uint32_t i = 0; i < count; i++)
+            for (uint32_t i = 0; i < count; i++) {
                 if (g_fog_vol_mods.count(ci[i].stage.module))
                     fsubs[i].stage.pSpecializationInfo = &kFogSpec;
+                if (g_fog_walk_mods.count(ci[i].stage.module))
+                    fsubs[i].stage.pSpecializationInfo = &kWalkSpec;
+            }
             ci = fsubs.data();
         }
     }
@@ -10631,7 +10701,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
     if (r == VK_SUCCESS && fog_probe_on()) {
         std::lock_guard<std::mutex> lock(g_fog_probe_mu);
         for (uint32_t i = 0; i < count; i++)
-            if (out[i] != VK_NULL_HANDLE && g_fog_vol_mods.count(ci[i].stage.module))
+            if (out[i] != VK_NULL_HANDLE && (g_fog_vol_mods.count(ci[i].stage.module) ||
+                                             g_fog_walk_mods.count(ci[i].stage.module)))
                 g_fog_probe_pipes.insert(out[i]);
     }
     if (r != VK_SUCCESS || !g_mv_inventory || !g_active)

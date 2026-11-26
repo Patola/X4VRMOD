@@ -1383,6 +1383,23 @@ else
     fails=$((fails + 1))
 fi
 
+# The smoke (after take 479): our walk goes in the place of X4's volume_walk only when X4's
+# module has the interface ours reads -- the stand-in has it; a copy with the output's index
+# or the light's colour moved is refused; and our two variants validate.
+wout=$("$PATCHER" volume-walk "$BUILD/tests/sample_volume_walk.comp.spv" 2>&1)
+"$PATCHER" volume-base-offset "$BUILD/tests/sample_volume_walk.comp.spv" "$PATCHDIR/vw1.spv" S_output_rt_idx 480 >/dev/null 2>&1
+"$PATCHER" volume-base-offset "$BUILD/tests/sample_volume_walk.comp.spv" "$PATCHDIR/vw2.spv" V_lightcolor1 800 >/dev/null 2>&1
+wbad1=$("$PATCHER" volume-walk "$PATCHDIR/vw1.spv" 2>&1)
+wbad2=$("$PATCHER" volume-walk "$PATCHDIR/vw2.spv" 2>&1)
+if grep -q '^IS=1 MEDIA=1' <<<"$wout" && grep -q '^IS=0' <<<"$wbad1" && grep -q '^IS=0' <<<"$wbad2" && \
+    spirv-val --target-env vulkan1.0 "$ROOT/layer/fog_walk1.comp.spv" >/dev/null 2>&1 && \
+    spirv-val --target-env vulkan1.0 "$ROOT/layer/fog_walk2.comp.spv" >/dev/null 2>&1; then
+    printf 'ok   %-38s %s\n' "fog smoke: X4's walk interface, exactly" "refused: $(sed 's/.*WHY=//' <<<"$wbad1"); $(sed 's/.*WHY=//' <<<"$wbad2")"
+else
+    printf 'FAIL %-38s %s | %s | %s\n' "fog smoke: X4's walk interface, exactly" "$wout" "$wbad1" "$wbad2"
+    fails=$((fails + 1))
+fi
+
 # X4's fog blobs face the ship, not the head (after take 466): the froxel pass's
 # view-to-blob frame, built along the camera's axes, must come out along the ship's,
 # with X4's identity, the collapse diagnostic and the unpatched module as controls;
