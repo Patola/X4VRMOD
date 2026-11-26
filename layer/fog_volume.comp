@@ -16,7 +16,11 @@
 // offset, unprojected, then the view's inverse -- plus the camera's position where the
 // inverse carries none (camera-relative rendering).
 //
-// THE PROBE: puffs on a lattice every kCell metres, fixed in the world.
+// THE PROBE: puffs on a lattice every kCell metres, fixed in the world, only near the
+// ship. X4's grid is fine near (about a metre across and 3 m deep at 100 m) and coarse
+// far (70 m deep at 1 km, 175 m at 6 km), and turns with X4's camera: small puffs far
+// away flicker as the head turns (take 477: "a flickering checkered pattern"). So
+// they fade out by kFar metres, and their edges are soft.
 #extension GL_ARB_enhanced_layouts : require
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
@@ -39,6 +43,7 @@ layout(constant_id = 0) const float kCell = 400.0;
 layout(constant_id = 1) const float kRadiusIn = 40.0;
 layout(constant_id = 2) const float kRadiusOut = 60.0;
 layout(constant_id = 3) const float kStrength = 0.004;
+layout(constant_id = 4) const float kFar = 1500.0;
 
 void main() {
     const uvec3 id = gl_GlobalInvocationID;
@@ -53,6 +58,7 @@ void main() {
     if (dot(t, t) < 1.0)
         world += V_cameraposition.xyz;
     const vec3 f = (fract(world / kCell) - 0.5) * kCell;
-    const float dens = kStrength * (1.0 - smoothstep(kRadiusIn, kRadiusOut, length(f)));
+    const float near = 1.0 - smoothstep(0.6 * kFar, kFar, length(view));
+    const float dens = kStrength * near * (1.0 - smoothstep(kRadiusIn, kRadiusOut, length(f)));
     imageStore(U_output_rt_decl[S_output_rt_idx], ivec3(id), vec4(dens, 0.0, 0.0, 0.0));
 }

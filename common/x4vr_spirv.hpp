@@ -1987,6 +1987,7 @@ inline bool patch_fog_points_facing(std::vector<uint32_t> &code, uint32_t pose_s
 /// and later, and without GLSL.std.450.
 struct FogProbe {
     float cell = 400.f, radius_in = 40.f, radius_out = 60.f, strength = 0.004f;
+    float far = 1500.f; // layer/fog_volume.comp's fade (the volume_point patch has none)
 };
 struct FogProbeReport {
     const char *why = "";

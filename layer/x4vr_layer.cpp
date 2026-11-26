@@ -2161,6 +2161,8 @@ static bool fog_probe_on() {
 }
 static x4vr::spv::FogProbe fog_probe_params() {
     x4vr::spv::FogProbe p;
+    p.strength = 25.f;
+    p.radius_out = 100.f;
     auto num = [](const char *n, float dflt) {
         const char *e = getenv(n);
         const float v = e && *e ? strtof(e, nullptr) : dflt;
@@ -2169,7 +2171,8 @@ static x4vr::spv::FogProbe fog_probe_params() {
     p.strength = num("X4VR_FOG_PROBE_DENSITY", p.strength);
     p.cell = num("X4VR_FOG_PROBE_CELL", p.cell);
     p.radius_out = num("X4VR_FOG_PROBE_RADIUS", p.radius_out);
-    p.radius_in = p.radius_out * (2.f / 3.f);
+    p.radius_in = p.radius_out * 0.4f; // soft edges
+    p.far = num("X4VR_FOG_PROBE_FAR", p.far);
     return p;
 }
 std::atomic<uint32_t> g_fog_vol_modules{0}, g_fog_vol_refused{0};
@@ -2195,6 +2198,27 @@ struct FogProbeSeen {
     uint32_t x = 0, y = 0, z = 0;
 };
 FogProbeSeen g_fog_probe_seen;
+// **Same camera?** (after take 477, where puffs "moved too fast"): X4's fog blend
+// (volume_apply, the fragment pass that reads the froxel volume -- a subpass input and a
+// 3D sample) and the camera that built the volume. If the blend draws with a later camera
+// than the one the volume was built with, the fog lags the head. Under g_fog_probe_mu:
+// the blend's modules and pipelines, and each recording's flag.
+std::unordered_set<VkShaderModule> &g_fog_apply_mods =
+    x4vr::immortal<std::unordered_set<VkShaderModule>>();
+std::unordered_set<VkPipeline> &g_fog_apply_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
+std::unordered_map<VkCommandBuffer, bool> &g_fog_apply_cb =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
+// Under g_track.mu: the blends' camera slots to read at submit, the last volume's camera
+// turn, and the angle between them.
+std::unordered_map<VkCommandBuffer, std::vector<ViewSlot>> &g_fog_apply_pending =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, std::vector<ViewSlot>>>();
+struct FogSameCamera {
+    bool have_volume = false;
+    float volume_turn[9] = {};
+    uint64_t n = 0, bins[5] = {}; // deg: <0.01, <0.1, <1, <5, more
+    double sum = 0.0, max = 0.0;
+};
+FogSameCamera g_fog_same;
 
 // **The census** (with X4VR_FACING_DEBUG=collapse, after take 467): X4's own matrices for
 // the draws of its near/far-faded effects (its fog cards among them), read at submit --
@@ -2947,6 +2971,12 @@ void credit_draw(VkCommandBuffer cb) {
         auto cc = g_cb_canvas.find(cb);
         on_canvas = cc != g_cb_canvas.end() && cc->second;
     }
+    bool fog_apply = false;
+    if (fog_probe_on()) {
+        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        auto f = g_fog_apply_cb.find(cb);
+        fog_apply = f != g_fog_apply_cb.end() && f->second;
+    }
     bool census_fade = false;
     if (fade_tracking()) {
         // The recording thread binds and draws: its own last bind answers without a lock.
@@ -2959,6 +2989,12 @@ void credit_draw(VkCommandBuffer cb) {
         }
     }
     std::lock_guard<std::mutex> lock(g_track.mu);
+    if (fog_apply) {
+        auto vb = g_track.bound.find(cb);
+        auto &pend = g_fog_apply_pending[cb];
+        if (vb != g_track.bound.end() && !vb->second.empty() && pend.size() < 16)
+            pend.push_back(vb->second.front());
+    }
     if (census_fade) {
         auto ob = g_census_obj.find(cb);
         auto vb = g_track.bound.find(cb);
@@ -5173,6 +5209,14 @@ void shader_knob_report(const char *when) {
     if (fog_probe_on()) {
         std::lock_guard<std::mutex> lock(g_track.mu);
         const FogProbeSeen &sn = g_fog_probe_seen;
+        const FogSameCamera &fs = g_fog_same;
+        X4VR_LOG("fog probe %s: the blend against the camera that built the volume — %llu "
+                 "draw(s), mean %.3f deg, max %.2f deg; <0.01 %llu, <0.1 %llu, <1 %llu, <5 %llu, "
+                 "more %llu (%zu blend module(s))",
+                 when, (unsigned long long)fs.n, fs.n ? fs.sum / fs.n : 0.0, fs.max,
+                 (unsigned long long)fs.bins[0], (unsigned long long)fs.bins[1],
+                 (unsigned long long)fs.bins[2], (unsigned long long)fs.bins[3],
+                 (unsigned long long)fs.bins[4], g_fog_apply_mods.size());
         X4VR_LOG("fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(es), "
                  "%llu read (%llu camera-relative), %llu unreadable; last grid "
                  "%.0fx%.0fx%.0f, range %.1f..%.1f m",
@@ -8544,10 +8588,11 @@ std::vector<uint32_t> fsr_patch_module(const VkShaderModuleCreateInfo *ci) {
 // the head-look undone (patch_fog_points_facing, after take 466). Empty to create the
 // module as X4 wrote it. Only a module naming M_offset is tried: one of ~400.
 std::vector<uint32_t> fogpoint_patch_facing(const VkShaderModuleCreateInfo *ci);
-// **The fog probe** (X4VR_FOG_PROBE=1, after take 473; patch_fog_probe): a lattice of fog
-// puffs fixed in the world, added to X4's froxel fog -- the first step of the nebula
-// becoming an effect of our own. X4VR_FOG_PROBE_DENSITY (0.004), _CELL (400 m) and
-// _RADIUS (60 m) size it.
+// **The fog probe** (X4VR_FOG_PROBE=1, after take 473): a lattice of fog puffs fixed in
+// the world, written into X4's froxel fog by layer/fog_volume.comp -- the first step of
+// the nebula becoming an effect of our own. X4VR_FOG_PROBE_DENSITY, _CELL, _RADIUS and
+// _FAR size it. Defaults since take 477 (thin, small puffs out to 6 km aliased on X4's
+// grid): density 25, a puff every 400 m, soft out to 100 m, fading by 1500 m.
 
 
 std::vector<uint32_t> fogpoint_patch_module(const VkShaderModuleCreateInfo *ci) {
@@ -8589,10 +8634,10 @@ std::vector<uint32_t> fog_volume_module(const VkShaderModuleCreateInfo *ci) {
     const x4vr::spv::FogProbe pr = fog_probe_params();
     if (++g_fog_vol_modules <= 3)
         X4VR_LOG("fog volume: X4's volume_base (%zu bytes) replaced by ours — the probe's puffs "
-                 "every %.0f m, %.0f..%.0f m across, density %.4f, fixed in the world, in every "
-                 "cell of X4's froxel fog — DIAGNOSTIC",
+                 "every %.0f m, %.0f..%.0f m across, density %.4f, fixed in the world, fading "
+                 "out by %.0f m, in X4's froxel fog — DIAGNOSTIC",
                  (size_t)ci->codeSize, pr.cell, 2.f * pr.radius_in, 2.f * pr.radius_out,
-                 pr.strength);
+                 pr.strength, pr.far);
     return code;
 }
 
@@ -9329,6 +9374,14 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         record_module(ci, *out);
         complog_module(ci, *out);
         ffx_note_module(ci, *out);
+        // The fog blend's fragment module, for the same-camera check.
+        if (fog_probe_on() && ci->codeSize >= 20) {
+            std::vector<uint32_t> probe(ci->pCode, ci->pCode + ci->codeSize / 4);
+            if (x4vr::spv::patch_fragment_disable_fog(probe)) {
+                std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+                g_fog_apply_mods.insert(*out);
+            }
+        }
         // The census: a vertex module of X4's near/far-faded effects.
         static const char kFade[] = "U_camera_fade_range_near_start";
         if (fade_tracking() && ci->codeSize >= 20 &&
@@ -10465,13 +10518,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
     std::vector<VkComputePipelineCreateInfo> csubs;
     // Our fog's pipelines: its parameters as specialisation constants (after take 474).
     std::vector<VkComputePipelineCreateInfo> fsubs;
-    static const VkSpecializationMapEntry kFogMap[4] = {
-        {0, 0, 4}, {1, 4, 4}, {2, 8, 4}, {3, 12, 4}};
-    static const std::array<float, 4> fog_data = [] {
+    static const VkSpecializationMapEntry kFogMap[5] = {
+        {0, 0, 4}, {1, 4, 4}, {2, 8, 4}, {3, 12, 4}, {4, 16, 4}};
+    static const std::array<float, 5> fog_data = [] {
         const x4vr::spv::FogProbe p = fog_probe_params();
-        return std::array<float, 4>{p.cell, p.radius_in, p.radius_out, p.strength};
+        return std::array<float, 5>{p.cell, p.radius_in, p.radius_out, p.strength, p.far};
     }();
-    static const VkSpecializationInfo kFogSpec = {4, kFogMap, sizeof(float) * 4, fog_data.data()};
+    static const VkSpecializationInfo kFogSpec = {5, kFogMap, sizeof(float) * 5, fog_data.data()};
     if (fog_probe_on()) {
         bool any = false;
         {
@@ -10567,6 +10620,32 @@ static void fog_probe_dispatch(VkCommandBuffer cb, uint32_t x, uint32_t y, uint3
 static void fog_probe_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) {
     std::lock_guard<std::mutex> lock(g_track.mu);
     FogProbeSeen &sn = g_fog_probe_seen;
+    // The blends first: they compare with the volume built before them.
+    for (uint32_t i = 0; i < submitCount; i++)
+        for (uint32_t j = 0; j < submits[i].commandBufferCount; j++) {
+            auto it = g_fog_apply_pending.find(submits[i].pCommandBuffers[j]);
+            if (it == g_fog_apply_pending.end())
+                continue;
+            for (const ViewSlot &vs : it->second) {
+                const float *c = slot_host_ptr(vs);
+                if (!c || !g_fog_same.have_volume)
+                    continue;
+                float m[12];
+                std::memcpy(m, c + 128, sizeof m); // M_viewinverse, columns 0..2
+                double tr = 0.0;
+                for (int col = 0; col < 3; col++)
+                    for (int row = 0; row < 3; row++)
+                        tr += (double)m[col * 4 + row] * g_fog_same.volume_turn[col * 3 + row];
+                const double ang =
+                    std::acos(std::fmax(-1.0, std::fmin(1.0, (tr - 1.0) / 2.0))) * 57.2957795;
+                FogSameCamera &fs = g_fog_same;
+                fs.n++;
+                fs.sum += ang;
+                fs.max = std::max(fs.max, ang);
+                fs.bins[ang < 0.01 ? 0 : ang < 0.1 ? 1 : ang < 1.0 ? 2 : ang < 5.0 ? 3 : 4]++;
+            }
+            it->second.clear();
+        }
     for (uint32_t i = 0; i < submitCount; i++)
         for (uint32_t j = 0; j < submits[i].commandBufferCount; j++) {
             auto it = g_fog_probe_pending.find(submits[i].pCommandBuffers[j]);
@@ -10588,6 +10667,10 @@ static void fog_probe_at_submit(uint32_t submitCount, const VkSubmitInfo *submit
                     sn.size[k] = cb[240 + k];
                 }
                 sn.ftime = cb[355];
+                g_fog_same.have_volume = true;
+                for (int col = 0; col < 3; col++)
+                    for (int row = 0; row < 3; row++)
+                        g_fog_same.volume_turn[col * 3 + row] = cb[128 + col * 4 + row];
                 sn.off = cb[382];
                 sn.scale = cb[383];
                 sn.x = dp.x;
@@ -11023,6 +11106,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     auto publish_canvas = [&](VkResult r) {
         if (r != VK_SUCCESS)
             return;
+        if (fog_probe_on()) {
+            std::lock_guard<std::mutex> fl(g_fog_probe_mu);
+            for (uint32_t i = 0; i < count; i++)
+                for (uint32_t k = 0; out[i] != VK_NULL_HANDLE && k < ci_app[i].stageCount; k++)
+                    if (g_fog_apply_mods.count(ci_app[i].pStages[k].module))
+                        g_fog_apply_pipes.insert(out[i]);
+        }
         if (fade_tracking()) {
             std::lock_guard<std::mutex> cl(g_census_mu);
             for (uint32_t i = 0; i < count; i++)
@@ -15218,9 +15308,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
 VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
                                                 VkPipelineBindPoint bp,
                                                 VkPipeline p) {
-    if (bp == VK_PIPELINE_BIND_POINT_COMPUTE && fog_probe_on()) {
+    if (fog_probe_on()) {
         std::lock_guard<std::mutex> lock(g_fog_probe_mu);
-        g_fog_probe_cb[cb] = g_fog_probe_pipes.count(p) != 0;
+        if (bp == VK_PIPELINE_BIND_POINT_COMPUTE)
+            g_fog_probe_cb[cb] = g_fog_probe_pipes.count(p) != 0;
+        else
+            g_fog_apply_cb[cb] = g_fog_apply_pipes.count(p) != 0;
     }
     if (bp == VK_PIPELINE_BIND_POINT_GRAPHICS && fade_tracking()) {
         std::lock_guard<std::mutex> lock(g_census_mu);
