@@ -1267,10 +1267,14 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
         return rep.why = "no M_view in the camera block", false;
     if (!block_member(obj_set, obj_binding, "M_world", &obj_var, &world_m))
         return rep.why = "no M_world in the object block", false;
-    // The inputs, whole: vec3 or vec4 of float.
-    static const char *const kInputs[] = {"IN_VERTEXLOCATION_POSITION", "IN_VERTEXLOCATION_NORMAL",
-                                          "IN_VERTEXLOCATION_TANGENT",
-                                          "IN_VERTEXLOCATION_BINORMAL"};
+    // The inputs, whole: vec3 or vec4 of float. X4's GLSL says IN_VERTEXLOCATION_*,
+    // which its engine defines as SPECIAL_VERTEXLOCATION_*: the compiled modules
+    // carry the second (take 464's 414 dumps: no module has the first).
+    static const char *const kInputs[] = {
+        "SPECIAL_VERTEXLOCATION_POSITION", "SPECIAL_VERTEXLOCATION_NORMAL",
+        "SPECIAL_VERTEXLOCATION_TANGENT",  "SPECIAL_VERTEXLOCATION_BINORMAL",
+        "IN_VERTEXLOCATION_POSITION",      "IN_VERTEXLOCATION_NORMAL",
+        "IN_VERTEXLOCATION_TANGENT",       "IN_VERTEXLOCATION_BINORMAL"};
     std::unordered_map<uint32_t, uint32_t> turned; // input var -> its vector type
     bool have_pos = false;
     for (auto &[id, v] : vars) {
@@ -1285,11 +1289,11 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
         for (const char *n : kInputs)
             if (names[id] == n) {
                 turned[id] = vt;
-                have_pos = have_pos || n == kInputs[0];
+                have_pos = have_pos || strstr(n, "_POSITION") != nullptr;
             }
     }
     if (!have_pos)
-        return rep.why = "no input named IN_VERTEXLOCATION_POSITION", false;
+        return rep.why = "no position input by X4's name", false;
 
     // --- declarations --------------------------------------------------
     std::vector<uint32_t> decls, annos;

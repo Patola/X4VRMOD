@@ -6822,8 +6822,11 @@ VkResult create_shader_module_inner(
                                                                  pose_set_index(), 0, &frep);
         // The first refusals of modules that position by the object block, by reason:
         // a reason in every one would mean X4's modules lack a name the patch reads.
+        // Not those without the camera block or the object matrix: a billboard needs
+        // both, and take 463's only refusal lines named that harmless case.
         if (facing_enabled() && !facing && strcmp(frep.why, "no vertex entry") != 0 &&
-            strcmp(frep.why, "no M_world in the object block") != 0) {
+            strcmp(frep.why, "no M_world in the object block") != 0 &&
+            strcmp(frep.why, "no M_view in the camera block") != 0) {
             static uint32_t said = 0;
             if (++said <= 3)
                 X4VR_LOG("facing: a vertex module with X4's object matrix was refused: %s",
