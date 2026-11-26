@@ -2203,21 +2203,20 @@ static bool fog_smoke_on() {
     }();
     return on;
 }
-constexpr int kSmokeParams = 25;
+constexpr int kSmokeParams = 24;
 struct SmokeParam {
     const char *env; // nullptr: fixed
     float def;
 };
 static constexpr SmokeParam kSmoke[kSmokeParams] = {
-    {"X4VR_FOG_SCALE", 700.f}, {"X4VR_FOG_PATCH", 1500.f}, {"X4VR_FOG_COVER", 0.55f},
-    {nullptr, 0.12f},          {nullptr, 1.5f},            {"X4VR_FOG_GAIN", 4.5f},
-    {nullptr, 6.f},            {nullptr, 2.5f},            {"X4VR_FOG_DETAIL", 110.f},
-    {nullptr, 1.5f},           {nullptr, 1.f},             {nullptr, 0.25f},
-    {nullptr, 700.f},          {nullptr, 0.45f},           {"X4VR_FOG_SIGMA", 0.0015f},
-    {"X4VR_FOG_BRIGHT", 0.3f}, {"X4VR_FOG_FAR", 2500.f},   {nullptr, 0.25f},
-    {nullptr, 40.f},           {nullptr, 300.f},           {nullptr, 6.f},
-    {nullptr, 0.03f},          {nullptr, 8.f},             {"X4VR_FOG_DRIFT", 4.f},
-    {"X4VR_FOG_TINT", 3.f}};
+    {"X4VR_FOG_CLOUD", 670.f},  {"X4VR_FOG_COVER", 0.68f},  {nullptr, 0.05f},
+    {nullptr, 2.5f},            {nullptr, 400.f},           {"X4VR_FOG_MOTTLE", 200.f},
+    {nullptr, 3.f},             {nullptr, 0.8f},            {"X4VR_FOG_STRING", 60.f},
+    {nullptr, 4.f},             {nullptr, 1.5f},            {nullptr, 0.5f},
+    {nullptr, 4.f},             {nullptr, 0.3f},            {nullptr, 40.f},
+    {nullptr, 400.f},           {"X4VR_FOG_SIGMA", 0.003f}, {"X4VR_FOG_BRIGHT", 0.3f},
+    {"X4VR_FOG_FAR", 2500.f},   {nullptr, 6.f},             {nullptr, 0.03f},
+    {nullptr, 8.f},             {"X4VR_FOG_DRIFT", 4.f},    {"X4VR_FOG_TINT", 3.f}};
 static std::array<float, kSmokeParams> fog_smoke_params() {
     std::array<float, kSmokeParams> v{};
     for (int i = 0; i < kSmokeParams; i++) {
@@ -2231,10 +2230,10 @@ static std::array<float, kSmokeParams> fog_smoke_params() {
     return v;
 }
 // X4VR_FOG_AB=recentre (after take 480, DIAGNOSTIC): each recentre moves to the next of
-// three phases -- V, X4's own cards and no smoke; S, the smoke and no cards; S+, the
-// smoke denser (kFogDenser) -- starting at one drawn at random, so X4's look and ours
-// are compared within one run, by a switch. Its phase, for the cards' removal and the
-// frame times.
+// three phases -- V, X4's own cards and no smoke; A, the smoke and no cards; B, the smoke
+// at kFogSmaller its size (after take 481: "the originals ... look smaller") -- starting
+// at one drawn at random, so X4's look and ours are compared within one run, by a
+// switch. Its phase, for the cards' removal and the frame times.
 static bool fog_ab() {
     static const bool ab = [] {
         const char *e = getenv("X4VR_FOG_AB");
@@ -2242,8 +2241,8 @@ static bool fog_ab() {
     }();
     return ab;
 }
-constexpr float kFogDenser = 2.5f;
-std::atomic<int> g_fog_arm{1}; // 0 V, 1 S, 2 S+
+constexpr float kFogSmaller = 0.6f;
+std::atomic<int> g_fog_arm{1}; // 0 V, 1 A, 2 B
 std::unordered_set<VkPipeline> &g_fog_probe_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
 std::unordered_map<VkCommandBuffer, bool> &g_fog_probe_cb =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
@@ -2311,7 +2310,7 @@ struct FogSameCamera {
     double wsum[3] = {}, wmax[3] = {};
 };
 FogSameCamera g_fog_same;
-// Under g_track.mu: the frame times of each phase of the smoke's A/B (V, S, S+), ms.
+// Under g_track.mu: the frame times of each phase of the smoke's A/B (V, A, B), ms.
 std::array<std::vector<float>, 3> &g_fog_arm_ms = x4vr::immortal<std::array<std::vector<float>, 3>>();
 
 // **The census** (with X4VR_FACING_DEBUG=collapse, after take 467): X4's own matrices for
@@ -5350,7 +5349,7 @@ void shader_knob_report(const char *when) {
         if (fog_ab()) {
             // What the smoke costs against X4's cards: each phase's frame times.
             std::string row;
-            static const char *const kArm[3] = {"V", "S", "S+"};
+            static const char *const kArm[3] = {"V", "A", "B"};
             for (int a = 0; a < 3; a++) {
                 std::vector<float> v = g_fog_arm_ms[a];
                 char t[128];
@@ -8813,16 +8812,15 @@ std::vector<uint32_t> fog_volume_module(const VkShaderModuleCreateInfo *ci) {
         const auto p = fog_smoke_params();
         if (++g_fog_walk_modules <= 3)
             X4VR_LOG("fog smoke: X4's volume_walk for %d medium(s) (%zu bytes) replaced by ours — "
-                     "glowing smoke: ribbons %.0f m in patches %.0f m (cover %.2f, thinness "
-                     "%.1f), streaks %.0f m to %.0f m, extinction %.4f/m, glow %.2f, tint %.1f, "
-                     "drift %.1f m/s, out to %.0f m; each column stepped at most %.0f%% of the "
-                     "distance apart (%.0f m at least, %.0f steps a slice), nothing thinner "
+                     "glowing smoke: clouds %.0f m (cover %.2f), mottled at %.0f m, strings "
+                     "%.0f m near the ship, extinction %.4f/m, glow %.2f, tint %.1f, drift "
+                     "%.1f m/s, out to %.0f m; each column stepped at most %.0f%% of the "
+                     "distance apart (%.0f m at least, %.0f steps a slice), nothing sharper "
                      "than %.1f columns; its knobs in the layer's block at set %u%s — "
                      "DIAGNOSTIC",
-                     wr.media, (size_t)ci->codeSize, p[0], p[1], p[2], p[5], p[8], p[12],
-                     p[14], p[15], p[24], p[23], p[16], 100.f * p[21], p[20], p[22], p[7],
-                     pose_set_index(),
-                     fog_ab() ? "; phases V, S and S+ by recentre (X4VR_FOG_AB)" : "");
+                     wr.media, (size_t)ci->codeSize, p[0], p[1], p[5], p[8], p[16], p[17],
+                     p[23], p[22], p[18], 100.f * p[20], p[19], p[21], p[3], pose_set_index(),
+                     fog_ab() ? "; phases V, A and B by recentre (X4VR_FOG_AB)" : "");
         return code;
     }
     x4vr::spv::VolumeBaseReport rep;
@@ -10190,27 +10188,30 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
         if (facing_enabled() && facing_ab())
             g_fix_phase.store(forward_latches(), std::memory_order_relaxed);
         // The smoke's phases (X4VR_FOG_AB=recentre, after take 480): V, X4's cards and no
-        // smoke; S, the smoke and no cards; S+, the smoke denser. In turn from one drawn at
-        // random, once a run; the walk reads the density's scale from the block.
+        // smoke; A, the smoke and no cards; B, the smoke smaller (after take 481). In turn
+        // from one drawn at random, once a run; the walk reads its knobs from the block.
         if (fog_ab()) {
             static const uint64_t fdraw = ((uint64_t)std::chrono::steady_clock::now()
                                                .time_since_epoch().count() >> 12) % 3;
             const uint64_t phase = forward_latches();
             const int fa = (int)((phase + fdraw) % 3u);
             g_fog_arm.store(fa, std::memory_order_relaxed);
-            g_pose.value.fog[0] = fa == 0 ? 0.f : fa == 2 ? kFogDenser : 1.f;
+            g_pose.value.fog[0] = fa == 0 ? 0.f : 1.f;
             g_pose.value.fog[1] = 1.f;
+            g_pose.value.fog[2] = fa == 2 ? kFogSmaller : 1.f;
             static uint64_t fsaid = ~0ull;
             if (fsaid != phase) {
                 fsaid = phase;
-                if (fa == 2)
-                    X4VR_LOG("fog smoke: phase #%llu — S+, the smoke %.1fx denser, no cards "
+                if (fa == 0)
+                    X4VR_LOG("fog smoke: phase #%llu — V, X4's own cards, no smoke "
                              "(X4VR_FOG_AB=recentre)",
-                             (unsigned long long)phase, kFogDenser);
+                             (unsigned long long)phase);
                 else
-                    X4VR_LOG("fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)",
-                             (unsigned long long)phase,
-                             fa == 0 ? "V, X4's own cards, no smoke" : "S, the smoke, no cards");
+                    X4VR_LOG("fog smoke: phase #%llu — %s, the smoke at %.1fx its size "
+                             "(clouds %.0f m), no cards (X4VR_FOG_AB=recentre)",
+                             (unsigned long long)phase, fa == 1 ? "A" : "B",
+                             fa == 2 ? kFogSmaller : 1.f,
+                             (fa == 2 ? kFogSmaller : 1.f) * fog_smoke_params()[0]);
             }
         }
         x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face, arm == 4);
@@ -10934,6 +10935,15 @@ static void fog_probe_at_submit(uint32_t submitCount, const VkSubmitInfo *submit
             sn.size[k] = cb[240 + k];
         }
         sn.ftime = cb[355];
+        // X4's grid follows its volumetric-fog setting, which can change in a run.
+        static float grid_seen[3] = {0.f, 0.f, 0.f};
+        if (sn.size[0] != grid_seen[0] || sn.size[1] != grid_seen[1] ||
+            sn.size[2] != grid_seen[2]) {
+            X4VR_LOG("fog probe: X4's grid is %.0fx%.0fx%.0f (was %.0fx%.0fx%.0f)", sn.size[0],
+                     sn.size[1], sn.size[2], grid_seen[0], grid_seen[1], grid_seen[2]);
+            for (int k = 0; k < 3; k++)
+                grid_seen[k] = sn.size[k];
+        }
         {
             // The sun: the world's (V_direction1, float 192) turned by the view
             // (M_view, floats 0..15) against X4's own in the view's axes

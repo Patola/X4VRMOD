@@ -2360,8 +2360,9 @@ for f in '"fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(
          '"fog probe %s: X4'"'"'s sun in the view against the world'"'"'s turned by the "' \
          '"fog volume: X4'"'"'s volume_base (%zu bytes) replaced by ours — the smoke: "' \
          '"fog smoke: X4'"'"'s volume_walk for %d medium(s) (%zu bytes) replaced by ours — "' \
-         '"fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)"' \
-         '"fog smoke: phase #%llu — S+, the smoke %.1fx denser, no cards "' \
+         '"fog smoke: phase #%llu — V, X4'"'"'s own cards, no smoke "' \
+         '"fog smoke: phase #%llu — %s, the smoke at %.1fx its size "' \
+         '"fog probe: X4'"'"'s grid is %.0fx%.0fx%.0f (was %.0fx%.0fx%.0f)"' \
          '"fog smoke %s: frame time by phase — %s"' \
          '"fog probe %s: where each blend'"'"'s volume was built — its own command "' \
          '"fog smoke: WARNING — the walk'"'"'s pipeline layout has no set of the "' \
@@ -2399,6 +2400,10 @@ fsp0='[  99800.100] layer   fog smoke: phase #0 — S, the smoke, no cards (X4VR
 fsp1='[  99810.100] layer   fog smoke: phase #1 — S+, the smoke 2.5x denser, no cards (X4VR_FOG_AB=recentre)'
 fsp2='[  99820.100] layer   fog smoke: phase #2 — V, X4'"'"'s own cards, no smoke (X4VR_FOG_AB=recentre)'
 fsft='[  99900.030] layer   fog smoke final: frame time by phase — V: median 10.40 ms (96.2 fps), p90 11.00, 3000 frames; S: median 10.60 ms (94.3 fps), p90 11.20, 3000 frames; S+: median 10.70 ms (93.5 fps), p90 11.30, 3000 frames'
+fsa1='[  99830.100] layer   fog smoke: phase #3 — A, the smoke at 1.0x its size (clouds 670 m), no cards (X4VR_FOG_AB=recentre)'
+fsb2='[  99840.100] layer   fog smoke: phase #4 — B, the smoke at 0.6x its size (clouds 402 m), no cards (X4VR_FOG_AB=recentre)'
+fsg1='[  99800.050] layer   fog probe: X4'"'"'s grid is 176x176x128 (was 0x0x0)'
+fsg2='[  99850.050] layer   fog probe: X4'"'"'s grid is 240x240x128 (was 176x176x128)'
 fswh='[  99900.031] layer   fog probe final: where each blend'"'"'s volume was built — its own command buffer: 9000 (9000 under 0.01 deg), mean 0.000 deg, max 0.00; an earlier one of its submit: 0 (0 under 0.01 deg), mean 0.000 deg, max 0.00; an earlier submit: 0 (0 under 0.01 deg), mean 0.000 deg, max 0.00; 0 blend(s) recorded before a dispatch of their own buffer'
 abase() { sed 's/env: run = /env: run = X4VR_FOG_PROBE=smoke X4VR_FOG_AB=recentre /' "$BASE"; printf '%s\n' "$farm" "$fsm" "$fpok"; }
 { abase; printf '%s\n' "$fsp0" "$fsp1" "$fsp2" "$fsft" "$fswh"; } > /tmp/census-fs-ab.log
@@ -2411,6 +2416,11 @@ want "fog smoke: A/B asked, no phase -> FAIL" /tmp/census-fs-ab-none.log "FAIL| 
 { abase; printf '%s\n' "$fsp0" '[  99800.040] layer   fog smoke: WARNING — the walk'"'"'s pipeline layout has no set of the layer'"'"'s (not extended): its block is unbound'; } > /tmp/census-fs-ab-unbound.log
 want "fog smoke: walk layout not extended -> FAIL" /tmp/census-fs-ab-unbound.log "FAIL|  - " "without the layer's set"
 absent "fog smoke: no A/B asked -> no phase FAIL" /tmp/census-fs-ok.log "FAIL .*no phase was drawn"
+# After take 481: phases A and B (the smoke smaller), and X4's grid as it changes.
+{ abase; printf '%s\n' "$fsp2" "$fsa1" "$fsb2" "$fsg1" "$fsg2"; } > /tmp/census-fs-ab2.log
+want "fog smoke: A/B phases V, A, B said" /tmp/census-fs-ab2.log fogsmoke "phases: #2 V, #3 A, #4 B"
+want "fog probe: grid changes said" /tmp/census-fs-ab2.log fogprobe "grids: 176x176x128 -> 240x240x128"
+absent "fog smoke: A/B with A and B -> no FAIL" /tmp/census-fs-ab2.log "FAIL .*fog smoke"
 fcok='[  99900.021] layer   fog cards final: off — 5000 draw(s) of X4'"'"'s camera-turned cards removed (farther than 50 m), 40 kept as nearer, 300 seen before learned — DIAGNOSTIC'
 fczero='[  99900.021] layer   fog cards final: off — 0 draw(s) of X4'"'"'s camera-turned cards removed (farther than 50 m), 0 kept as nearer, 300 seen before learned — DIAGNOSTIC'
 fcpx='[  99900.022] layer   facing cpu final: ON — 0 draw(s) of X4'"'"'s cards turned to the eye; 300 seen before their turn was learned, 0 refused, 0 not X4'"'"'s (WVP != VP*W), 0 out of flight, 0 past the table; 40 turn(s) learned of 40 kept'

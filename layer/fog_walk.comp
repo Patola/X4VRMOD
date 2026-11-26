@@ -19,14 +19,19 @@
 //    kMinStep, at most kMaxSub steps a slice) brought both to 0.3% and 1.6%. And no
 //    wisp is drawn thinner than kRes of X4's columns at its distance, where the blend's
 //    interpolation would make it shimmer.
-//  * **Fainter and sparser.** 480 covered the whole view (glow 0.47, nine tenths of it
-//    more than 40% opaque). Now: patches of smoke (kPatch) holding a few large curly
-//    ribbons (kScale) -- seen edge-on, wisps; face-on, veils -- with fine streaks in
-//    them near the ship (kDetail), thinned again within kNear1 of the ship, so passing
-//    smoke still shows the speed without fogging the cockpit. Its colour is the
-//    sector's light colour deepened (each channel to the power kTint): in Turquoise Sea
-//    IX, (1.55, 2.45, 2.59) gives teal (0.21, 0.85, 1), which at the brightness of X4's
-//    own wisps there is sRGB (53, 105, 113) against their (35, 107, 113).
+//  * **Its shape** (after take 481: ours "bigger and fuzzier", blobs; X4's "more defined,
+//    stringier and look smaller"). X4's cards are flat pictures about 670 m across, drawn
+//    500-3000 m away at the screen's resolution; reduced to X4's grid at those distances
+//    even their strings turn into a soft cloud. What the grid can carry is the card's
+//    outline: so, clouds about kCloud across, lobed, sparse (kCover), with an edge never
+//    sharper than kRes columns; mottled inside (kMottle and half of it); and near the
+//    ship, where the columns are a few metres wide, strings (kString) -- where two curled
+//    sheets cross. Each layer is drawn only where the columns can carry it and is its
+//    average elsewhere. It drifts (kDrift) and its curl changes slowly.
+//  * **Cheaper.** A point outside every cloud costs one or two noise lookups: the cloud
+//    test comes first, and its second octave is skipped where it cannot make a cloud.
+//    Its colour is the sector's light colour deepened (each channel to the power kTint):
+//    teal in Turquoise Sea IX.
 //
 // X4's interface, exactly (x4vr::spv::is_x4_volume_walk checks X4's module first): the
 // camera block at set 1 binding 0, at the offsets below; the output's index at
@@ -37,8 +42,8 @@
 //
 // And the layer's own block, x4vr::PoseBlock, at the set the layer binds it to: written
 // here as 31 and renumbered by the layer when it creates the module. Its `fog` member
-// scales the smoke's density (x, 0 for none) and glow (y): an A/B's phases switch them
-// without a new pipeline.
+// scales the smoke's density (x, 0 for none), its glow (y) and its size (z): an A/B's
+// phases switch them without a new pipeline.
 #extension GL_ARB_enhanced_layouts : require
 
 #ifndef OUT_IDX_OFFSET
@@ -65,33 +70,33 @@ layout(set = 31, binding = 0, std140) uniform X4vrPose {
     layout(offset = 288) vec4 fog; // x4vr::kPoseFogOffset
 } pose;
 
-// Chosen in an offline model of X4's grid against X4's own look (take 462): about half
-// the view touched, nothing below half see-through, stars through all of it.
-layout(constant_id = 0) const float kScale = 700.0;    // the ribbons, m
-layout(constant_id = 1) const float kPatch = 1500.0;   // the patches holding them, m
-layout(constant_id = 2) const float kCover = 0.55;     // where a patch starts
-layout(constant_id = 3) const float kSoft = 0.12;      // its edge
-layout(constant_id = 4) const float kWarp = 1.5;       // how much the ribbons curl
-layout(constant_id = 5) const float kGain = 4.5;       // how thin a ribbon or streak is
-layout(constant_id = 6) const float kSharp = 6.0;      // and how sharp, at most
-layout(constant_id = 7) const float kRes = 2.5;        // never thinner than this many columns
-layout(constant_id = 8) const float kDetail = 110.0;   // the fine streaks, m
-layout(constant_id = 9) const float kStretch = 1.5;    // streaks drawn out along x
-layout(constant_id = 10) const float kCurl = 1.0;      // streaks curled with the ribbons
-layout(constant_id = 11) const float kHaze = 0.25;     // a ribbon between its streaks
-layout(constant_id = 12) const float kDetailFar = 700.0; // streaks fade out by here, m
-layout(constant_id = 13) const float kFineMean = 0.45; // and leave this
-layout(constant_id = 14) const float kSigma = 0.0015;  // extinction at full density, 1/m
-layout(constant_id = 15) const float kBright = 0.3;    // the glow of an opaque cloud
-layout(constant_id = 16) const float kFar = 2500.0;    // everything fades by here, m
-layout(constant_id = 17) const float kNearKeep = 0.25; // what is left at the ship
-layout(constant_id = 18) const float kNear0 = 40.0;    // thinned from here...
-layout(constant_id = 19) const float kNear1 = 300.0;   // ...to here, m
-layout(constant_id = 20) const float kMinStep = 6.0;   // the march: steps at least this, m
-layout(constant_id = 21) const float kStepFrac = 0.03; // at most this of the distance
-layout(constant_id = 22) const float kMaxSub = 8.0;    // and at most this many a slice
-layout(constant_id = 23) const float kDrift = 4.0;     // m/s
-layout(constant_id = 24) const float kTint = 3.0;      // the light colour, deepened
+// Chosen in an offline model of X4's grid (takes 480-481), against X4's own cards reduced
+// to the grid: separate clouds with dark space between, about a third of the view
+// touched, and as steady under a head turn as take 481's smoke.
+layout(constant_id = 0) const float kCloud = 670.0;     // a cloud, m (X4's cards: ~670)
+layout(constant_id = 1) const float kCover = 0.68;      // where a cloud starts: sparse
+layout(constant_id = 2) const float kSoft = 0.05;       // its edge, at the sharpest
+layout(constant_id = 3) const float kRes = 2.5;         // nothing sharper than this many columns
+layout(constant_id = 4) const float kWarpScale = 400.0; // the curl, m
+layout(constant_id = 5) const float kMottle = 200.0;    // the mottling inside, m (and half)
+layout(constant_id = 6) const float kMottleGain = 3.0;  // its contrast
+layout(constant_id = 7) const float kCurl = 0.8;        // how much the curl moves it
+layout(constant_id = 8) const float kString = 60.0;     // the strings near the ship, m
+layout(constant_id = 9) const float kGain = 4.0;        // how thin they are
+layout(constant_id = 10) const float kStretch = 1.5;    // drawn out along x
+layout(constant_id = 11) const float kStringWeight = 0.5; // strings against mottling
+layout(constant_id = 12) const float kStringBoost = 4.0;  // a string's density over the mottling's
+layout(constant_id = 13) const float kNearKeep = 0.3;   // what is left at the ship
+layout(constant_id = 14) const float kNear0 = 40.0;     // thinned from here...
+layout(constant_id = 15) const float kNear1 = 400.0;    // ...to here, m
+layout(constant_id = 16) const float kSigma = 0.003;    // extinction at full density, 1/m
+layout(constant_id = 17) const float kBright = 0.3;     // the glow of an opaque cloud
+layout(constant_id = 18) const float kFar = 2500.0;     // everything fades by here, m
+layout(constant_id = 19) const float kMinStep = 6.0;    // the march: steps at least this, m
+layout(constant_id = 20) const float kStepFrac = 0.03;  // at most this of the distance
+layout(constant_id = 21) const float kMaxSub = 8.0;     // and at most this many a slice
+layout(constant_id = 22) const float kDrift = 4.0;      // m/s
+layout(constant_id = 23) const float kTint = 3.0;       // the light colour, deepened
 
 float hash31(vec3 p) {
     p = fract(p * vec3(0.1031, 0.1030, 0.0973));
@@ -107,43 +112,54 @@ float vnoise(vec3 x) {
                    mix(hash31(i + vec3(0, 1, 1)), hash31(i + vec3(1, 1, 1)), u.x), u.y),
                u.z);
 }
-float fbm2(vec3 x) {
-    return (0.5 * vnoise(x) + 0.25 * vnoise(x * 2.03 + vec3(17.1, 3.7, 29.3))) / 0.75;
-}
-// A sheet where the noise crosses its middle: 1 on it, 0 a little away; `k` its
-// sharpness, held where X4's columns (`cell` metres here) can still draw it.
-float sheet(float n, float scale, float cell) {
-    const float k = clamp(scale / (kGain * kRes * cell), 0.7, kSharp);
-    return pow(clamp(1.0 - abs(n - 0.5) * kGain, 0.0, 1.0), k);
+// A sheet where the noise crosses its middle: 1 on it, 0 a little away.
+float sheet(float n) {
+    return clamp(1.0 - abs(n - 0.5) * kGain, 0.0, 1.0);
 }
 
 // The smoke's density, 0..1, at a world point at time t, `dist` metres from the camera,
-// where one of X4's columns is `cell` metres wide.
-float smoke(vec3 world, float t, float dist, float cell) {
-    // Kept small: the world is millions of metres across and a float has 24 bits.
-    const vec3 p = world - floor(world / 65536.0) * 65536.0;
-    vec3 q = p / kScale;
-    q.z += t * kDrift / kScale;
-    const vec3 w = vec3(vnoise(q * 0.5 + vec3(5.2, 1.3, 7.7) + t * 0.010),
-                        vnoise(q * 0.5 + vec3(1.7, 9.2, 3.4) - t * 0.012),
-                        vnoise(q * 0.5 + vec3(8.3, 2.8, 4.6) + t * 0.008)) - 0.5;
-    const float patch_ = smoothstep(kCover - kSoft, kCover + kSoft,
-                                    vnoise(p / kPatch + vec3(3.3, 7.1, 1.9) + 0.6 * w));
-    if (patch_ <= 0.001)
+// where one of X4's columns is `cell` metres wide; `size` scales every length.
+float smoke(vec3 world, float t, float dist, float cell, float size) {
+    // The clouds drift; kept small, since the world is millions of metres across and a
+    // float has 24 bits.
+    vec3 p = world + vec3(0.0, 0.0, t * kDrift);
+    p -= floor(p / 65536.0) * 65536.0;
+    const float cl = kCloud * size;
+    const float soft = max(kSoft, 0.45 * kRes * cell / cl);
+    const float lo = kCover - soft;
+    const float c1 = vnoise(p / cl + vec3(3.3, 7.1, 1.9));
+    if (0.65 * c1 + 0.35 <= lo)
+        return 0.0; // the second octave cannot make a cloud here
+    const float cloud = smoothstep(lo, kCover + soft,
+                                   0.65 * c1 + 0.35 * vnoise(p / (0.4 * cl) + vec3(9.1, 2.2, 5.5)));
+    if (cloud <= 0.001)
         return 0.0;
-    const float ribbon = sheet(fbm2(q + kWarp * w), kScale, cell);
-    if (ribbon <= 0.001)
-        return 0.0;
-    const float fade = smoothstep(0.5 * kDetailFar, kDetailFar, dist);
-    float fine = kFineMean;
-    if (fade < 1.0) {
-        vec3 r = p / kDetail + w * (kCurl * kScale / kDetail);
-        r.x /= kStretch;
-        r.y += t * 0.5 * kDrift / kDetail;
-        fine = mix(sheet(fbm2(r), kDetail, cell), kFineMean, fade);
+    const float ws = kWarpScale * size;
+    const vec3 w = vec3(vnoise(p / ws + vec3(5.2, 1.3, 7.7) + t * 0.010),
+                        vnoise(p / ws + vec3(1.7, 9.2, 3.4) - t * 0.012),
+                        vnoise(p / ws + vec3(8.3, 2.8, 4.6) + t * 0.008)) - 0.5;
+    // Mottling: two octaves, each its average where its wavelength is under 4 kRes columns.
+    float mot = 0.0;
+    for (int k = 0; k < 2; ++k) {
+        const float lam = kMottle * size / float(1 << k);
+        const float f = smoothstep(1.0, 2.0, lam / (4.0 * kRes * cell));
+        const float n = f > 0.0 ? vnoise(p / lam + w * (kCurl * ws / lam) + float(k) * vec3(13.7, 5.1, 8.9))
+                                : 0.5;
+        mot += (k == 0 ? 0.65 : 0.35) * mix(0.5, n, f);
     }
+    mot = clamp((mot - 0.5) * kMottleGain + 0.5, 0.0, 1.0);
+    // Strings, where two curled sheets cross -- only where they are kRes columns thick.
+    float str = 0.0;
+    const float lam = kString * size;
+    const float f = smoothstep(1.0, 2.0, lam / (kGain * kRes * cell));
+    if (f > 0.0) {
+        vec3 r = p / lam + w * (kCurl * ws / lam);
+        r.x /= kStretch;
+        str = f * sheet(vnoise(r + vec3(1.1, 2.2, 3.3))) * sheet(vnoise(r + vec3(31.7, 11.3, 23.9)));
+    }
+    const float inner = mot * (1.0 - kStringWeight) + kStringWeight * str * kStringBoost;
     const float near = kNearKeep + (1.0 - kNearKeep) * smoothstep(kNear0, kNear1, dist);
-    return patch_ * ribbon * (kHaze + (1.0 - kHaze) * fine) * near;
+    return cloud * inner * near;
 }
 
 vec3 cell_view(vec3 uv) {
@@ -168,6 +184,7 @@ void main() {
     const vec3 a = cell_view(vec3(0.0, 0.5, 0.5)), b = cell_view(vec3(1.0, 0.5, 0.5));
     const float col = abs(b.x - a.x) / max(abs(a.z), 1e-6) / size.x;
     const vec4 knobs = pose.fog;
+    const float shape = knobs.z > 0.0 ? knobs.z : 1.0; // the smoke's size
     const vec3 lc = max(V_lightcolor1.rgb, vec3(1e-4));
     const vec3 glow = kBright * knobs.y * pow(lc / max(max(lc.r, lc.g), lc.b), vec3(kTint));
 
@@ -185,7 +202,7 @@ void main() {
             const float stp = seg / float(n);
             for (int i = 0; i < n; ++i) {
                 const float t = prev + (float(i) + 0.5) * stp;
-                const float d = knobs.x * smoke(origin + ray * t, F_time, t, col * t) *
+                const float d = knobs.x * smoke(origin + ray * t, F_time, t, col * t, shape) *
                                 (1.0 - smoothstep(0.6 * kFar, kFar, t));
                 if (d > 0.0) {
                     const float slice = exp(-kSigma * d * stp);

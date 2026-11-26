@@ -5634,14 +5634,18 @@ def main(path):
     if "fog smoke: WARNING — the walk's pipeline layout has no set of the layer's" in text:
         fails.append("fog smoke: the walk's pipeline was created without the layer's set, so "
                      "its block was unbound: the run is not evidence")
-    # The smoke's A/B (X4VR_FOG_AB=recentre, after take 480): V, X4's cards; S, the smoke;
-    # S+, the smoke denser. Each phase's frame time says what the smoke costs.
-    sphases = re.findall(r"fog smoke: phase #(\d+) — (V|S\+|S)(?=[ ,])", text)
+    # The smoke's A/B (X4VR_FOG_AB=recentre, after take 480): V, X4's cards; then the
+    # smoke -- S and S+ (denser) in take 481, A and B (smaller) since. Each phase's frame
+    # time says what the smoke costs.
+    sphases = re.findall(r"fog smoke: phase #(\d+) — (V|S\+|S|A|B)(?=[ ,])", text)
     if sphases:
         print("fogsmoke phases: " + ", ".join(f"#{n} {k}" for n, k in sphases[:16])
               + (" ..." if len(sphases) > 16 else ""))
     for ln in re.findall(r"fog smoke final: (frame time by phase .*)$", text, re.M)[-1:]:
         print(f"fogsmoke {ln}")
+    grids = re.findall(r"fog probe: X4's grid is (\d+x\d+x\d+) \(was", text)
+    if grids:
+        print("fogprobe grids: " + " -> ".join(grids[:8]) + (" ..." if len(grids) > 8 else ""))
     for ln in re.findall(r"fog probe final: (where each blend's volume was built .*)$", text,
                          re.M)[-1:]:
         print(f"fogprobe {ln}")

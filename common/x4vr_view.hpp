@@ -452,8 +452,8 @@ struct PoseBlock {
     // leaves every card as X4 turned it.
     float look[16];
     // **The smoke's knobs** (layer/fog_walk.comp, after take 480): x scales its density
-    // (0: no smoke), y its glow; z and w are slack. (1, 1) is the smoke as built, and an
-    // A/B's phases switch it here without a new pipeline.
+    // (0: no smoke), y its glow, z its size (after take 481); w is slack. (1, 1, 1) is the
+    // smoke as built, and an A/B's phases switch it here without a new pipeline.
     float fog[4];
 };
 static_assert(sizeof(PoseBlock) == 304, "std140: three mat4 at 0, 64, 128, vec4s at 192 and "
@@ -633,6 +633,7 @@ inline PoseBlock pose_identity() {
     pose_set_look(p, 0.0f, 0.0f, false);
     p.fog[0] = 1.0f; // the smoke as built
     p.fog[1] = 1.0f;
+    p.fog[2] = 1.0f;
     return p;
 }
 
