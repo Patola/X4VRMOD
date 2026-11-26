@@ -2291,6 +2291,28 @@ want "census: none valid -> FAIL" /tmp/census-cs-inv.log "FAIL|  - " "none valid
 want "census: collapse ran, census silent -> FAIL" /tmp/census-cs-none.log "FAIL|  - " "the census printed nothing"
 absent "census: a build before the census (467) -> no census FAIL" /tmp/census-fc-abk.log "FAIL .*facing census"
 
+# The comparison (after take 468): X4's own, S to the ship, E to the eye; signatures.
+for f in '"E, the billboards face the eye"' '"S (cards turned to the ship) and E (to the eye); the census "' \
+         '"facing census signatures %s: in flight, %llu draw(s) under %llu signature(s) "' \
+         '"facing census kept (%s): %llu draw(s), head-look yaw %.1f..%.1f pitch "'; do
+    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "compare: the layer still prints $f" \
+        || bad "compare: the layer's format moved: $f"
+done
+flkx='[  99900.002] layer   facing look final: 10 headset frame(s) with the head-look undone, 2 with X4'"'"'s camera angles not valid (identity); DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4'"'"'s own, S (cards turned to the ship) and E (to the eye); the census reads their matrices'
+fps='[  99860.000] layer   facing: phase #2 — S, the billboards face the ship (X4VR_FACING_AB=recentre)'
+fpe='[  99870.000] layer   facing: phase #3 — E, the billboards face the eye (X4VR_FACING_AB=recentre)'
+fpa1='[  99850.000] layer   facing: phase #1 — A, the billboards turn with the head, as X4 draws them (X4VR_FACING_AB=recentre)'
+csg='[  99900.006] layer   facing census signatures final: in flight, 4000 draw(s) under 12 signature(s) kept while the head-look moved 3 deg or more (turned with the camera): turned as the camera 0 in 0, rolled about the view axis 3000 in 4, otherwise 1000 in 8; 900 draw(s) under 700 signature(s) not kept; 0 past the table'
+ckp='[  99900.007] layer   facing census kept (otherwise): 600 draw(s), head-look yaw -40.0..35.0 pitch -5.0..20.0, at 600..2900 m: Q/|col| rows [+0.766 +0.000 +0.643 | +0.000 +1.000 +0.000 | -0.643 +0.000 +0.766], col norms 336.0 336.0 1.0'
+xbase() { sed 's/env: run = /env: run = X4VR_FACING_AB=recentre X4VR_FACING_DEBUG=compare /' "$BASE"; printf '%s\n' "$fcon" "$flkx" "$cpl" "$cdl"; }
+{ xbase; printf '%s\n' "$fpa1" "$fps" "$fpe" "$csg" "$ckp"; } > /tmp/census-cx-ok.log
+want "compare: phases said" /tmp/census-cx-ok.log facing "phases: #1 A, #2 S, #3 E"
+want "compare: signatures said" /tmp/census-cx-ok.log facing "census signatures: in flight, 4000 draw(s)"
+want "compare: a kept signature said" /tmp/census-cx-ok.log facing "census kept (otherwise): 600 draw(s)"
+absent "compare: three arms -> no FAIL" /tmp/census-cx-ok.log "FAIL .*the comparison"
+{ xbase; printf '%s\n' "$fpa1" "$fps"; } > /tmp/census-cx-two.log
+want "compare: two arms -> FAIL" /tmp/census-cx-two.log "FAIL|  - " "the comparison, and the three arms"
+
 # Whose field of view is declared, and the runtime's eyes (issue #3, 2026-11-25).
 for f in '"xr: a field of view of our own is %s (fovMutable)"' '"NOT allowed: the runtime'"'"'s own has to be declared"'; do
     grep -qF "$f" common/x4vr_xr.hpp && ok "declfield: the runtime's answer still reads $f" \

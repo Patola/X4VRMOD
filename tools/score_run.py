@@ -5480,7 +5480,7 @@ def main(path):
                     r"OFF \(X4VR_FACING=1 turns it on\)) — (\d+) "
                     r"vertex module\(s\) turn X4's billboards to the ship, (\d+) input read\(s\) "
                     r"turned, (\d+) partial left", text)
-    fphases = re.findall(r"facing: phase #(\d+) — ([ABK])\b", text)
+    fphases = re.findall(r"facing: phase #(\d+) — ([ABKSE])\b", text)
     if fc:
         mode, nmod, ninp, npart = fc[-1]
         print(f"facing  {mode}: {nmod} vertex module(s) turn X4's billboards to the ship, {ninp} "
@@ -5502,10 +5502,15 @@ def main(path):
     # collapse alternated two.
     collapse = (bool(re.search(r"\bX4VR_FACING_DEBUG=collapse\b", run or ""))
                 and "phases cycle X4's own, the fix, and K" in text)
+    compare = (bool(re.search(r"\bX4VR_FACING_DEBUG=compare\b", run or ""))
+               and "S (cards turned to the ship) and E (to the eye)" in text)
     if re.search(r"\bX4VR_FACING_AB=recentre\b", run or ""):
         if collapse and len({k for _, k in fphases}) < 3:
             fails.append("X4VR_FACING_AB=recentre with the collapse diagnostic, and the three arms "
                          "(A X4's own, B the fix, K removed) did not all run: too few recentres")
+        elif compare and len({k for _, k in fphases}) < 3:
+            fails.append("X4VR_FACING_AB=recentre with the comparison, and the three arms (A X4's "
+                         "own, S to the ship, E to the eye) did not all run: too few recentres")
         elif len({k for _, k in fphases}) < 2:
             fails.append("X4VR_FACING_AB=recentre and the two phases did not both run: nothing to "
                          "compare (a build without it, or no recentre)")
@@ -5526,15 +5531,21 @@ def main(path):
         print(f"facing  census: {rest}")
         for smp in re.findall(r"facing census sample \(([^)]*)\): (.*)$", text, re.M)[:9]:
             print(f"facing  census sample ({smp[0]}): {smp[1]}")
+    csig = re.findall(r"facing census signatures (?:first present|periodic|final): (.*)$", text, re.M)
+    if csig:
+        print(f"facing  census signatures: {csig[-1]}")
+        final = text[text.rfind("facing census signatures"):]
+        for kp in re.findall(r"facing census kept \(([^)]*)\): (.*)$", final, re.M)[:12]:
+            print(f"facing  census kept ({kp[0]}): {kp[1]}")
     census_build = "the census reads their matrices" in text
-    if collapse and census_build and cpipes and int(cpipes[-1][1]) > 0:
+    if (collapse or compare) and census_build and cpipes and int(cpipes[-1][1]) > 0:
         if not cdraws or int(cdraws[-1][0]) == 0:
             fails.append("facing census: X4's near/far-faded pipelines existed and no draw of theirs "
                          "reached the census (the bind or descriptor tracking missed them)")
         elif int(cdraws[-1][1]) == 0:
             fails.append("facing census: draws read and none valid (WVP = VP*W never held): the "
                          "census read the wrong slots or at the wrong time, so it says nothing")
-    elif collapse and census_build and not cpipes:
+    elif (collapse or compare) and census_build and not cpipes:
         fails.append("facing census: the collapse diagnostic ran and the census printed nothing")
 
     # X4's fog blobs (after take 466): the froxel pass, its blobs' frames turned.

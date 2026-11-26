@@ -2159,7 +2159,11 @@ float *slot_host_ptr(const ViewSlot &s) {
 // head (Patola: each "rotates in place", flat), yet neither test of "turned as the
 // camera" took them; this says what X4's turn of them is.
 bool facing_collapse(); // beside the other facing switches
-bool facing_census() { return facing_collapse(); }
+bool facing_compare();
+bool facing_census() { return facing_collapse() || facing_compare(); }
+// The head-look X4 was given, for the census's signatures (set by pose_drive_residual).
+std::atomic<float> g_census_yaw{0.f}, g_census_pitch{0.f};
+std::atomic<bool> g_census_look_valid{false};
 std::mutex g_census_mu; // the modules, pipelines and per-recording flag below
 std::unordered_set<VkShaderModule> &g_fade_modules =
     x4vr::immortal<std::unordered_set<VkShaderModule>>();
@@ -2180,6 +2184,17 @@ struct Census {
     uint64_t cls[3] = {0, 0, 0};    // turned as the camera, rolled about the view axis, other
     uint64_t normal[5] = {}, toward[5] = {}; // deg bins: <0.1 <1 <5 <20 more
     std::vector<std::string> samples[3];
+    // Signatures (after take 468): a draw's Q, rounded, with the head-look it was seen
+    // under. A card X4 turns with the camera keeps its Q while the head turns; nothing
+    // fixed in the world can. In flight only.
+    struct Sig {
+        uint64_t n = 0;
+        float ymin = 1e9f, ymax = -1e9f, pmin = 1e9f, pmax = -1e9f, dmin = 1e30f, dmax = 0.f;
+        float q[9] = {}, norm[3] = {};
+        int cls = 0;
+    };
+    std::unordered_map<uint64_t, Sig> sigs;
+    uint64_t unsigned_draws = 0; // past the table's cap
 };
 Census &g_census = x4vr::immortal<Census>();
 
@@ -2245,6 +2260,43 @@ static void census_classify(const float *o, const float *c) {
     const double tw = std::acos(std::min(1.0, std::fabs(dotp))) * kDeg;
     g_census.normal[census_bin(nz)]++;
     g_census.toward[census_bin(tw)]++;
+    if (g_census_look_valid.load(std::memory_order_relaxed)) {
+        uint64_t h = 1469598103934665603ull;
+        auto mix = [&h](int64_t v) {
+            for (int b = 0; b < 8; b++) {
+                h ^= (uint64_t)(v >> (8 * b)) & 0xffu;
+                h *= 1099511628211ull;
+            }
+        };
+        for (int j = 0; j < 3; j++) {
+            for (int i = 0; i < 3; i++)
+                mix((int64_t)std::llround(q[j][i] * 200.0));
+            mix((int64_t)std::llround(std::log(std::max(n[j], 1e-9)) * 100.0));
+        }
+        auto it = g_census.sigs.find(h);
+        if (it == g_census.sigs.end() && g_census.sigs.size() >= 50000) {
+            g_census.unsigned_draws++;
+        } else {
+            Census::Sig &sg = g_census.sigs[h];
+            if (!sg.n) {
+                for (int j = 0; j < 3; j++) {
+                    for (int i = 0; i < 3; i++)
+                        sg.q[j * 3 + i] = (float)q[j][i];
+                    sg.norm[j] = (float)n[j];
+                }
+                sg.cls = k;
+            }
+            sg.n++;
+            const float y = g_census_yaw.load(std::memory_order_relaxed),
+                        pt = g_census_pitch.load(std::memory_order_relaxed);
+            sg.ymin = std::min(sg.ymin, y);
+            sg.ymax = std::max(sg.ymax, y);
+            sg.pmin = std::min(sg.pmin, pt);
+            sg.pmax = std::max(sg.pmax, pt);
+            sg.dmin = std::min(sg.dmin, (float)pl);
+            sg.dmax = std::max(sg.dmax, (float)pl);
+        }
+    }
     if (g_census.samples[k].size() < 3) {
         char b[320];
         snprintf(b, sizeof b,
@@ -2300,6 +2352,44 @@ static void census_report(const char *when) {
     for (int k = 0; k < 3; k++)
         for (const std::string &smp : c.samples[k])
             X4VR_LOG("facing census sample (%s): %s", kCls[k], smp.c_str());
+    // Signatures kept while the head-look moved 3 deg or more: turned with the camera.
+    uint64_t kept_draws[3] = {0, 0, 0}, kept_sigs[3] = {0, 0, 0}, other_draws = 0,
+             other_sigs = 0;
+    std::vector<const Census::Sig *> kept;
+    for (const auto &[h, sg] : c.sigs) {
+        const bool k = sg.ymax - sg.ymin >= 3.f || sg.pmax - sg.pmin >= 3.f;
+        if (k) {
+            kept_draws[sg.cls] += sg.n;
+            kept_sigs[sg.cls]++;
+            kept.push_back(&sg);
+        } else {
+            other_draws += sg.n;
+            other_sigs++;
+        }
+    }
+    X4VR_LOG("facing census signatures %s: in flight, %llu draw(s) under %llu signature(s) "
+             "kept while the head-look moved 3 deg or more (turned with the camera): turned "
+             "as the camera %llu in %llu, rolled about the view axis %llu in %llu, otherwise "
+             "%llu in %llu; %llu draw(s) under %llu signature(s) not kept; %llu past the table",
+             when,
+             (unsigned long long)(kept_draws[0] + kept_draws[1] + kept_draws[2]),
+             (unsigned long long)(kept_sigs[0] + kept_sigs[1] + kept_sigs[2]),
+             (unsigned long long)kept_draws[0], (unsigned long long)kept_sigs[0],
+             (unsigned long long)kept_draws[1], (unsigned long long)kept_sigs[1],
+             (unsigned long long)kept_draws[2], (unsigned long long)kept_sigs[2],
+             (unsigned long long)other_draws, (unsigned long long)other_sigs,
+             (unsigned long long)c.unsigned_draws);
+    std::sort(kept.begin(), kept.end(),
+              [](const Census::Sig *a, const Census::Sig *b) { return a->n > b->n; });
+    for (size_t i = 0; i < kept.size() && i < 12; i++) {
+        const Census::Sig &sg = *kept[i];
+        X4VR_LOG("facing census kept (%s): %llu draw(s), head-look yaw %.1f..%.1f pitch "
+                 "%.1f..%.1f, at %.0f..%.0f m: Q/|col| rows [%+.3f %+.3f %+.3f | %+.3f %+.3f "
+                 "%+.3f | %+.3f %+.3f %+.3f], col norms %.1f %.1f %.1f",
+                 kCls[sg.cls], (unsigned long long)sg.n, sg.ymin, sg.ymax, sg.pmin, sg.pmax,
+                 sg.dmin, sg.dmax, sg.q[0], sg.q[3], sg.q[6], sg.q[1], sg.q[4], sg.q[7], sg.q[2],
+                 sg.q[5], sg.q[8], sg.norm[0], sg.norm[1], sg.norm[2]);
+    }
 }
 
 void credit_draw(VkCommandBuffer cb) {
@@ -4501,6 +4591,17 @@ bool facing_collapse() {
     }();
     return on;
 }
+// X4VR_FACING_DEBUG=compare, DIAGNOSTIC (after take 468, where the removal took the
+// nebulae every time and the fix, cards turned to the ship's forward, left them weaker
+// and still following): with X4VR_FACING_AB=recentre the arms cycle X4's own, S (turned
+// to the ship) and E (turned to the eye); the census runs too.
+bool facing_compare() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_FACING_DEBUG");
+        return e && !strcmp(e, "compare");
+    }();
+    return on;
+}
 // Headset frames whose look slot was the head-look undone, and those left at identity
 // because X4's camera angles weren't valid.
 std::atomic<uint64_t> g_facing_driven{0}, g_facing_idle{0};
@@ -4529,7 +4630,10 @@ void shader_knob_report(const char *when) {
                                  "the fix, and K, where every fog blob and billboard the patches "
                                  "find is removed, and every draw of X4's near/far-faded effects; "
                                  "the census reads their matrices"
-                               : "");
+             : facing_compare() ? "; DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4's own, "
+                                  "S (cards turned to the ship) and E (to the eye); the census "
+                                  "reads their matrices"
+                                : "");
     // Zero with the pose channel up: X4 created no froxel fog pass, or its module no
     // longer has M_offset and I_point_num by name.
     X4VR_LOG("facing fog %s: %u froxel module(s) turn X4's fog blobs to the ship (%u "
@@ -9155,30 +9259,39 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
         // with a valid read of them; and in an A/B's A phases, X4's own.
         bool face = cmd_valid && facing_enabled();
         (cmd_valid ? g_facing_driven : g_facing_idle)++;
-        // The arm: 0 A, X4's own; 1 B, the fix; 2 K, the collapse diagnostic (every
-        // fog blob and billboard the patches find removed). Without the A/B, B; with
-        // the diagnostic alone, K.
+        g_census_yaw.store(cmd_yaw, std::memory_order_relaxed);
+        g_census_pitch.store(cmd_pitch, std::memory_order_relaxed);
+        g_census_look_valid.store(cmd_valid, std::memory_order_relaxed);
+        // The arm: 0 A, X4's own; 1 B, the fix (cards turned to the ship); 2 K, the
+        // collapse diagnostic (every fog blob and billboard the patches find removed);
+        // 3 S and 4 E, the comparison's cards turned to the ship and to the eye.
+        // Without the A/B, B; with the collapse alone, K.
         int arm = facing_collapse() ? 2 : 1;
         if (facing_enabled() && facing_ab()) {
             // Blind: which phase is which arm is drawn at random, once a run, and
-            // only the log knows. With the diagnostic, three arms in turn.
+            // only the log knows. With a diagnostic, three arms in turn.
             static const uint64_t draw = ((uint64_t)std::chrono::steady_clock::now()
                                               .time_since_epoch().count() >> 10) % 6;
             const uint64_t phase = forward_latches();
-            arm = (int)((phase + draw) % (facing_collapse() ? 3u : 2u));
+            const bool three = facing_collapse() || facing_compare();
+            const int a = (int)((phase + draw) % (three ? 3u : 2u));
+            static const int kCollapse[3] = {0, 1, 2}, kCompare[3] = {0, 3, 4};
+            arm = facing_collapse() ? kCollapse[a] : facing_compare() ? kCompare[a] : a;
             static uint64_t said = ~0ull;
             if (said != phase) {
                 said = phase;
-                static const char *const kArm[3] = {
+                static const char *const kArm[5] = {
                     "A, the billboards turn with the head, as X4 draws them",
                     "B, the billboards face the ship",
-                    "K, X4's fog blobs and billboards removed — DIAGNOSTIC"};
+                    "K, X4's fog blobs and billboards removed — DIAGNOSTIC",
+                    "S, the billboards face the ship",
+                    "E, the billboards face the eye"};
                 X4VR_LOG("facing: phase #%llu — %s (X4VR_FACING_AB=recentre)",
                          (unsigned long long)phase, kArm[arm]);
             }
         }
-        face = face && arm == 1;
-        x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face);
+        face = face && (arm == 1 || arm == 3 || arm == 4);
+        x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face, arm == 4);
         // K only in flight (X4's camera angles valid): a start menu stays a menu.
         if (facing_enabled() && arm == 2 && cmd_valid)
             std::memset(g_pose.value.look, 0, sizeof g_pose.value.look);

@@ -583,6 +583,29 @@ private:
                 put(w[1], w[2], {std::sqrt(x[0])});
                 return true;
             }
+            if (w[4] == 66 /* Length */ || w[4] == 69 /* Normalize */) {
+                double l = 0.0;
+                for (float c : x)
+                    l += (double)c * c;
+                l = std::sqrt(l);
+                if (w[4] == 66) {
+                    put(w[1], w[2], {(float)l});
+                    return true;
+                }
+                std::vector<float> v(x.size());
+                for (size_t k = 0; k < x.size(); k++)
+                    v[k] = (float)(x[k] / l);
+                put(w[1], w[2], v);
+                return true;
+            }
+            if (w[4] == 68 /* Cross */ && len >= 7) {
+                const std::vector<float> &a = x, &bb = in(w[6]);
+                if (a.size() != 3 || bb.size() != 3)
+                    return fail("Cross of other than vec3");
+                put(w[1], w[2], {a[1] * bb[2] - a[2] * bb[1], a[2] * bb[0] - a[0] * bb[2],
+                                 a[0] * bb[1] - a[1] * bb[0]});
+                return true;
+            }
             if ((w[4] == kGlslDeterminant || w[4] == kGlslMatrixInverse) && x.size() == 9) {
                 const double det = m(0, 0) * (m(1, 1) * m(2, 2) - m(2, 1) * m(1, 2)) -
                                    m(1, 0) * (m(0, 1) * m(2, 2) - m(2, 1) * m(0, 2)) +
@@ -602,7 +625,7 @@ private:
                 put(w[1], w[2], v);
                 return true;
             }
-            return fail("ExtInst other than Sqrt, Determinant or MatrixInverse of a mat3");
+            return fail("ExtInst other than Sqrt, Length, Normalize, Cross, Determinant or MatrixInverse of a mat3");
         }
         default:
             return fail("unsupported opcode " + std::to_string(o));

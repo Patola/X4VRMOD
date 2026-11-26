@@ -592,11 +592,15 @@ inline void pose_set_euler(PoseBlock &p, float yaw_deg, float pitch_deg,
 // camera's axes in the ship's, exactly x4vr_camwrite.hpp's rows_for, which is what
 // X4 turns its camera by; column-major for std140, so look[c*4 + r] = row r's c.
 // Not driving, the identity: X4's own billboards.
-inline void pose_set_look(PoseBlock &p, float yaw_deg, float pitch_deg, bool drive) {
+// `eye`: the billboards face the eye, not the ship's forward (column 3's x at 1; the
+// patch reads it only where it drives, so an identity look stays X4's own).
+inline void pose_set_look(PoseBlock &p, float yaw_deg, float pitch_deg, bool drive,
+                          bool eye = false) {
     for (int i = 0; i < 16; i++)
         p.look[i] = (i % 5 == 0) ? 1.0f : 0.0f;
     if (!drive)
         return;
+    p.look[12] = eye ? 1.0f : 0.0f;
     const float d = 0.01745329251994330f;
     const float psi = -yaw_deg * d, th = pitch_deg * d;
     const float cy = std::cos(psi), sy = std::sin(psi), cp = std::cos(th), sp = std::sin(th);

@@ -1306,7 +1306,8 @@ int main(int argc, char **argv) {
         const float corners[][3] = {{-64, -64, 0}, {64, -64, 0}, {64, 64, 0}, {-30, 50, 2}};
         const float normal_in[4] = {0.f, 0.f, -1.f, 0.f};
         int checked = 0, bad = 0, ctrl_seen = 0, ctrl_runs = 0, ortho_kept = 0, ortho_runs = 0,
-            k_right = 0, k_runs = 0;
+            k_right = 0, k_runs = 0, eye_checked = 0, eye_bad = 0, inv_bad = 0;
+        double eye_worst = 0.0, inv_worst = 0.0;
         double worst = 0.0;
         std::string why;
         // An orthographic camera (a menu, the HUD): clip w is 1, column 2's w is 0.
@@ -1394,6 +1395,59 @@ int main(int argc, char **argv) {
             err /= scale;
             worst = std::max(worst, err);
             checked++;
+            // Facing the eye (the look slot's column 3 x at 1): the card's normal on the
+            // line from the eye to its centre, its up the ship's -- built here from the
+            // geometry, and the same in the world whatever the head-look.
+            {
+                x4vr::PoseBlock pe = x4vr::pose_identity();
+                x4vr::pose_set_look(pe, lk[0], lk[1], true, true);
+                float ge[3], gne[3], cle[4];
+                if (!run(code, view, world, wvp, pe, pc, ge, gne, cle))
+                    return printf("FAIL=interp %s\n", why.c_str()), 1;
+                const float up[3] = {rows[3], rows[4], rows[5]};
+                float pv[3];
+                mv(tr(cam), t, pv);
+                const float pl = sqrtf(pv[0] * pv[0] + pv[1] * pv[1] + pv[2] * pv[2]);
+                const float nn[3] = {pv[0] / pl, pv[1] / pl, pv[2] / pl};
+                float xx[3] = {up[1] * nn[2] - up[2] * nn[1], up[2] * nn[0] - up[0] * nn[2],
+                               up[0] * nn[1] - up[1] * nn[0]};
+                const float xl = sqrtf(xx[0] * xx[0] + xx[1] * xx[1] + xx[2] * xx[2]);
+                for (float &c : xx)
+                    c /= xl;
+                const float yy[3] = {nn[1] * xx[2] - nn[2] * xx[1], nn[2] * xx[0] - nn[0] * xx[2],
+                                     nn[0] * xx[1] - nn[1] * xx[0]};
+                const M3 F{xx[0], xx[1], xx[2], yy[0], yy[1], yy[2], nn[0], nn[1], nn[2]};
+                float sp2[3], wante[3];
+                mv(mul(cam, mul(F, S)), pc, sp2);
+                for (int k = 0; k < 3; k++)
+                    wante[k] = t[k] + sp2[k];
+                double ee = 0.0;
+                for (int k = 0; k < 3; k++)
+                    ee = std::max(ee, (double)fabsf(ge[k] - wante[k]));
+                ee /= scale;
+                eye_worst = std::max(eye_worst, ee);
+                eye_checked++;
+                if (ee > 2e-4)
+                    eye_bad++;
+                // The same card, same ship, the head straight: the same world point.
+                x4vr::PoseBlock p0 = x4vr::pose_identity();
+                x4vr::pose_set_look(p0, 0.f, 0.f, true, true);
+                const M3 cam0 = body; // the head straight: the camera is the ship
+                float view0[16], world0[16], vw0[16], wvp0[16], g0[3], gn0[3], cl0[4];
+                m4(tr(cam0), nullptr, view0);
+                m4(mul(cam0, S), t, world0);
+                mul4(view0, world0, vw0);
+                mul4(P, vw0, wvp0);
+                if (!run(code, view0, world0, wvp0, p0, pc, g0, gn0, cl0))
+                    return printf("FAIL=interp %s\n", why.c_str()), 1;
+                double ei = 0.0;
+                for (int k = 0; k < 3; k++)
+                    ei = std::max(ei, (double)fabsf(ge[k] - g0[k]));
+                ei /= scale;
+                inv_worst = std::max(inv_worst, ei);
+                if (ei > 2e-4)
+                    inv_bad++;
+            }
             if (err > 2e-4) {
                 if (getenv("X4VR_FACING_DEBUG"))
                     printf("bad: ship %g,%g,%g look %g,%g scale %g,%g,%g err %.3g got %g %g %g want %g %g %g\n",
@@ -1486,6 +1540,9 @@ int main(int argc, char **argv) {
         printf("CHECKED=%d BAD=%d WORST=%.2e CONTROL_CAUGHT=%d/%d ORTHO_KEPT=%d/%d K_%s=%d/%d\n",
                checked, bad, worst, ctrl_seen, ctrl_runs, ortho_kept, ortho_runs,
                rep.fade ? "COLLAPSED" : "KEPT", k_right, k_runs);
+        printf("EYE_CHECKED=%d EYE_BAD=%d EYE_WORST=%.2e HEAD_INVARIANT_BAD=%d INV_WORST=%.2e\n",
+               eye_checked, eye_bad, eye_worst, inv_bad, inv_worst);
+        bad += eye_bad + inv_bad;
         printf(bad == 0 && ctrl_runs > 0 && ctrl_seen == ctrl_runs && rep.inputs >= 2 ? "PASS\n"
                                                                                        : "FAIL\n");
         return bad == 0 && ctrl_seen == ctrl_runs ? 0 : 1;

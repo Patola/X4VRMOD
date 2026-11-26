@@ -1360,7 +1360,7 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
     // to nothing: the division by d_i is undone by the world matrix's own d_i, so
     // only a true zero matters (a ten-thousandth of the largest, squared).
     const uint32_t f_eps = fconst(1e-6f), f_flat = fconst(1e-8f), f_flat2 = fconst(1e-16f),
-                   f_half = fconst(0.5f);
+                   f_half = fconst(0.5f), f_milli = fconst(1e-3f);
     const uint32_t c_view = iconst(view_m), c_world = iconst(world_m), c_zero = iconst(0),
                    c_proj = iconst(proj_m);
     const uint32_t f_quarter = fconst(0.25f);
@@ -1404,19 +1404,20 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
         emit(calc, op, {type, id, a, b});
         return id;
     };
-    auto load_mat3 = [&](uint32_t var, uint32_t member, uint32_t col[3]) {
+    // Columns 0..3 of a mat4 member, each as a vec3 (column 3: the translation).
+    auto load_mat3 = [&](uint32_t var, uint32_t member, uint32_t col[4]) {
         const uint32_t p = new_id();
         emit(calc, OpAccessChain, {ptr_uni_mat4, p, var, member});
         const uint32_t m = new_id();
         emit(calc, OpLoad, {t_mat4, m, p});
-        for (uint32_t k = 0; k < 3; k++) {
+        for (uint32_t k = 0; k < 4; k++) {
             const uint32_t c4 = new_id();
             emit(calc, OpCompositeExtract, {t_v4, c4, m, k});
             col[k] = new_id();
             emit(calc, OpVectorShuffle, {t_v3, col[k], c4, c4, 0, 1, 2});
         }
     };
-    uint32_t vc[3], wc[3], lc[3];
+    uint32_t vc[4], wc[4], lc[4];
     load_mat3(cam_var, c_view, vc);
     load_mat3(obj_var, c_world, wc);
     load_mat3(pose_var, c_zero, lc);
@@ -1482,7 +1483,51 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
     emit(calc, OpCompositeConstruct, {t_mat3, lm, lc[0], lc[1], lc[2]});
     const uint32_t qinv = new_id();
     emit(calc, OpExtInst, {t_mat3, qinv, glsl, 34 /* MatrixInverse */, qm});
-    const uint32_t lq = op2(OpMatrixTimesMatrix, t_mat3, lm, qm);
+    // The turn the card is given: L, to face the ship's forward; or, with the look
+    // slot's column 3 x at 1, F, to face the eye -- its normal on the line from the eye
+    // to the card's centre, its up the ship's (L's column 1), so it depends on where
+    // the card is and not where the head points, and is seen face-on wherever it is
+    // (take 468: turned to the ship, a card beside the head is seen edge-on, and X4's
+    // angle fade dims it). F where the ship's up is not along that line, else L.
+    uint32_t turn = lm;
+    {
+        const uint32_t pv = op2(OpFAdd, t_v3, op2(OpMatrixTimesVector, t_v3, v3m, wc[3]), vc[3]);
+        const uint32_t n = new_id();
+        emit(calc, OpExtInst, {t_v3, n, glsl, 69 /* Normalize */, pv});
+        const uint32_t xr = new_id();
+        emit(calc, OpExtInst, {t_v3, xr, glsl, 68 /* Cross */, lc[1], n});
+        const uint32_t xl = new_id();
+        emit(calc, OpExtInst, {t_float, xl, glsl, 66 /* Length */, xr});
+        const uint32_t x_ok = op2(OpFOrdGreaterThan, t_bool, xl, f_milli);
+        const uint32_t xs = new_id();
+        emit(calc, OpSelect, {t_float, xs, x_ok, xl, f1});
+        const uint32_t xa = op2(OpVectorTimesScalar, t_v3, xr, op2(OpFDiv, t_float, f1, xs));
+        const uint32_t ya = new_id();
+        emit(calc, OpExtInst, {t_v3, ya, glsl, 68 /* Cross */, n, xa});
+        const uint32_t fm = new_id();
+        emit(calc, OpCompositeConstruct, {t_mat3, fm, xa, ya, n});
+        const uint32_t eye = op2(OpFOrdGreaterThan, t_bool,
+                                 [&] {
+                                     const uint32_t e0 = new_id();
+                                     emit(calc, OpCompositeExtract, {t_float, e0, lc[3], 0});
+                                     return e0;
+                                 }(),
+                                 f_half);
+        const uint32_t use_f = op2(OpLogicalAnd, t_bool, eye, x_ok);
+        const uint32_t uf3 = new_id();
+        emit(calc, OpCompositeConstruct, {t_bv3, uf3, use_f, use_f, use_f});
+        uint32_t tc[3];
+        for (uint32_t k = 0; k < 3; k++) {
+            const uint32_t fk = new_id(), lk = new_id();
+            emit(calc, OpCompositeExtract, {t_v3, fk, fm, k});
+            emit(calc, OpCompositeExtract, {t_v3, lk, lm, k});
+            tc[k] = new_id();
+            emit(calc, OpSelect, {t_v3, tc[k], uf3, fk, lk});
+        }
+        turn = new_id();
+        emit(calc, OpCompositeConstruct, {t_mat3, turn, tc[0], tc[1], tc[2]});
+    }
+    const uint32_t lq = op2(OpMatrixTimesMatrix, t_mat3, turn, qm);
     const uint32_t cd = op2(OpMatrixTimesMatrix, t_mat3, qinv, lq);
     // X4VR_FACING_DEBUG=collapse's K: a zero look slot, and in a module of X4's
     // near/far-faded effects every draw collapses, card or not (take 467's removal
