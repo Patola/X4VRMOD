@@ -2176,6 +2176,12 @@ bool facing_gpu() {
 }
 // Set per headset frame: this frame's arm turns X4's cards (a fixing arm, in flight).
 std::atomic<bool> g_fix_active{false};
+// The removal arm on the CPU (X4VR_FACING_DEBUG=collapse's K, the GPU patches off):
+// every learned card scaled to nothing, so a take learns whether the CPU's writes reach
+// the clouds it sees (after take 470). And the stretch, so the drift check below
+// measures within one.
+std::atomic<bool> g_fix_kill{false};
+std::atomic<uint64_t> g_fix_phase{0};
 // The head-look X4 was given, for the census's signatures (set by pose_drive_residual).
 std::atomic<float> g_census_yaw{0.f}, g_census_pitch{0.f};
 std::atomic<bool> g_census_look_valid{false};
@@ -2336,11 +2342,25 @@ struct FixLearn {
     float yaw = 0.f, pitch = 0.f;
     uint64_t last = 0;
     bool learned = false;
+    // The drift check (after take 470): the card as drawn -- its turn in the world, and
+    // its direction from the eye in the world -- at the first draw of a stretch, and the
+    // head-look then. X4's own (A) should drift by the head-look; the fix (B) not at all.
+    bool has_ref = false;
+    uint64_t ref_phase = 0;
+    float ref_w[9] = {}, ref_dir[3] = {}, ref_yaw = 0.f, ref_pitch = 0.f;
 };
 std::unordered_map<uint64_t, FixLearn> &g_fix_learn =
     x4vr::immortal<std::unordered_map<uint64_t, FixLearn>>();
 struct FixStats {
-    uint64_t rewritten = 0, unlearned = 0, refused = 0, mismatch = 0, noflight = 0, full = 0;
+    uint64_t rewritten = 0, unlearned = 0, refused = 0, mismatch = 0, noflight = 0, full = 0,
+             killed = 0;
+    // Drift by arm (0 X4's own, 1 the fix) and head-look moved since the reference
+    // (<2, <10, <30, more deg): draws, turn drift sum and max, direction drift sum and max.
+    uint64_t dn[2][4] = {};
+    double dturn[2][4] = {}, dturn_max[2][4] = {}, ddir[2][4] = {}, ddir_max[2][4] = {};
+    // The cost: time in the submit hook's card work.
+    uint64_t calls = 0;
+    double ns = 0.0, ns_max = 0.0;
 };
 FixStats g_fix_stats;
 uint64_t g_fix_submits = 1;
@@ -2416,22 +2436,104 @@ static void fix_draw(float *o, const float *c, bool rewrite,
         g_fix_stats.unlearned++;
         return;
     }
-    if (!rewrite)
-        return;
-    float up[3];
-    x4vr::billboard::ship_up(yaw, pitch, up);
-    if (!x4vr::billboard::face_eye(c, c + 7 * 16, o + 16, o, up)) {
-        g_fix_stats.refused++;
+    if (g_fix_kill.load(std::memory_order_relaxed)) {
+        // K: the card's turn scaled to nothing, its WVP to match.
+        for (int col = 0; col < 3; col++)
+            for (int row = 0; row < 3; row++)
+                o[16 + col * 4 + row] = 0.f;
+        for (int col = 0; col < 4; col++)
+            for (int row = 0; row < 4; row++) {
+                double acc = 0.0;
+                for (int k = 0; k < 4; k++)
+                    acc += (double)c[7 * 16 + k * 4 + row] * o[16 + col * 4 + k];
+                o[col * 4 + row] = (float)acc;
+            }
+        done.insert(o);
+        g_fix_stats.killed++;
         return;
     }
-    done.insert(o);
-    g_fix_stats.rewritten++;
+    if (rewrite) {
+        float up[3];
+        x4vr::billboard::ship_up(yaw, pitch, up);
+        if (!x4vr::billboard::face_eye(c, c + 7 * 16, o + 16, o, up)) {
+            g_fix_stats.refused++;
+            return;
+        }
+        done.insert(o);
+        g_fix_stats.rewritten++;
+    }
+    // The drift check, on the card as it will be drawn.
+    const int arm = rewrite ? 1 : 0;
+    float wn[9], dir[3];
+    for (int col = 0; col < 3; col++) {
+        double l = 0.0;
+        for (int row = 0; row < 3; row++)
+            l += (double)o[16 + col * 4 + row] * o[16 + col * 4 + row];
+        l = std::sqrt(l);
+        for (int row = 0; row < 3; row++)
+            wn[col * 3 + row] = l > 0.0 ? (float)(o[16 + col * 4 + row] / l) : 0.f;
+    }
+    {
+        // The direction from the eye in the world: V^T (V W_t + V_t), normalised.
+        double pv[3], pw[3] = {0, 0, 0}, l = 0.0;
+        for (int row = 0; row < 3; row++) {
+            pv[row] = c[12 + row];
+            for (int k = 0; k < 3; k++)
+                pv[row] += (double)c[k * 4 + row] * o[16 + 12 + k];
+        }
+        for (int row = 0; row < 3; row++)
+            for (int k = 0; k < 3; k++)
+                pw[row] += (double)c[row * 4 + k] * pv[k];
+        for (double v : pw)
+            l += v * v;
+        l = std::sqrt(l);
+        for (int row = 0; row < 3; row++)
+            dir[row] = l > 0.0 ? (float)(pw[row] / l) : 0.f;
+    }
+    const uint64_t phase = g_fix_phase.load(std::memory_order_relaxed);
+    if (!e.has_ref || e.ref_phase != phase) {
+        e.has_ref = true;
+        e.ref_phase = phase;
+        std::memcpy(e.ref_w, wn, sizeof wn);
+        std::memcpy(e.ref_dir, dir, sizeof dir);
+        e.ref_yaw = yaw;
+        e.ref_pitch = pitch;
+        return;
+    }
+    const double dh = std::max(std::fabs(yaw - e.ref_yaw), std::fabs(pitch - e.ref_pitch));
+    const int bin = dh < 2.0 ? 0 : dh < 10.0 ? 1 : dh < 30.0 ? 2 : 3;
+    // The turn between the reference and now: trace of Wref^T W over the columns.
+    double tr = 0.0, dd = 0.0;
+    for (int i = 0; i < 9; i++)
+        tr += (double)e.ref_w[i] * wn[i];
+    for (int i = 0; i < 3; i++)
+        dd += (double)e.ref_dir[i] * dir[i];
+    const double turn = std::acos(std::fmax(-1.0, std::fmin(1.0, (tr - 1.0) / 2.0))) * 57.2957795,
+                 ddeg = std::acos(std::fmax(-1.0, std::fmin(1.0, dd))) * 57.2957795;
+    g_fix_stats.dn[arm][bin]++;
+    g_fix_stats.dturn[arm][bin] += turn;
+    g_fix_stats.dturn_max[arm][bin] = std::max(g_fix_stats.dturn_max[arm][bin], turn);
+    g_fix_stats.ddir[arm][bin] += ddeg;
+    g_fix_stats.ddir_max[arm][bin] = std::max(g_fix_stats.ddir_max[arm][bin], ddeg);
 }
 
 // At submit, under g_track.mu: every fade draw the submitted recordings made -- the
 // census reads them as X4 wrote them, then the fix turns the learned cards.
 static void census_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) {
     std::lock_guard<std::mutex> lock(g_track.mu);
+    const auto t0 = std::chrono::steady_clock::now();
+    struct Timed {
+        std::chrono::steady_clock::time_point t0;
+        ~Timed() {
+            const double ns =
+                (double)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - t0)
+                    .count();
+            g_fix_stats.calls++;
+            g_fix_stats.ns += ns;
+            g_fix_stats.ns_max = std::max(g_fix_stats.ns_max, ns);
+        }
+    } timed{t0};
     const bool census = facing_census(), fixing = facing_enabled();
     const bool rewrite = fixing && g_fix_active.load(std::memory_order_relaxed);
     std::unordered_set<const float *> done;
@@ -2476,6 +2578,31 @@ static void fix_report(const char *when) {
              (unsigned long long)g_fix_stats.refused, (unsigned long long)g_fix_stats.mismatch,
              (unsigned long long)g_fix_stats.noflight, (unsigned long long)g_fix_stats.full,
              learned, g_fix_learn.size());
+    const FixStats &f = g_fix_stats;
+    if (f.killed)
+        X4VR_LOG("facing cpu %s: K removed %llu draw(s) of learned cards — DIAGNOSTIC", when,
+                 (unsigned long long)f.killed);
+    static const char *const kBin[4] = {"<2", "2-10", "10-30", "30+"};
+    for (int arm = 0; arm < 2; arm++) {
+        std::string row;
+        for (int b = 0; b < 4; b++) {
+            char t[160];
+            const double n = (double)std::max<uint64_t>(f.dn[arm][b], 1);
+            snprintf(t, sizeof t, "%s%s deg: %llu draw(s), turn %.2f (max %.2f), direction %.3f "
+                     "(max %.3f)",
+                     b ? "; " : "", kBin[b], (unsigned long long)f.dn[arm][b],
+                     f.dturn[arm][b] / n, f.dturn_max[arm][b], f.ddir[arm][b] / n,
+                     f.ddir_max[arm][b]);
+            row += t;
+        }
+        X4VR_LOG("facing cpu drift %s (%s): the cards in the world against the stretch's "
+                 "first draw, by head-look moved — %s",
+                 when, arm ? "the fix" : "X4's own", row.c_str());
+    }
+    X4VR_LOG("facing cpu cost %s: %llu submit(s) with X4's cards, mean %.1f us, max %.1f us, "
+             "total %.1f ms",
+             when, (unsigned long long)f.calls, f.calls ? f.ns / f.calls / 1000.0 : 0.0,
+             f.ns_max / 1000.0, f.ns / 1e6);
 }
 static void census_report(const char *when) {
     std::lock_guard<std::mutex> lock(g_track.mu);
@@ -9449,6 +9576,10 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
         }
         face = face && (arm == 1 || arm == 3 || arm == 4);
         g_fix_active.store(face, std::memory_order_relaxed);
+        g_fix_kill.store(facing_enabled() && !facing_gpu() && arm == 2 && cmd_valid,
+                         std::memory_order_relaxed);
+        if (facing_enabled() && facing_ab())
+            g_fix_phase.store(forward_latches(), std::memory_order_relaxed);
         x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face, arm == 4);
         // K only in flight (X4's camera angles valid): a start menu stays a menu.
         if (facing_enabled() && arm == 2 && cmd_valid)

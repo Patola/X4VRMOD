@@ -5563,6 +5563,11 @@ def main(path):
         print(f"facing  cpu {md}: {rw} draw(s) of X4's cards turned to the eye; {ul} before learned, "
               f"{rf} refused, {mm} not X4's, {nf} out of flight, {pt} past the table; {ln} turn(s) "
               f"learned of {kp}")
+        for kind, line in re.findall(r"facing cpu (drift|cost) final(.*)$", text, re.M):
+            print(f"facing  cpu {kind} final{line}")
+        kl = re.findall(r"facing cpu final: K removed (\d+) draw\(s\) of learned cards", text)
+        if kl:
+            print(f"facing  cpu K: {kl[-1]} draw(s) of learned cards removed")
         fixing = md == "ON" or "B" in {k for _, k in fphases}
         flying = "headlook write: ARMED" in text
         if fixing and flying and int(rw) == 0:

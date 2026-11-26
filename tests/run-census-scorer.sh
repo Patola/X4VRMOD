@@ -2330,6 +2330,17 @@ absent "cpu fix: cards turned -> no FAIL" /tmp/census-fx-ok.log "FAIL .*facing c
 absent "cpu fix: GPU patches not asked -> no vertex FAIL" /tmp/census-fx-ok.log "FAIL .*lack IN_VERTEXLOCATION_POSITION"
 { fbase; printf '%s\n' "$fxzero"; } > /tmp/census-fx-zero.log
 want "cpu fix: in flight, a fixing arm, none turned -> FAIL" /tmp/census-fx-zero.log "FAIL|  - " "no card was turned (none learned"
+for f in '"facing cpu drift %s (%s): the cards in the world against the stretch'"'"'s "' \
+         '"facing cpu cost %s: %llu submit(s) with X4'"'"'s cards, mean %.1f us, max %.1f us, "' \
+         '"facing cpu %s: K removed %llu draw(s) of learned cards — DIAGNOSTIC"'; do
+    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "cpu fix: the layer still prints $f" \
+        || bad "cpu fix: the layer's format moved: $f"
+done
+fxd='[  99900.009] layer   facing cpu drift final (the fix): the cards in the world against the stretch'"'"'s first draw, by head-look moved — <2 deg: 10 draw(s), turn 0.01 (max 0.02), direction 0.000 (max 0.001)'
+fxc='[  99900.010] layer   facing cpu cost final: 9000 submit(s) with X4'"'"'s cards, mean 12.0 us, max 80.0 us, total 108.0 ms'
+{ fbase; printf '%s\n' "$fxok" "$fxd" "$fxc"; } > /tmp/census-fx-drift.log
+want "cpu fix: drift said" /tmp/census-fx-drift.log facing "cpu drift final (the fix): the cards in the world"
+want "cpu fix: cost said" /tmp/census-fx-drift.log facing "cpu cost final: 9000 submit(s) with X4's cards, mean 12.0 us"
 
 # Whose field of view is declared, and the runtime's eyes (issue #3, 2026-11-25).
 for f in '"xr: a field of view of our own is %s (fovMutable)"' '"NOT allowed: the runtime'"'"'s own has to be declared"'; do
