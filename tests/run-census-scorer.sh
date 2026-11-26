@@ -2369,6 +2369,7 @@ for f in '"fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(
          '"fog smoke: phase #%llu — %s, the smoke, nothing sharper than "' \
          '"fog probe: X4'"'"'s grid is %.0fx%.0fx%.0f (was %.0fx%.0fx%.0f)"' \
          '"fog smoke %s: frame time by phase — %s"' \
+         '"fog smoke %s: its knobs as last published — %s density %.2f, glow %.2f, "' \
          '"fog probe %s: where each blend'"'"'s volume was built — its own command "' \
          '"fog smoke: WARNING — the walk'"'"'s pipeline layout has no set of the "' \
          '"fog smoke: X4'"'"'s volume_walk (%zu bytes) left as X4'"'"'s — the smoke "'; do
@@ -2421,6 +2422,14 @@ want "fog smoke: A/B asked, no phase -> FAIL" /tmp/census-fs-ab-none.log "FAIL| 
 { abase; printf '%s\n' "$fsp0" '[  99800.040] layer   fog smoke: WARNING — the walk'"'"'s pipeline layout has no set of the layer'"'"'s (not extended): its block is unbound'; } > /tmp/census-fs-ab-unbound.log
 want "fog smoke: walk layout not extended -> FAIL" /tmp/census-fs-ab-unbound.log "FAIL|  - " "without the layer's set"
 absent "fog smoke: no A/B asked -> no phase FAIL" /tmp/census-fs-ok.log "FAIL .*no phase was drawn"
+# After take 485: the smoke installed with density 0 (no A/B) -> FAIL; density 1 -> none.
+fskn0='[  99900.040] layer   fog smoke final: its knobs as last published —  density 0.00, glow 0.00, size 0.00, sharpness 0.00, ends at 0 m (0: 2500)'
+fskn1='[  99900.040] layer   fog smoke final: its knobs as last published —  density 1.00, glow 1.00, size 1.00, sharpness 1.00, ends at 0 m (0: 2500)'
+{ sed 's/env: run = /env: run = X4VR_FOG_PROBE=smoke /' "$BASE"; printf '%s\n' "$farm" "$fsm" "$fpok" "$fskn0"; } > /tmp/census-fs-k0.log
+want "fog smoke: density 0 published -> FAIL" /tmp/census-fs-k0.log "FAIL|  - " "density as published was 0"
+{ sed 's/env: run = /env: run = X4VR_FOG_PROBE=smoke /' "$BASE"; printf '%s\n' "$farm" "$fsm" "$fpok" "$fskn1"; } > /tmp/census-fs-k1.log
+want "fog smoke: knobs said" /tmp/census-fs-k1.log fogsmoke "knobs: density 1.00, glow 1.00"
+absent "fog smoke: density 1 -> no FAIL" /tmp/census-fs-k1.log "FAIL .*fog smoke"
 # After take 481: phases A and B (the smoke smaller), and X4's grid as it changes.
 { abase; printf '%s\n' "$fsp2" "$fsa1" "$fsb2" "$fsg1" "$fsg2"; } > /tmp/census-fs-ab2.log
 want "fog smoke: A/B phases V, A, B said" /tmp/census-fs-ab2.log fogsmoke "phases: #2 V, #3 A, #4 B"

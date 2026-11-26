@@ -232,8 +232,28 @@ int main() {
            faces_bad);
     printf("WORLD_UP_CHECKED=%d WORLD_UP_BAD=%d WORLD_UP_WORST=%.2e\n", world_checked, world_bad,
            world_worst);
+    // The smoke's knobs survive the per-frame rotation write (take 485: pose_set_euler
+    // cleared them, so a run without the A/B had no smoke); the identity is the smoke as
+    // built.
+    int knobs_bad = 0;
+    {
+        x4vr::PoseBlock pb = x4vr::pose_identity();
+        for (int k = 0; k < 4; k++)
+            if (pb.fog[k] != 1.0f || pb.fog2[k] != 0.0f)
+                knobs_bad++;
+        const float f[4] = {0.f, 0.7f, 1.f, 0.6667f}, f2[4] = {600.f, 0.f, 0.f, 0.f};
+        for (int k = 0; k < 4; k++) {
+            pb.fog[k] = f[k];
+            pb.fog2[k] = f2[k];
+        }
+        x4vr::pose_set_euler(pb, 12.f, -7.f, 3.f);
+        for (int k = 0; k < 4; k++)
+            if (pb.fog[k] != f[k] || pb.fog2[k] != f2[k])
+                knobs_bad++;
+    }
+    printf("SMOKE_KNOBS_BAD=%d\n", knobs_bad);
     const bool pass = bad == 0 && refused == 0 && up_bad == 0 && faces_bad == 0 &&
-                      world_bad == 0 && world_checked > 0 &&
+                      world_bad == 0 && world_checked > 0 && knobs_bad == 0 &&
                       ship_checked > 0 && ctrl_runs > 0 && ctrl_seen == ctrl_runs && checked > 0;
     printf(pass ? "all passed\n" : "FAIL\n");
     return pass ? 0 : 1;

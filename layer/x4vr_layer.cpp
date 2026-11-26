@@ -2247,6 +2247,10 @@ static bool fog_ab() {
 constexpr float kFogSharper = 1.f / 1.5f; // B: 1 column where A keeps 1.5, edges 0.44 as soft
 constexpr float kFogNearFar = 600.f;      // with the cards fixed, B's smoke ends here, m
 std::atomic<int> g_fog_arm{1}; // 0 V, 1 A, 2 B
+// The smoke's knobs as last published to the GPU (fog x..w, fog2 x), for the log (after
+// take 485: zeroed every frame, the smoke was invisible and nothing said so).
+std::atomic<float> g_fog_pub[5] = {};
+std::atomic<bool> g_fog_pub_seen{false};
 std::unordered_set<VkPipeline> &g_fog_probe_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
 std::unordered_map<VkCommandBuffer, bool> &g_fog_probe_cb =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
@@ -5506,6 +5510,12 @@ void shader_knob_report(const char *when) {
                  "buffer: %s; an earlier one of its submit: %s; an earlier submit: %s; %llu "
                  "blend(s) recorded before a dispatch of their own buffer",
                  when, w0, w1, w2, (unsigned long long)fs.after);
+        if (fog_smoke_on())
+            X4VR_LOG("fog smoke %s: its knobs as last published — %s density %.2f, glow %.2f, "
+                     "size %.2f, sharpness %.2f, ends at %.0f m (0: %.0f)",
+                     when, g_fog_pub_seen.load() ? "" : "(none published yet)",
+                     g_fog_pub[0].load(), g_fog_pub[1].load(), g_fog_pub[2].load(),
+                     g_fog_pub[3].load(), g_fog_pub[4].load(), fog_smoke_params()[18]);
         if (fog_ab()) {
             // What the smoke costs against X4's cards: each phase's frame times.
             std::string row;
@@ -10567,6 +10577,10 @@ void pose_publish(VkCommandBuffer cb) {
     }
     g_pose.pub_frame = now;
     memcpy(g_pose.host + g_pose.stride * it->second, src, sizeof(*src));
+    for (int k = 0; k < 4; k++)
+        g_fog_pub[k].store(src->fog[k], std::memory_order_relaxed);
+    g_fog_pub[4].store(src->fog2[0], std::memory_order_relaxed);
+    g_fog_pub_seen.store(true, std::memory_order_relaxed);
     g_pose.region_frame[it->second] = now;
 }
 

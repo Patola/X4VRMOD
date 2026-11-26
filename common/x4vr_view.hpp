@@ -562,8 +562,12 @@ constexpr float kIpdStep = 0.00005f;
 // the shader would then have to be robust to.
 inline void pose_set_euler(PoseBlock &p, float yaw_deg, float pitch_deg,
                            float roll_deg) {
-    float look[16];
+    float look[16], fog[4], fog2[4];
     std::memcpy(look, p.look, sizeof look); // not this function's: kept
+    // Nor the smoke's knobs (take 485: cleared here every frame, the smoke had density 0
+    // in every run without X4VR_FOG_AB, whose phases set them again after this call).
+    std::memcpy(fog, p.fog, sizeof fog);
+    std::memcpy(fog2, p.fog2, sizeof fog2);
     const float d = 0.01745329251994330f;
     const float cy = std::cos(yaw_deg * d), sy = std::sin(yaw_deg * d);
     const float cp = std::cos(pitch_deg * d), sp = std::sin(pitch_deg * d);
@@ -598,6 +602,8 @@ inline void pose_set_euler(PoseBlock &p, float yaw_deg, float pitch_deg,
     for (int i = 0; i < 16; i++)
         p.r_prev[i] = p.r[i];
     std::memcpy(p.look, look, sizeof look);
+    std::memcpy(p.fog, fog, sizeof fog);
+    std::memcpy(p.fog2, fog2, sizeof fog2);
 }
 
 // The look slot from X4's free-look angles, in the head-look's convention (yaw

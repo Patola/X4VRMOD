@@ -5682,6 +5682,17 @@ def main(path):
               + (" ..." if len(sphases) > 16 else ""))
     for ln in re.findall(r"fog smoke final: (frame time by phase .*)$", text, re.M)[-1:]:
         print(f"fogsmoke {ln}")
+    # After take 485 (the smoke's knobs zeroed every frame: installed, and invisible).
+    knobs = re.findall(r"fog smoke final: its knobs as last published — (.*?)density ([\d.]+), glow "
+                       r"([\d.]+), size ([\d.]+), sharpness ([\d.]+), ends at (\d+) m", text)
+    if knobs:
+        kn = knobs[-1]
+        print(f"fogsmoke knobs: density {kn[1]}, glow {kn[2]}, size {kn[3]}, sharpness {kn[4]}, "
+              f"ends at {kn[5]} m")
+        if (replaced and not re.search(r"\bX4VR_FOG_AB=recentre\b", run or "")
+                and "headlook write: ARMED" in text and float(kn[1]) == 0.0):
+            fails.append("fog smoke: installed, and its density as published was 0 -- the smoke "
+                         "was invisible")
     grids = re.findall(r"fog probe: X4's grid is (\d+x\d+x\d+) \(was", text)
     if grids:
         print("fogprobe grids: " + " -> ".join(grids[:8]) + (" ..." if len(grids) > 8 else ""))
