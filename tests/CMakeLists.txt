@@ -221,6 +221,10 @@ add_executable(x4vr_test_lua_scan lua_scan.cpp)
 add_executable(x4vr_test_guard_budget guard_budget.cpp)
 add_executable(x4vr_test_declared_field declared_field.cpp)
 
+# X4's billboards turned to the eye on the CPU (after take 469): x4vr_billboard.hpp's
+# rewrite against what X4 draws looking straight at the card. Self-checking.
+add_executable(x4vr_test_billboard_rewrite billboard_rewrite.cpp)
+
 # The IsHUDActive teardown guard's decoder (X4's exit crash was ours). Checks
 # the refusals and, when X4 is installed, the real prologue. Self-checking.
 add_executable(x4vr_test_riprel riprel.cpp)

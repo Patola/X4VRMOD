@@ -2313,6 +2313,24 @@ absent "compare: three arms -> no FAIL" /tmp/census-cx-ok.log "FAIL .*the compar
 { xbase; printf '%s\n' "$fpa1" "$fps"; } > /tmp/census-cx-two.log
 want "compare: two arms -> FAIL" /tmp/census-cx-two.log "FAIL|  - " "the comparison, and the three arms"
 
+# The fix on the CPU (after take 469).
+for f in '"facing cpu %s: %s — %llu draw(s) of X4'"'"'s cards turned to the eye; %llu seen "' \
+         '"before their turn was learned, %llu refused, %llu not X4'"'"'s (WVP != VP*W), %llu "'; do
+    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "cpu fix: the layer still prints $f" \
+        || bad "cpu fix: the layer's format moved: $f"
+done
+fxok='[  99900.008] layer   facing cpu final: A/B by recentre — 80000 draw(s) of X4'"'"'s cards turned to the eye; 900 seen before their turn was learned, 0 refused, 3 not X4'"'"'s (WVP != VP*W), 40 out of flight, 0 past the table; 2400 turn(s) learned of 2700 kept'
+fxzero='[  99900.008] layer   facing cpu final: A/B by recentre — 0 draw(s) of X4'"'"'s cards turned to the eye; 900 seen before their turn was learned, 0 refused, 3 not X4'"'"'s (WVP != VP*W), 40 out of flight, 0 past the table; 0 turn(s) learned of 2700 kept'
+fpb2='[  99860.000] layer   facing: phase #2 — B, the billboards face the ship (X4VR_FACING_AB=recentre)'
+fcab0='[  99900.000] layer   facing final: A/B by recentre — 0 vertex module(s) turn X4'"'"'s billboards to the ship, 0 input read(s) turned, 0 partial left'
+fbase() { sed 's/env: run = /env: run = X4VR_FACING=1 X4VR_FACING_AB=recentre /' "$BASE"; printf '%s\n' "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$farm" "$fcab0" "$fpa1" "$fpb2"; }
+{ fbase; printf '%s\n' "$fxok"; } > /tmp/census-fx-ok.log
+want "cpu fix: counts said" /tmp/census-fx-ok.log facing "cpu A/B by recentre: 80000 draw(s) of X4's cards turned to the eye"
+absent "cpu fix: cards turned -> no FAIL" /tmp/census-fx-ok.log "FAIL .*facing cpu"
+absent "cpu fix: GPU patches not asked -> no vertex FAIL" /tmp/census-fx-ok.log "FAIL .*lack IN_VERTEXLOCATION_POSITION"
+{ fbase; printf '%s\n' "$fxzero"; } > /tmp/census-fx-zero.log
+want "cpu fix: in flight, a fixing arm, none turned -> FAIL" /tmp/census-fx-zero.log "FAIL|  - " "no card was turned (none learned"
+
 # Whose field of view is declared, and the runtime's eyes (issue #3, 2026-11-25).
 for f in '"xr: a field of view of our own is %s (fovMutable)"' '"NOT allowed: the runtime'"'"'s own has to be declared"'; do
     grep -qF "$f" common/x4vr_xr.hpp && ok "declfield: the runtime's answer still reads $f" \

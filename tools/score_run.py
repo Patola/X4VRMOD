@@ -5485,7 +5485,11 @@ def main(path):
         mode, nmod, ninp, npart = fc[-1]
         print(f"facing  {mode}: {nmod} vertex module(s) turn X4's billboards to the ship, {ninp} "
               f"input read(s), {npart} partial")
-        if not mode.startswith("OFF") and int(nmod) == 0 and "pose: " in text:
+        # Since the fix moved to the CPU (after take 469) the GPU patches run only when
+        # asked for.
+        gpu_asked = ("facing cpu " not in text
+                     or bool(re.search(r"\bX4VR_FACING_GPU=1\b", run or "")))
+        if not mode.startswith("OFF") and int(nmod) == 0 and "pose: " in text and gpu_asked:
             fails.append("facing: on, and no vertex module took the patch — X4's modules lack "
                          "IN_VERTEXLOCATION_POSITION, M_view or M_world by name, so the clouds still "
                          "turn with the head")
@@ -5548,6 +5552,24 @@ def main(path):
     elif (collapse or compare) and census_build and not cpipes:
         fails.append("facing census: the collapse diagnostic ran and the census printed nothing")
 
+    # The fix on the CPU (after take 469): X4's cards, learned by their turn staying put
+    # while the head-look moves, turned to the eye in X4's own constants at submit.
+    fx = re.findall(r"facing cpu (?:first present|periodic|final): (ON|A/B by recentre) — (\d+) draw\(s\) "
+                    r"of X4's cards turned to the eye; (\d+) seen before their turn was learned, (\d+) "
+                    r"refused, (\d+) not X4's \(WVP != VP\*W\), (\d+) out of flight, (\d+) past the "
+                    r"table; (\d+) turn\(s\) learned of (\d+) kept", text)
+    if fx:
+        md, rw, ul, rf, mm, nf, pt, ln, kp = fx[-1]
+        print(f"facing  cpu {md}: {rw} draw(s) of X4's cards turned to the eye; {ul} before learned, "
+              f"{rf} refused, {mm} not X4's, {nf} out of flight, {pt} past the table; {ln} turn(s) "
+              f"learned of {kp}")
+        fixing = md == "ON" or "B" in {k for _, k in fphases}
+        flying = "headlook write: ARMED" in text
+        if fixing and flying and int(rw) == 0:
+            fails.append("facing cpu: on and in flight, and no card was turned"
+                         + (f" ({ln} turn(s) learned)" if int(ln) else " (none learned: the head-look "
+                            "never moved, or X4's cards never reached the census)"))
+
     # X4's fog blobs (after take 466): the froxel pass, its blobs' frames turned.
     ff = re.findall(r"facing fog (?:periodic|final): (\d+) froxel module\(s\) turn X4's fog blobs to "
                     r"the ship \((\d+) product\(s\)\), (\d+) refused", text)
@@ -5555,7 +5577,10 @@ def main(path):
         nfm, nfp, nfr = map(int, ff[-1])
         print(f"facing  fog blobs: {nfm} froxel module(s) patched, {nfp} product(s), {nfr} refused")
         flying = "inject  headlook write: ARMED" in text or "headlook write: ARMED" in text
-        if fc and not fc[-1][0].startswith("OFF") and nfm == 0 and "pose: " in text and flying:
+        gpu_asked = ("facing cpu " not in text
+                     or bool(re.search(r"\bX4VR_FACING_GPU=1\b", run or "")))
+        if (fc and not fc[-1][0].startswith("OFF") and nfm == 0 and "pose: " in text and flying
+                and gpu_asked):
             fails.append("facing: on, and X4's froxel fog pass was not patched"
                          + (f" ({nfr} refused — the log says why)" if nfr else
                             " (none created, or its module lost M_offset / I_point_num)")

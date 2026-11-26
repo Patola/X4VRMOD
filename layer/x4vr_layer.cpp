@@ -45,6 +45,7 @@
 #include "../common/x4vr_dumpspec.hpp"
 #include "../common/x4vr_png.hpp"
 #include "../common/x4vr_sbs.hpp"
+#include "../common/x4vr_billboard.hpp"
 #include "../common/x4vr_spirv.hpp"
 #include "../common/x4vr_guard.hpp"
 #include "../common/x4vr_field.hpp"
@@ -2161,6 +2162,20 @@ float *slot_host_ptr(const ViewSlot &s) {
 bool facing_collapse(); // beside the other facing switches
 bool facing_compare();
 bool facing_census() { return facing_collapse() || facing_compare(); }
+bool facing_enabled(); // beside the other facing switches
+bool facing_ab();
+// The tracking of X4's near/far-faded draws: for the census, or for the fix on the CPU.
+bool fade_tracking() { return facing_census() || facing_enabled(); }
+// The GPU patches (cards in the vertex stage, fog blobs in the froxel pass), only with
+// X4VR_FACING_GPU=1: takes 465-469, they missed the third of X4's cards that it turns
+// with the camera by a tilt of their own, which no single frame can tell. The fix is
+// on the CPU now (face_eye, below).
+bool facing_gpu() {
+    static const bool on = x4vr::env_on("X4VR_FACING_GPU", false);
+    return on;
+}
+// Set per headset frame: this frame's arm turns X4's cards (a fixing arm, in flight).
+std::atomic<bool> g_fix_active{false};
 // The head-look X4 was given, for the census's signatures (set by pose_drive_residual).
 std::atomic<float> g_census_yaw{0.f}, g_census_pitch{0.f};
 std::atomic<bool> g_census_look_valid{false};
@@ -2170,6 +2185,9 @@ std::unordered_set<VkShaderModule> &g_fade_modules =
 std::unordered_set<VkPipeline> &g_fade_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
 std::unordered_map<VkCommandBuffer, bool> &g_census_fade =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
+// The recording thread's last graphics bind, so a draw needs no lock to know.
+thread_local VkCommandBuffer tl_fade_cb = VK_NULL_HANDLE;
+thread_local bool tl_fade = false;
 // Under g_track.mu: each recording's current object slot, and its fade draws to read.
 struct CensusDraw {
     Tracking::ObjSlot obj;
@@ -2308,27 +2326,156 @@ static void census_classify(const float *o, const float *c) {
         g_census.samples[k].push_back(b);
     }
 }
-// At submit, under g_track.mu: every fade draw the submitted recordings made.
+// **The fix, on the CPU** (after take 469). A card X4 turns with its camera keeps
+// Q = V*W while the head-look moves; a card fixed in the world, or to the ship, cannot.
+// So each draw's Q, rounded, is learned once it has been seen unchanged over 1.5 deg of
+// head-look, and from then on, in a fixing arm, its world matrix is turned to the eye
+// (x4vr::billboard::face_eye) in X4's own constants before the GPU reads them. A card
+// first seen with the head still is X4's own until the head moves.
+struct FixLearn {
+    float yaw = 0.f, pitch = 0.f;
+    uint64_t last = 0;
+    bool learned = false;
+};
+std::unordered_map<uint64_t, FixLearn> &g_fix_learn =
+    x4vr::immortal<std::unordered_map<uint64_t, FixLearn>>();
+struct FixStats {
+    uint64_t rewritten = 0, unlearned = 0, refused = 0, mismatch = 0, noflight = 0, full = 0;
+};
+FixStats g_fix_stats;
+uint64_t g_fix_submits = 1;
+
+// X4's world-view-projection is its view-projection times its world matrix: what the
+// constants say is this draw's, not a slot's leftover.
+static bool fade_consistent(const float *o, const float *c) {
+    const float *wvp = o, *w = o + 16, *vp = c + 7 * 16;
+    double err = 0.0, mag = 0.0;
+    for (int col = 0; col < 4; col++)
+        for (int row = 0; row < 4; row++) {
+            double acc = 0.0;
+            for (int k = 0; k < 4; k++)
+                acc += (double)vp[k * 4 + row] * w[col * 4 + k];
+            err = std::max(err, std::fabs(acc - wvp[col * 4 + row]));
+            mag = std::max(mag, std::fabs((double)wvp[col * 4 + row]));
+        }
+    return mag > 0.0 && err <= 2e-2 * mag;
+}
+// Q = mat3(V) * mat3(W), each column normalised and rounded, with the columns' scales.
+static uint64_t fade_signature(const float *o, const float *c) {
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&h](int64_t v) {
+        for (int b = 0; b < 8; b++) {
+            h ^= (uint64_t)(v >> (8 * b)) & 0xffu;
+            h *= 1099511628211ull;
+        }
+    };
+    for (int j = 0; j < 3; j++) {
+        double q[3], len = 0.0;
+        for (int i = 0; i < 3; i++) {
+            double acc = 0.0;
+            for (int k = 0; k < 3; k++)
+                acc += (double)c[k * 4 + i] * o[16 + j * 4 + k];
+            q[i] = acc;
+            len += acc * acc;
+        }
+        len = std::sqrt(len);
+        for (int i = 0; i < 3; i++)
+            mix((int64_t)std::llround((len > 0.0 ? q[i] / len : 0.0) * 200.0));
+        mix((int64_t)std::llround(std::log(std::max(len, 1e-9)) * 100.0));
+    }
+    return h;
+}
+static void fix_draw(float *o, const float *c, bool rewrite,
+                     std::unordered_set<const float *> &done) {
+    if (done.count(o))
+        return; // drawn twice from one slot: turned once
+    if (!fade_consistent(o, c)) {
+        g_fix_stats.mismatch++;
+        return;
+    }
+    if (!g_census_look_valid.load(std::memory_order_relaxed)) {
+        g_fix_stats.noflight++;
+        return;
+    }
+    const float yaw = g_census_yaw.load(std::memory_order_relaxed),
+                pitch = g_census_pitch.load(std::memory_order_relaxed);
+    const uint64_t h = fade_signature(o, c);
+    auto it = g_fix_learn.find(h);
+    if (it == g_fix_learn.end()) {
+        if (g_fix_learn.size() >= 200000) {
+            g_fix_stats.full++;
+            return;
+        }
+        it = g_fix_learn.emplace(h, FixLearn{yaw, pitch, g_fix_submits, false}).first;
+    }
+    FixLearn &e = it->second;
+    e.last = g_fix_submits;
+    if (!e.learned && (std::fabs(yaw - e.yaw) >= 1.5f || std::fabs(pitch - e.pitch) >= 1.5f))
+        e.learned = true;
+    if (!e.learned) {
+        g_fix_stats.unlearned++;
+        return;
+    }
+    if (!rewrite)
+        return;
+    float up[3];
+    x4vr::billboard::ship_up(yaw, pitch, up);
+    if (!x4vr::billboard::face_eye(c, c + 7 * 16, o + 16, o, up)) {
+        g_fix_stats.refused++;
+        return;
+    }
+    done.insert(o);
+    g_fix_stats.rewritten++;
+}
+
+// At submit, under g_track.mu: every fade draw the submitted recordings made -- the
+// census reads them as X4 wrote them, then the fix turns the learned cards.
 static void census_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) {
     std::lock_guard<std::mutex> lock(g_track.mu);
+    const bool census = facing_census(), fixing = facing_enabled();
+    const bool rewrite = fixing && g_fix_active.load(std::memory_order_relaxed);
+    std::unordered_set<const float *> done;
+    if (fixing && (++g_fix_submits & 1023) == 0)
+        for (auto it = g_fix_learn.begin(); it != g_fix_learn.end();)
+            it = !it->second.learned && it->second.last + 4096 < g_fix_submits
+                     ? g_fix_learn.erase(it)
+                     : std::next(it);
     for (uint32_t i = 0; i < submitCount; i++)
         for (uint32_t j = 0; j < submits[i].commandBufferCount; j++) {
             auto it = g_census_pending.find(submits[i].pCommandBuffers[j]);
             if (it == g_census_pending.end())
                 continue;
             for (const CensusDraw &d : it->second) {
-                g_census.draws++;
-                const float *o = obj_slot_host_ptr(d.obj);
+                float *o = obj_slot_host_ptr(d.obj);
                 const float *c = d.cam.buffer ? slot_host_ptr(d.cam) : nullptr;
-                if (!d.cam.buffer)
-                    g_census.nocam++;
-                else if (!o || !c)
-                    g_census.unread++;
-                else
-                    census_classify(o, c);
+                if (census) {
+                    g_census.draws++;
+                    if (!d.cam.buffer)
+                        g_census.nocam++;
+                    else if (!o || !c)
+                        g_census.unread++;
+                    else
+                        census_classify(o, c);
+                }
+                if (fixing && o && c)
+                    fix_draw(o, c, rewrite, done);
             }
             it->second.clear();
         }
+}
+static void fix_report(const char *when) {
+    std::lock_guard<std::mutex> lock(g_track.mu);
+    size_t learned = 0;
+    for (const auto &[h, e] : g_fix_learn)
+        learned += e.learned;
+    X4VR_LOG("facing cpu %s: %s — %llu draw(s) of X4's cards turned to the eye; %llu seen "
+             "before their turn was learned, %llu refused, %llu not X4's (WVP != VP*W), %llu "
+             "out of flight, %llu past the table; %zu turn(s) learned of %zu kept",
+             when, facing_ab() ? "A/B by recentre" : "ON",
+             (unsigned long long)g_fix_stats.rewritten, (unsigned long long)g_fix_stats.unlearned,
+             (unsigned long long)g_fix_stats.refused, (unsigned long long)g_fix_stats.mismatch,
+             (unsigned long long)g_fix_stats.noflight, (unsigned long long)g_fix_stats.full,
+             learned, g_fix_learn.size());
 }
 static void census_report(const char *when) {
     std::lock_guard<std::mutex> lock(g_track.mu);
@@ -2422,17 +2569,24 @@ void credit_draw(VkCommandBuffer cb) {
         on_canvas = cc != g_cb_canvas.end() && cc->second;
     }
     bool census_fade = false;
-    if (facing_census()) {
-        std::lock_guard<std::mutex> lock(g_census_mu);
-        auto f = g_census_fade.find(cb);
-        census_fade = f != g_census_fade.end() && f->second;
+    if (fade_tracking()) {
+        // The recording thread binds and draws: its own last bind answers without a lock.
+        if (tl_fade_cb == cb) {
+            census_fade = tl_fade;
+        } else {
+            std::lock_guard<std::mutex> lock(g_census_mu);
+            auto f = g_census_fade.find(cb);
+            census_fade = f != g_census_fade.end() && f->second;
+        }
     }
     std::lock_guard<std::mutex> lock(g_track.mu);
     if (census_fade) {
         auto ob = g_census_obj.find(cb);
         auto vb = g_track.bound.find(cb);
         auto &pend = g_census_pending[cb];
-        if (ob != g_census_obj.end() && pend.size() < 64)
+        // Every card of a pass must reach the fix; the cap only bounds a recording
+        // that is never submitted.
+        if (ob != g_census_obj.end() && pend.size() < 4096)
             pend.push_back({ob->second, vb != g_track.bound.end() && !vb->second.empty()
                                             ? vb->second.front()
                                             : ViewSlot{VK_NULL_HANDLE, 0}});
@@ -3177,7 +3331,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_UpdateDescriptorSets(
             // the instrument is on. vkUpdateDescriptorSets is rare compared
             // with draws, so this costs nothing per frame -- unlike the bind
             // hook, which is per draw and stays filtered.
-            if ((want_matrices() || facing_census()) && bi.range != kViewBlockRange &&
+            if ((want_matrices() || fade_tracking()) && bi.range != kViewBlockRange &&
                 bi.range != VK_WHOLE_SIZE) {
                 // Replaces, never appends: see the comment on obj_sets. A
                 // descriptorCount>1 write fills consecutive bindings from
@@ -3251,7 +3405,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindDescriptorSets(
             }
         }
     }
-    if (facing_census())
+    if (fade_tracking())
         for (uint32_t i = 0; i < setCount; i++) {
             if (firstSet + i != kObjectSet)
                 continue;
@@ -4640,6 +4794,8 @@ void shader_knob_report(const char *when) {
              "product(s)), %u refused",
              when, g_facing_fog_modules.load(), g_facing_fog_products.load(),
              g_facing_fog_refused.load());
+    if (facing_enabled())
+        fix_report(when);
     if (facing_census()) {
         {
             std::lock_guard<std::mutex> lock(g_census_mu);
@@ -7142,7 +7298,7 @@ VkResult create_shader_module_inner(
         // is are changed. Rides the patched variant, as the pose does: not in the
         // shadow or UI passes.
         x4vr::spv::FacingReport frep;
-        const bool facing = facing_enabled() &&
+        const bool facing = facing_enabled() && facing_gpu() &&
                             x4vr::spv::patch_vertex_facing_body(pc, kCameraSet, kCameraBinding,
                                                                  kObjectSet, kObjectBinding,
                                                                  pose_set_index(), 0, &frep);
@@ -7150,7 +7306,7 @@ VkResult create_shader_module_inner(
         // a reason in every one would mean X4's modules lack a name the patch reads.
         // Not those without the camera block or the object matrix: a billboard needs
         // both, and take 463's only refusal lines named that harmless case.
-        if (facing_enabled() && !facing && strcmp(frep.why, "no vertex entry") != 0 &&
+        if (facing_enabled() && facing_gpu() && !facing && strcmp(frep.why, "no vertex entry") != 0 &&
             strcmp(frep.why, "no M_world in the object block") != 0 &&
             strcmp(frep.why, "no M_view in the camera block") != 0) {
             static uint32_t said = 0;
@@ -7987,7 +8143,8 @@ std::vector<uint32_t> fsr_patch_module(const VkShaderModuleCreateInfo *ci) {
 // module as X4 wrote it. Only a module naming M_offset is tried: one of ~400.
 std::vector<uint32_t> fogpoint_patch_module(const VkShaderModuleCreateInfo *ci) {
     std::vector<uint32_t> code;
-    if (!g_active || !facing_enabled() || !pose_active() || !ci || ci->codeSize < 20)
+    if (!g_active || !facing_enabled() || !facing_gpu() || !pose_active() || !ci ||
+        ci->codeSize < 20)
         return code;
     static const char kName[] = "M_offset";
     if (!memmem(ci->pCode, ci->codeSize, kName, sizeof kName - 1))
@@ -8712,7 +8869,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         ffx_note_module(ci, *out);
         // The census: a vertex module of X4's near/far-faded effects.
         static const char kFade[] = "U_camera_fade_range_near_start";
-        if (facing_census() && ci->codeSize >= 20 &&
+        if (fade_tracking() && ci->codeSize >= 20 &&
             memmem(ci->pCode, ci->codeSize, kFade, sizeof kFade - 1)) {
             bool vertex = false;
             const uint32_t *w = ci->pCode;
@@ -9291,6 +9448,7 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             }
         }
         face = face && (arm == 1 || arm == 3 || arm == 4);
+        g_fix_active.store(face, std::memory_order_relaxed);
         x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face, arm == 4);
         // K only in flight (X4's camera angles valid): a start menu stays a menu.
         if (facing_enabled() && arm == 2 && cmd_valid)
@@ -10284,7 +10442,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     auto publish_canvas = [&](VkResult r) {
         if (r != VK_SUCCESS)
             return;
-        if (facing_census()) {
+        if (fade_tracking()) {
             std::lock_guard<std::mutex> cl(g_census_mu);
             for (uint32_t i = 0; i < count; i++)
                 for (uint32_t k = 0; out[i] != VK_NULL_HANDLE && k < ci_app[i].stageCount; k++)
@@ -11584,7 +11742,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
     if (dump_after_rp() >= 0 && probe_is_headless())
         probe_collect(d, queue, false);
     after_rp_headless_frame();
-    if (facing_census())
+    if (fade_tracking())
         census_at_submit(submitCount, submits);
     patch_view_before_submit();
     // Task #59: publish this frame's pose into the region each submitted
@@ -14477,9 +14635,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
 VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
                                                 VkPipelineBindPoint bp,
                                                 VkPipeline p) {
-    if (bp == VK_PIPELINE_BIND_POINT_GRAPHICS && facing_census()) {
+    if (bp == VK_PIPELINE_BIND_POINT_GRAPHICS && fade_tracking()) {
         std::lock_guard<std::mutex> lock(g_census_mu);
-        g_census_fade[cb] = g_fade_pipes.count(p) != 0;
+        const bool f = g_fade_pipes.count(p) != 0;
+        g_census_fade[cb] = f;
+        tl_fade_cb = cb;
+        tl_fade = f;
     }
     // Task #82, before anything else so an early return cannot skip it.
     if (bp == VK_PIPELINE_BIND_POINT_GRAPHICS) {
