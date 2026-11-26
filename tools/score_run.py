@@ -5611,7 +5611,37 @@ def main(path):
     # X4's nebula cards removed (X4VR_FOG_CARDS=off, after take 474).
     fco = re.findall(r"fog cards (?:first present|final): off — (\d+) draw\(s\) of X4's camera-turned cards "
                      r"removed \(farther than 50 m\), (\d+) kept as nearer, (\d+) seen before learned", text)
-    if fco:
+    # After take 482 (the radar's ellipse and axes went with the cards; Patola: filter "by
+    # category"): removed by their material -- X4's nebula materials fade in at 500 m and
+    # out by 3 km -- and, where the material was unread, by a stopgap.
+    fcm = re.findall(r"fog cards (?:first present|final): off — (\d+) draw\(s\) of X4's nebula material "
+                     r"removed \(fading in at 500 m, out by 3 km\), (\d+) of other fading materials left "
+                     r"alone, (\d+) with the material unread \(fade blocks: (\d+) modules found, (\d+) "
+                     r"not\)", text)
+    fcs = re.findall(r"fog cards (?:first present|final): the stopgap where the material was unread — "
+                     r"(\d+) draw\(s\) of X4's camera-turned cards removed \(50 m to 6\.5 km, under 100 m "
+                     r"across\), (\d+) kept as nearer, (\d+) as farther, (\d+) as larger \(X4's radar "
+                     r"among them\), (\d+) seen before learned", text)
+    if fcm:
+        bym, other, unread, ffound, fnot = fcm[-1]
+        bys = fcs[-1][0] if fcs else "0"
+        print(f"fogcards off by material: {bym} draw(s) of X4's nebula material removed, {other} of "
+              f"other fading materials left alone, {unread} unread (fade blocks: {ffound} found, "
+              f"{fnot} not); the stopgap removed {bys}")
+        for ln in re.findall(r"fog cards final: (the fading materials drawn, .*)$", text, re.M)[-1:]:
+            print(f"fogcards {ln}")
+        if "headlook write: ARMED" in text:
+            if int(bym) == 0 and int(bys) == 0:
+                fails.append("fog cards: off, in flight, and no card was removed (X4 drew no "
+                             "nebula material, or none was read)")
+            elif int(bym) == 0:
+                fails.append(f"fog cards: off, and the cards' material was never read ({fnot} fade "
+                             f"module(s) without a block): the stopgap removed {bys} by distance, "
+                             f"which can take X4's radar and glows")
+        fco = []
+    if fcm:
+        pass
+    elif fco:
         cr, ck, cu = fco[-1]
         print(f"fogcards off: {cr} draw(s) of X4's camera-turned cards removed, {ck} nearer kept, "
               f"{cu} seen before learned")

@@ -2354,14 +2354,17 @@ want "cpu fix: the head-look check said" /tmp/census-fx-ship.log facing "cpu shi
 for f in '"fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(es), "' \
          '"fog probe: froxel dispatch %ux%ux%u, grid %.0fx%.0fx%.0f, range "' \
          '"fog volume: X4'"'"'s volume_base (%zu bytes) replaced by ours — the probe'"'"'s "' \
-         '"fog cards %s: off — %llu draw(s) of X4'"'"'s camera-turned cards removed "' \
+         '"fog cards %s: off — %llu draw(s) of X4'"'"'s nebula material removed (fading in "' \
+         '"fog cards %s: the fading materials drawn, by where they fade in and out "' \
+         '"fog cards %s: the stopgap where the material was unread — %llu draw(s) of "' \
+         '"fog cards: a fade module'"'"'s material %s set %u binding %u, fade "' \
          '"fog probe: X4'"'"'s light — sun (%.3g, %.3g, %.3g), ambient (%.3g, "' \
          '"fog probe %s: the blend against the camera that built the volume — %llu "' \
          '"fog probe %s: X4'"'"'s sun in the view against the world'"'"'s turned by the "' \
          '"fog volume: X4'"'"'s volume_base (%zu bytes) replaced by ours — the smoke: "' \
          '"fog smoke: X4'"'"'s volume_walk for %d medium(s) (%zu bytes) replaced by ours — "' \
          '"fog smoke: phase #%llu — V, X4'"'"'s own cards, no smoke "' \
-         '"fog smoke: phase #%llu — %s, the smoke at %.1fx its size "' \
+         '"fog smoke: phase #%llu — %s, the smoke, nothing sharper than "' \
          '"fog probe: X4'"'"'s grid is %.0fx%.0fx%.0f (was %.0fx%.0fx%.0f)"' \
          '"fog smoke %s: frame time by phase — %s"' \
          '"fog probe %s: where each blend'"'"'s volume was built — its own command "' \
@@ -2400,8 +2403,8 @@ fsp0='[  99800.100] layer   fog smoke: phase #0 — S, the smoke, no cards (X4VR
 fsp1='[  99810.100] layer   fog smoke: phase #1 — S+, the smoke 2.5x denser, no cards (X4VR_FOG_AB=recentre)'
 fsp2='[  99820.100] layer   fog smoke: phase #2 — V, X4'"'"'s own cards, no smoke (X4VR_FOG_AB=recentre)'
 fsft='[  99900.030] layer   fog smoke final: frame time by phase — V: median 10.40 ms (96.2 fps), p90 11.00, 3000 frames; S: median 10.60 ms (94.3 fps), p90 11.20, 3000 frames; S+: median 10.70 ms (93.5 fps), p90 11.30, 3000 frames'
-fsa1='[  99830.100] layer   fog smoke: phase #3 — A, the smoke at 1.0x its size (clouds 670 m), no cards (X4VR_FOG_AB=recentre)'
-fsb2='[  99840.100] layer   fog smoke: phase #4 — B, the smoke at 0.6x its size (clouds 402 m), no cards (X4VR_FOG_AB=recentre)'
+fsa1='[  99830.100] layer   fog smoke: phase #3 — A, the smoke, nothing sharper than 1.5 columns, no cards (X4VR_FOG_AB=recentre)'
+fsb2='[  99840.100] layer   fog smoke: phase #4 — B, the smoke, nothing sharper than 1.0 columns, no cards (X4VR_FOG_AB=recentre)'
 fsg1='[  99800.050] layer   fog probe: X4'"'"'s grid is 176x176x128 (was 0x0x0)'
 fsg2='[  99850.050] layer   fog probe: X4'"'"'s grid is 240x240x128 (was 176x176x128)'
 fswh='[  99900.031] layer   fog probe final: where each blend'"'"'s volume was built — its own command buffer: 9000 (9000 under 0.01 deg), mean 0.000 deg, max 0.00; an earlier one of its submit: 0 (0 under 0.01 deg), mean 0.000 deg, max 0.00; an earlier submit: 0 (0 under 0.01 deg), mean 0.000 deg, max 0.00; 0 blend(s) recorded before a dispatch of their own buffer'
@@ -2431,6 +2434,21 @@ absent "fog cards: removed -> no FAIL" /tmp/census-fc2-ok.log "FAIL .*fog cards"
 absent "fog cards: no facing asked -> no fixing FAIL" /tmp/census-fc2-ok.log "FAIL .*facing cpu"
 { cbase2; printf '%s\n' "$fczero"; } > /tmp/census-fc2-zero.log
 want "fog cards: off, in flight, none removed -> FAIL" /tmp/census-fc2-zero.log "FAIL|  - " "no card was removed"
+# After take 482: removal by the cards' material; a stopgap by distance where it was unread.
+fcm1='[  99900.021] layer   fog cards final: off — 5000 draw(s) of X4'"'"'s nebula material removed (fading in at 500 m, out by 3 km), 9000 of other fading materials left alone, 0 with the material unread (fade blocks: 80 modules found, 0 not) — DIAGNOSTIC'
+fcm1m='[  99900.021] layer   fog cards final: the fading materials drawn, by where they fade in and out — 500..3000 m: 5000 (nebula); 0.1..400 m: 7000; 0..35000 m: 2000'
+fcm1s='[  99900.021] layer   fog cards final: the stopgap where the material was unread — 0 draw(s) of X4'"'"'s camera-turned cards removed (50 m to 6.5 km, under 100 m across), 0 kept as nearer, 0 as farther, 0 as larger (X4'"'"'s radar among them), 300 seen before learned — DIAGNOSTIC'
+fcm2='[  99900.021] layer   fog cards final: off — 0 draw(s) of X4'"'"'s nebula material removed (fading in at 500 m, out by 3 km), 0 of other fading materials left alone, 9000 with the material unread (fade blocks: 0 modules found, 80 not) — DIAGNOSTIC'
+fcm2s='[  99900.021] layer   fog cards final: the stopgap where the material was unread — 4000 draw(s) of X4'"'"'s camera-turned cards removed (50 m to 6.5 km, under 100 m across), 40 kept as nearer, 900 as farther, 300 as larger (X4'"'"'s radar among them), 300 seen before learned — DIAGNOSTIC'
+fcm3s='[  99900.021] layer   fog cards final: the stopgap where the material was unread — 0 draw(s) of X4'"'"'s camera-turned cards removed (50 m to 6.5 km, under 100 m across), 40 kept as nearer, 900 as farther, 300 as larger (X4'"'"'s radar among them), 300 seen before learned — DIAGNOSTIC'
+{ cbase2; printf '%s\n' "$fcm1" "$fcm1m" "$fcm1s"; } > /tmp/census-fc4-ok.log
+want "fog cards: by material said" /tmp/census-fc4-ok.log fogcards "off by material: 5000 draw(s) of X4's nebula material removed, 9000 of other"
+want "fog cards: materials said" /tmp/census-fc4-ok.log fogcards "500..3000 m: 5000 (nebula); 0.1..400 m: 7000"
+absent "fog cards: by material -> no FAIL" /tmp/census-fc4-ok.log "FAIL .*fog cards"
+{ cbase2; printf '%s\n' "$fcm2" "$fcm2s"; } > /tmp/census-fc4-stop.log
+want "fog cards: material never read, stopgap -> FAIL" /tmp/census-fc4-stop.log "FAIL|  - " "material was never read"
+{ cbase2; printf '%s\n' "$fcm2" "$fcm3s"; } > /tmp/census-fc4-none.log
+want "fog cards: nothing removed either way -> FAIL" /tmp/census-fc4-none.log "FAIL|  - " "no card was removed"
 flkh='[  99900.002] layer   facing look final: 10 headset frame(s) with the head-look undone, 2 with X4'"'"'s camera angles not valid (identity); DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4'"'"'s own, S (cards turned to the ship) and H (billboards to the eye, tilted cards to the ship)'
 fph='[  99870.000] layer   facing: phase #3 — H, billboards face the eye, tilted cards the ship (X4VR_FACING_AB=recentre)'
 { sed 's/env: run = /env: run = X4VR_FACING=1 X4VR_FACING_AB=recentre X4VR_FACING_DEBUG=compare /' "$BASE"; printf '%s\n' "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$farm" "$fcab0" "$flkh" "$fpa1" "$fps" "$fph" "$fxok"; } > /tmp/census-fx-sh.log

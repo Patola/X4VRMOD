@@ -7175,6 +7175,89 @@ inline bool patch_fragment_force_block_uint(std::vector<uint32_t> &code,
     return true;
 }
 
+// **Where a fade module keeps its material's fade distances** (after take 482: removing
+// X4's nebula cards by distance took its radar's ellipse and axes too -- Patola: filter
+// "by category"). X4 compiles each material's properties into a uniform block; its
+// nebula materials (fog_01, fog_02, fog_pattern_*, fog_smooth_*) alone fade in at 500 m
+// and out by 2.9-3 km. The block holding U_camera_fade_range_near_start, and the byte
+// offsets of the four fade members (near_start, near_end, far_start, far_end; UINT32_MAX
+// where a member is absent). False, with `why`, where the module has no such block.
+struct FadeBlock {
+    uint32_t set = 0, binding = 0;
+    uint32_t off[4] = {UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};
+    const char *why = "";
+};
+inline bool fade_block(const std::vector<uint32_t> &code, FadeBlock *out) {
+    FadeBlock fb;
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return out->why = "not SPIR-V", false;
+    static const char *const kMember[4] = {
+        "U_camera_fade_range_near_start", "U_camera_fade_range_near_end",
+        "U_camera_fade_range_far_start", "U_camera_fade_range_far_end"};
+    std::map<std::pair<uint32_t, uint32_t>, int> which; // (struct, member) -> 0..3
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> offset;
+    std::unordered_map<uint32_t, uint32_t> set_of, binding_of, pointee;
+    std::vector<std::pair<uint32_t, uint32_t>> uniforms; // (variable, pointer type)
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.op == OpMemberName && in.len >= 4) {
+            const char *n = (const char *)(w + 3);
+            const size_t cap = (in.len - 3) * 4;
+            for (int k = 0; k < 4; k++)
+                if (strnlen(n, cap) == strlen(kMember[k]) && !strncmp(n, kMember[k], cap))
+                    which[{w[1], w[2]}] = k;
+        } else if (in.op == OpMemberDecorate && in.len >= 5 && w[3] == DecorationOffset) {
+            offset[{w[1], w[2]}] = w[4];
+        } else if (in.op == OpDecorate && in.len >= 4) {
+            if (w[2] == DecorationDescriptorSet)
+                set_of[w[1]] = w[3];
+            if (w[2] == DecorationBinding)
+                binding_of[w[1]] = w[3];
+        } else if (in.op == OpTypePointer && in.len >= 4) {
+            pointee[w[1]] = w[3];
+        } else if (in.op == OpVariable && in.len >= 4 && w[3] == StorageClassUniform) {
+            uniforms.push_back({w[2], w[1]});
+        }
+    }
+    uint32_t block = 0;
+    for (const auto &[key, k] : which)
+        if (k == 0)
+            block = key.first;
+    if (!block)
+        return out->why = "no U_camera_fade_range_near_start", false;
+    bool found = false;
+    for (const auto &[var, ptr] : uniforms) {
+        auto pt = pointee.find(ptr);
+        if (pt == pointee.end() || pt->second != block || !set_of.count(var) ||
+            !binding_of.count(var))
+            continue;
+        fb.set = set_of[var];
+        fb.binding = binding_of[var];
+        found = true;
+    }
+    if (!found)
+        return out->why = "its block is no uniform with a set and binding", false;
+    for (const auto &[key, k] : which) {
+        if (key.first != block)
+            continue;
+        auto o = offset.find(key);
+        if (o != offset.end())
+            fb.off[k] = o->second;
+    }
+    if (fb.off[0] == UINT32_MAX || fb.off[3] == UINT32_MAX)
+        return out->why = "no offset for near_start or far_end", false;
+    *out = fb;
+    return true;
+}
+// X4's nebula materials, by their fade distances (material_library.xml: fog_01 and
+// fog_02 fade 500-1000 m in and 2000-3000 m out; fog_pattern_*_near_* and
+// fog_smooth_new_near_01, 500-900 in and 1900-2900 out). The only other materials that
+// start at 500 m end elsewhere (an engine glow; a ship trail at 15 km).
+inline bool is_nebula_fade(float near_start, float far_end) {
+    return std::fabs(near_start - 500.f) < 1.f && far_end > 2800.f && far_end < 3100.f;
+}
+
 // Our own modules that read the layer's block (layer/fog_walk.comp, after take 480): they
 // are written with `set = from`, a placeholder, and moved here to the set the layer binds
 // its block at, which follows the device (pose_set_index()). Every DescriptorSet

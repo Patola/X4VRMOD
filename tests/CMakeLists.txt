@@ -151,6 +151,7 @@ configure_file(sample_alias_binding.frag.spv sample_alias_binding.frag.spv COPYO
 configure_file(sample_camera_block.vert.spv sample_camera_block.vert.spv COPYONLY)
 configure_file(sample_billboard.vert.spv sample_billboard.vert.spv COPYONLY)
 configure_file(sample_billboard_fade.vert.spv sample_billboard_fade.vert.spv COPYONLY)
+configure_file(sample_fade_block.vert.spv sample_fade_block.vert.spv COPYONLY)
 configure_file(sample_fog_points.vert.spv sample_fog_points.vert.spv COPYONLY)
 configure_file(sample_fog_probe.comp.spv sample_fog_probe.comp.spv COPYONLY)
 configure_file(sample_volume_walk.comp.spv sample_volume_walk.comp.spv COPYONLY)

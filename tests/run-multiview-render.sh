@@ -1400,6 +1400,18 @@ else
     fails=$((fails + 1))
 fi
 
+# After take 482: X4's nebula cards are known by their material's fade distances, read
+# from the block the module keeps them in; a module without them has none.
+fb=$("$PATCHER" fade-block "$BUILD/tests/sample_fade_block.vert.spv" 2>&1)
+fb0=$("$PATCHER" fade-block "$BUILD/tests/sample_billboard.vert.spv" 2>&1)
+if grep -q '^IS=1 SET=4 BINDING=2 OFF=24,28,32,36$' <<<"$fb" && grep -q '^NEB=110000$' <<<"$fb" && \
+    grep -q '^IS=0 WHY=no U_camera_fade_range_near_start' <<<"$fb0"; then
+    printf 'ok   %-38s %s\n' "fog cards: by their material" "$(head -1 <<<"$fb"); none: $(head -1 <<<"$fb0")"
+else
+    printf 'FAIL %-38s %s | %s\n' "fog cards: by their material" "$(tr '\n' ' ' <<<"$fb")" "$(tr '\n' ' ' <<<"$fb0")"
+    fails=$((fails + 1))
+fi
+
 # After take 480 our walk reads the layer's block, written at set 31 and moved by the layer
 # to the device's set: one decoration moves, the module still validates and names the new
 # set; a module with nothing at 31 moves nothing.

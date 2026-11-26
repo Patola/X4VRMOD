@@ -2203,20 +2203,21 @@ static bool fog_smoke_on() {
     }();
     return on;
 }
-constexpr int kSmokeParams = 24;
+constexpr int kSmokeParams = 27;
 struct SmokeParam {
     const char *env; // nullptr: fixed
     float def;
 };
 static constexpr SmokeParam kSmoke[kSmokeParams] = {
-    {"X4VR_FOG_CLOUD", 670.f},  {"X4VR_FOG_COVER", 0.68f},  {nullptr, 0.05f},
-    {nullptr, 2.5f},            {nullptr, 400.f},           {"X4VR_FOG_MOTTLE", 200.f},
+    {"X4VR_FOG_CLOUD", 670.f},  {"X4VR_FOG_COVER", 0.70f},  {nullptr, 0.05f},
+    {"X4VR_FOG_RES", 1.5f},     {nullptr, 400.f},           {"X4VR_FOG_MOTTLE", 200.f},
     {nullptr, 3.f},             {nullptr, 0.8f},            {"X4VR_FOG_STRING", 60.f},
     {nullptr, 4.f},             {nullptr, 1.5f},            {nullptr, 0.5f},
     {nullptr, 4.f},             {nullptr, 0.3f},            {nullptr, 40.f},
     {nullptr, 400.f},           {"X4VR_FOG_SIGMA", 0.003f}, {"X4VR_FOG_BRIGHT", 0.3f},
     {"X4VR_FOG_FAR", 2500.f},   {nullptr, 6.f},             {nullptr, 0.03f},
-    {nullptr, 8.f},             {"X4VR_FOG_DRIFT", 4.f},    {"X4VR_FOG_TINT", 3.f}};
+    {nullptr, 8.f},             {"X4VR_FOG_DRIFT", 4.f},    {"X4VR_FOG_TINT", 3.f},
+    {nullptr, 2.f},             {"X4VR_FOG_MORPH", 12.f},   {nullptr, 0.03f}};
 static std::array<float, kSmokeParams> fog_smoke_params() {
     std::array<float, kSmokeParams> v{};
     for (int i = 0; i < kSmokeParams; i++) {
@@ -2231,9 +2232,9 @@ static std::array<float, kSmokeParams> fog_smoke_params() {
 }
 // X4VR_FOG_AB=recentre (after take 480, DIAGNOSTIC): each recentre moves to the next of
 // three phases -- V, X4's own cards and no smoke; A, the smoke and no cards; B, the smoke
-// at kFogSmaller its size (after take 481: "the originals ... look smaller") -- starting
-// at one drawn at random, so X4's look and ours are compared within one run, by a
-// switch. Its phase, for the cards' removal and the frame times.
+// sharper, down to kFogSharper of its sharpest (after take 482: "an exaggerated blur")
+// -- starting at one drawn at random, so X4's look and ours are compared within one run,
+// by a switch. Its phase, for the cards' removal and the frame times.
 static bool fog_ab() {
     static const bool ab = [] {
         const char *e = getenv("X4VR_FOG_AB");
@@ -2241,7 +2242,7 @@ static bool fog_ab() {
     }();
     return ab;
 }
-constexpr float kFogSmaller = 0.6f;
+constexpr float kFogSharper = 1.f / 1.5f; // B: 1 column where A keeps 1.5
 std::atomic<int> g_fog_arm{1}; // 0 V, 1 A, 2 B
 std::unordered_set<VkPipeline> &g_fog_probe_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
 std::unordered_map<VkCommandBuffer, bool> &g_fog_probe_cb =
@@ -2370,10 +2371,31 @@ std::unordered_map<VkCommandBuffer, bool> &g_census_fade =
 // The recording thread's last graphics bind, so a draw needs no lock to know.
 thread_local VkCommandBuffer tl_fade_cb = VK_NULL_HANDLE;
 thread_local bool tl_fade = false;
-// Under g_track.mu: each recording's current object slot, and its fade draws to read.
+// **Which material a fade draw is** (after take 482: the cards' removal took X4's radar
+// too, and Patola asked to filter "by category", not by distance): where each fade
+// module keeps its material's fade distances (x4vr::spv::fade_block), its pipelines',
+// and the recording's current one (under g_census_mu; the recording thread's in
+// tl_fade_block). off[0] == UINT32_MAX: not known.
+std::unordered_map<VkShaderModule, x4vr::spv::FadeBlock> &g_fade_block_mod =
+    x4vr::immortal<std::unordered_map<VkShaderModule, x4vr::spv::FadeBlock>>();
+std::unordered_map<VkPipeline, x4vr::spv::FadeBlock> &g_fade_block_pipe =
+    x4vr::immortal<std::unordered_map<VkPipeline, x4vr::spv::FadeBlock>>();
+std::unordered_map<VkCommandBuffer, x4vr::spv::FadeBlock> &g_census_fblock =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, x4vr::spv::FadeBlock>>();
+thread_local x4vr::spv::FadeBlock tl_fade_block;
+std::atomic<uint32_t> g_fade_blocks_found{0}, g_fade_blocks_missing{0};
+// Under g_track.mu: each recording's descriptor sets bound at indices 0..7, to find a
+// draw's material block.
+std::unordered_map<VkCommandBuffer, std::array<VkDescriptorSet, 8>> &g_census_sets =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, std::array<VkDescriptorSet, 8>>>();
+// Under g_track.mu: each recording's current object slot, and its fade draws to read --
+// with the material's block and where in it the fade distances are (near_start,
+// far_end), when known.
 struct CensusDraw {
     Tracking::ObjSlot obj;
     ViewSlot cam;
+    Tracking::ObjSlot mat{};
+    uint32_t moff[2] = {UINT32_MAX, UINT32_MAX};
 };
 std::unordered_map<VkCommandBuffer, Tracking::ObjSlot> &g_census_obj =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, Tracking::ObjSlot>>();
@@ -2535,7 +2557,19 @@ std::unordered_map<uint64_t, FixLearn> &g_fix_learn =
     x4vr::immortal<std::unordered_map<uint64_t, FixLearn>>();
 struct FixStats {
     uint64_t rewritten = 0, unlearned = 0, refused = 0, mismatch = 0, noflight = 0, full = 0,
-             killed = 0, cards_removed = 0, cards_kept_near = 0;
+             killed = 0, cards_removed = 0, cards_kept_near = 0, cards_kept_far = 0,
+             cards_kept_large = 0;
+    // After take 482: removed by their material (nebula), left as another material, and
+    // the material unreadable (then removed by distance -- cards_removed_by_distance --
+    // as a stopgap, or kept by it). The fade distances seen, with their draws.
+    uint64_t cards_by_material = 0, cards_other_material = 0, cards_unread_material = 0,
+             cards_by_distance = 0;
+    struct Mat {
+        float near_start, far_end;
+        uint64_t n;
+    };
+    Mat mats[12] = {};
+    int nmats = 0;
     // Drift by how the stretch turns them (0 X4's own, 1 to the eye, 2 to the ship, 3 the
     // hybrid) and head-look moved since the reference (<2, <10, <30, more deg): draws,
     // turn drift sum and max.
@@ -2692,14 +2726,44 @@ static void look_check(const float *cb) {
 // floats); c: its camera block's copy (M_view at 0, M_viewprojection at 112). X4's
 // constants are slow for the CPU to read (take 471-472: 164-240 us a submit), so each
 // is read once.
+// A card removed: its turn scaled to nothing, its WVP to match.
+static void remove_draw(float *o_dst, float *o, const float *c,
+                        std::unordered_set<const float *> &done) {
+    for (int col = 0; col < 3; col++)
+        for (int row = 0; row < 3; row++)
+            o[16 + col * 4 + row] = 0.f;
+    for (int col = 0; col < 4; col++)
+        for (int row = 0; row < 4; row++) {
+            double acc = 0.0;
+            for (int k = 0; k < 4; k++)
+                acc += (double)c[7 * 16 + k * 4 + row] * o[16 + col * 4 + k];
+            o[col * 4 + row] = (float)acc;
+        }
+    std::memcpy(o_dst, o, 32 * sizeof(float));
+    done.insert(o_dst);
+}
+// `mat`: 1 X4's nebula material, 0 another, -1 not read.
 static void fix_draw(float *o_dst, float *o, const float *c, int mode,
-                     std::unordered_set<const float *> &done) {
+                     std::unordered_set<const float *> &done, int mat) {
     if (done.count(o_dst))
         return; // drawn twice from one slot: turned once
     if (!fade_consistent(o, c)) {
         g_fix_stats.mismatch++;
         return;
     }
+    // The cards off, by their material: every draw of X4's nebula material, whether or not
+    // its turn was learned and however far; nothing of any other material (X4's radar,
+    // light glows, engine flares...). In the smoke's A/B, X4's cards stay in its V phase.
+    const bool cards_off =
+        fog_cards_off() && !(fog_ab() && g_fog_arm.load(std::memory_order_relaxed) == 0);
+    if (cards_off && mat == 1) {
+        remove_draw(o_dst, o, c, done);
+        g_fix_stats.cards_by_material++;
+        g_fix_stats.cards_removed++;
+        return;
+    }
+    if (cards_off)
+        (mat == 0 ? g_fix_stats.cards_other_material : g_fix_stats.cards_unread_material)++;
     if (!g_census_look_valid.load(std::memory_order_relaxed)) {
         g_fix_stats.noflight++;
         return;
@@ -2727,33 +2791,42 @@ static void fix_draw(float *o_dst, float *o, const float *c, int mode,
         return;
     }
     bool remove = g_fix_kill.load(std::memory_order_relaxed);
-    // In the smoke's A/B, X4's cards stay in its V phase.
-    if (fog_cards_off() && !remove && !(fog_ab() && g_fog_arm.load(std::memory_order_relaxed) == 0)) {
-        double dist2 = 0.0;
+    // A STOPGAP where the material could not be read: the camera-turned draws at a card's
+    // distance and size.
+    if (cards_off && mat < 0 && !remove) {
+        // Only what can be one of X4's nebula cards (after take 482, where the radar's
+        // ellipse and axes went with them): X4 turns its radar with the camera too, and
+        // draws it as its own scene from about 43 km (take 469's census: draws kept under
+        // head-look at 42-44 km, an ellipse 24500 m across, axes 220 by 3400 m). The cards
+        // were seen 0.5-6 km away at scale 1 or 3.9, and fade out by 3 km; the radar's
+        // parts sit by the camera (under 50 m), beyond 6.5 km, or larger than 100 m.
+        double dist2 = 0.0, scale = 0.0;
         for (int row = 0; row < 3; row++) {
             double pv = c[12 + row];
             for (int k = 0; k < 3; k++)
                 pv += (double)c[k * 4 + row] * o[16 + 12 + k];
             dist2 += pv * pv;
         }
-        remove = dist2 > 50.0 * 50.0;
-        if (!remove)
+        for (int col = 0; col < 3; col++) {
+            double l = 0.0;
+            for (int row = 0; row < 3; row++)
+                l += (double)o[16 + col * 4 + row] * o[16 + col * 4 + row];
+            scale = std::max(scale, std::sqrt(l));
+        }
+        if (dist2 <= 50.0 * 50.0)
             g_fix_stats.cards_kept_near++;
+        else if (dist2 >= 6500.0 * 6500.0)
+            g_fix_stats.cards_kept_far++;
+        else if (scale >= 100.0)
+            g_fix_stats.cards_kept_large++;
+        else {
+            remove = true;
+            g_fix_stats.cards_by_distance++;
+        }
     }
     if (remove) {
-        // K, or the cards off: the card's turn scaled to nothing, its WVP to match.
-        for (int col = 0; col < 3; col++)
-            for (int row = 0; row < 3; row++)
-                o[16 + col * 4 + row] = 0.f;
-        for (int col = 0; col < 4; col++)
-            for (int row = 0; row < 4; row++) {
-                double acc = 0.0;
-                for (int k = 0; k < 4; k++)
-                    acc += (double)c[7 * 16 + k * 4 + row] * o[16 + col * 4 + k];
-                o[col * 4 + row] = (float)acc;
-            }
-        std::memcpy(o_dst, o, 32 * sizeof(float));
-        done.insert(o_dst);
+        // K, or the cards off by the stopgap.
+        remove_draw(o_dst, o, c, done);
         (g_fix_kill.load(std::memory_order_relaxed) ? g_fix_stats.killed
                                                     : g_fix_stats.cards_removed)++;
         return;
@@ -2904,9 +2977,28 @@ static void census_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) 
                             look_check(cc->second.f);
                         }
                     }
+                    // The draw's material, by its fade distances.
+                    int mat = -1;
+                    if (d.mat.buffer && d.moff[0] != UINT32_MAX && d.moff[1] != UINT32_MAX &&
+                        d.moff[0] + 4 <= d.mat.range && d.moff[1] + 4 <= d.mat.range)
+                        if (const float *m = obj_slot_host_ptr(d.mat)) {
+                            float ns, fe;
+                            std::memcpy(&ns, (const char *)m + d.moff[0], 4);
+                            std::memcpy(&fe, (const char *)m + d.moff[1], 4);
+                            mat = x4vr::spv::is_nebula_fade(ns, fe) ? 1 : 0;
+                            FixStats &fs = g_fix_stats;
+                            int k = 0;
+                            while (k < fs.nmats &&
+                                   (fs.mats[k].near_start != ns || fs.mats[k].far_end != fe))
+                                k++;
+                            if (k < fs.nmats)
+                                fs.mats[k].n++;
+                            else if (fs.nmats < 12)
+                                fs.mats[fs.nmats++] = {ns, fe, 1};
+                        }
                     float ol[32];
                     std::memcpy(ol, o, sizeof ol);
-                    fix_draw(o, ol, cc->second.f, mode, done);
+                    fix_draw(o, ol, cc->second.f, mode, done, mat);
                 }
             }
             it->second.clear();
@@ -3072,14 +3164,19 @@ void credit_draw(VkCommandBuffer cb) {
         fog_apply = f != g_fog_apply_cb.end() && f->second;
     }
     bool census_fade = false;
+    x4vr::spv::FadeBlock fblock;
     if (fade_tracking()) {
         // The recording thread binds and draws: its own last bind answers without a lock.
         if (tl_fade_cb == cb) {
             census_fade = tl_fade;
+            fblock = tl_fade_block;
         } else {
             std::lock_guard<std::mutex> lock(g_census_mu);
             auto f = g_census_fade.find(cb);
             census_fade = f != g_census_fade.end() && f->second;
+            auto b = g_census_fblock.find(cb);
+            if (b != g_census_fblock.end())
+                fblock = b->second;
         }
     }
     std::lock_guard<std::mutex> lock(g_track.mu);
@@ -3095,10 +3192,27 @@ void credit_draw(VkCommandBuffer cb) {
         auto &pend = g_census_pending[cb];
         // Every card of a pass must reach the fix; the cap only bounds a recording
         // that is never submitted.
-        if (ob != g_census_obj.end() && pend.size() < 4096)
-            pend.push_back({ob->second, vb != g_track.bound.end() && !vb->second.empty()
-                                            ? vb->second.front()
-                                            : ViewSlot{VK_NULL_HANDLE, 0}});
+        if (ob != g_census_obj.end() && pend.size() < 4096) {
+            CensusDraw cd{ob->second, vb != g_track.bound.end() && !vb->second.empty()
+                                          ? vb->second.front()
+                                          : ViewSlot{VK_NULL_HANDLE, 0}};
+            // The material's block, from the set bound at its index.
+            if (fblock.off[0] != UINT32_MAX && fblock.off[3] != UINT32_MAX && fblock.set < 8) {
+                auto sb = g_census_sets.find(cb);
+                if (sb != g_census_sets.end() && sb->second[fblock.set] != VK_NULL_HANDLE) {
+                    auto os = g_track.obj_sets.find(sb->second[fblock.set]);
+                    if (os != g_track.obj_sets.end()) {
+                        auto bs = os->second.find(fblock.binding);
+                        if (bs != os->second.end()) {
+                            cd.mat = bs->second;
+                            cd.moff[0] = fblock.off[0];
+                            cd.moff[1] = fblock.off[3];
+                        }
+                    }
+                }
+            }
+            pend.push_back(cd);
+        }
     }
     // Task #56. Credited on the same draws as the camera slots, so "the object
     // block this frame drew through most" means the same thing as it does for
@@ -3918,6 +4032,12 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindDescriptorSets(
                     ob.push_back(s);
             }
         }
+    }
+    if (fade_tracking() && bindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS) {
+        auto &bs = g_census_sets[cb];
+        for (uint32_t i = 0; i < setCount; i++)
+            if (firstSet + i < 8)
+                bs[firstSet + i] = sets[i];
     }
     if (fade_tracking())
         for (uint32_t i = 0; i < setCount; i++) {
@@ -5385,12 +5505,34 @@ void shader_knob_report(const char *when) {
         fix_report(when);
     if (fog_cards_off()) {
         std::lock_guard<std::mutex> lock(g_track.mu);
-        X4VR_LOG("fog cards %s: off — %llu draw(s) of X4's camera-turned cards removed "
-                 "(farther than 50 m), %llu kept as nearer, %llu seen before learned — "
-                 "DIAGNOSTIC",
-                 when, (unsigned long long)g_fix_stats.cards_removed,
-                 (unsigned long long)g_fix_stats.cards_kept_near,
-                 (unsigned long long)g_fix_stats.unlearned);
+        const FixStats &fs = g_fix_stats;
+        X4VR_LOG("fog cards %s: off — %llu draw(s) of X4's nebula material removed (fading in "
+                 "at 500 m, out by 3 km), %llu of other fading materials left alone, %llu with "
+                 "the material unread (fade blocks: %u modules found, %u not) — DIAGNOSTIC",
+                 when, (unsigned long long)fs.cards_by_material,
+                 (unsigned long long)fs.cards_other_material,
+                 (unsigned long long)fs.cards_unread_material, g_fade_blocks_found.load(),
+                 g_fade_blocks_missing.load());
+        std::string mats;
+        for (int k = 0; k < fs.nmats; k++) {
+            char t[80];
+            snprintf(t, sizeof t, "%s%g..%g m: %llu%s", k ? "; " : "", fs.mats[k].near_start,
+                     fs.mats[k].far_end, (unsigned long long)fs.mats[k].n,
+                     x4vr::spv::is_nebula_fade(fs.mats[k].near_start, fs.mats[k].far_end)
+                         ? " (nebula)"
+                         : "");
+            mats += t;
+        }
+        X4VR_LOG("fog cards %s: the fading materials drawn, by where they fade in and out "
+                 "— %s",
+                 when, mats.empty() ? "none read" : mats.c_str());
+        X4VR_LOG("fog cards %s: the stopgap where the material was unread — %llu draw(s) of "
+                 "X4's camera-turned cards removed (50 m to 6.5 km, under 100 m across), "
+                 "%llu kept as nearer, %llu as farther, %llu as larger (X4's radar among "
+                 "them), %llu seen before learned — DIAGNOSTIC",
+                 when, (unsigned long long)fs.cards_by_distance,
+                 (unsigned long long)fs.cards_kept_near, (unsigned long long)fs.cards_kept_far,
+                 (unsigned long long)fs.cards_kept_large, (unsigned long long)fs.unlearned);
     }
     if (facing_census()) {
         {
@@ -8814,13 +8956,14 @@ std::vector<uint32_t> fog_volume_module(const VkShaderModuleCreateInfo *ci) {
             X4VR_LOG("fog smoke: X4's volume_walk for %d medium(s) (%zu bytes) replaced by ours — "
                      "glowing smoke: clouds %.0f m (cover %.2f), mottled at %.0f m, strings "
                      "%.0f m near the ship, extinction %.4f/m, glow %.2f, tint %.1f, drift "
-                     "%.1f m/s, out to %.0f m; each column stepped at most %.0f%% of the "
-                     "distance apart (%.0f m at least, %.0f steps a slice), nothing sharper "
-                     "than %.1f columns; its knobs in the layer's block at set %u%s — "
-                     "DIAGNOSTIC",
+                     "%.1f m/s, outlines sliding %.1f m/s, curl churning %.3f/s, out to %.0f m; "
+                     "each column stepped at most %.0f%% of the distance apart (%.0f m at "
+                     "least, %.0f steps a slice), nothing sharper than %.1f columns; its knobs "
+                     "in the layer's block at set %u%s — DIAGNOSTIC",
                      wr.media, (size_t)ci->codeSize, p[0], p[1], p[5], p[8], p[16], p[17],
-                     p[23], p[22], p[18], 100.f * p[20], p[19], p[21], p[3], pose_set_index(),
-                     fog_ab() ? "; phases V, A and B by recentre (X4VR_FOG_AB)" : "");
+                     p[23], p[22], p[25], p[26], p[18], 100.f * p[20], p[19], p[21], p[3],
+                     pose_set_index(),
+                     fog_ab() ? "; phases V, A and B (sharper) by recentre (X4VR_FOG_AB)" : "");
         return code;
     }
     x4vr::spv::VolumeBaseReport rep;
@@ -9612,7 +9755,20 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
                 i += len;
             }
             if (vertex) {
+                // Where its material keeps the fade distances (after take 482).
+                x4vr::spv::FadeBlock fb;
+                const std::vector<uint32_t> fcode(ci->pCode, ci->pCode + ci->codeSize / 4);
+                const bool have = x4vr::spv::fade_block(fcode, &fb);
+                const uint32_t nf = have ? ++g_fade_blocks_found : g_fade_blocks_found.load();
+                const uint32_t nm = have ? g_fade_blocks_missing.load() : ++g_fade_blocks_missing;
+                if ((have && nf <= 3) || (!have && nm <= 3))
+                    X4VR_LOG("fog cards: a fade module's material %s set %u binding %u, fade "
+                             "distances at bytes %u and %u%s%s (%u found, %u not)",
+                             have ? "is at" : "was NOT found:", fb.set, fb.binding, fb.off[0],
+                             fb.off[3], have ? "" : " — ", have ? "" : fb.why, nf, nm);
                 std::lock_guard<std::mutex> lock(g_census_mu);
+                if (have)
+                    g_fade_block_mod[*out] = fb;
                 g_fade_modules.insert(*out);
             }
         }
@@ -10198,7 +10354,8 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             g_fog_arm.store(fa, std::memory_order_relaxed);
             g_pose.value.fog[0] = fa == 0 ? 0.f : 1.f;
             g_pose.value.fog[1] = 1.f;
-            g_pose.value.fog[2] = fa == 2 ? kFogSmaller : 1.f;
+            g_pose.value.fog[2] = 1.f;
+            g_pose.value.fog[3] = fa == 2 ? kFogSharper : 1.f;
             static uint64_t fsaid = ~0ull;
             if (fsaid != phase) {
                 fsaid = phase;
@@ -10207,11 +10364,10 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                              "(X4VR_FOG_AB=recentre)",
                              (unsigned long long)phase);
                 else
-                    X4VR_LOG("fog smoke: phase #%llu — %s, the smoke at %.1fx its size "
-                             "(clouds %.0f m), no cards (X4VR_FOG_AB=recentre)",
+                    X4VR_LOG("fog smoke: phase #%llu — %s, the smoke, nothing sharper than "
+                             "%.1f columns, no cards (X4VR_FOG_AB=recentre)",
                              (unsigned long long)phase, fa == 1 ? "A" : "B",
-                             fa == 2 ? kFogSmaller : 1.f,
-                             (fa == 2 ? kFogSmaller : 1.f) * fog_smoke_params()[0]);
+                             (fa == 2 ? kFogSharper : 1.f) * fog_smoke_params()[3]);
             }
         }
         x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face, arm == 4);
@@ -11450,8 +11606,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
             for (uint32_t i = 0; i < count; i++)
                 for (uint32_t k = 0; out[i] != VK_NULL_HANDLE && k < ci_app[i].stageCount; k++)
                     if (ci_app[i].pStages[k].stage == VK_SHADER_STAGE_VERTEX_BIT &&
-                        g_fade_modules.count(ci_app[i].pStages[k].module))
+                        g_fade_modules.count(ci_app[i].pStages[k].module)) {
                         g_fade_pipes.insert(out[i]);
+                        auto fb = g_fade_block_mod.find(ci_app[i].pStages[k].module);
+                        if (fb != g_fade_block_mod.end())
+                            g_fade_block_pipe[out[i]] = fb->second;
+                    }
         }
         std::lock_guard<std::mutex> lock(g_cb_mu);
         for (uint32_t i = 0; i < count; i++)
@@ -15653,6 +15813,9 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
         g_census_fade[cb] = f;
         tl_fade_cb = cb;
         tl_fade = f;
+        auto b = g_fade_block_pipe.find(p);
+        tl_fade_block = b != g_fade_block_pipe.end() ? b->second : x4vr::spv::FadeBlock{};
+        g_census_fblock[cb] = tl_fade_block;
     }
     // Task #82, before anything else so an early return cannot skip it.
     if (bp == VK_PIPELINE_BIND_POINT_GRAPHICS) {

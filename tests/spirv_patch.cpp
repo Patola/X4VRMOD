@@ -1941,6 +1941,25 @@ int main(int argc, char **argv) {
         printf("IS=%d MEDIA=%d WHY=%s\n", is ? 1 : 0, rep.media, is ? "" : rep.why);
         return 0;
     }
+    // fade-block <in.spv>: where a fade module keeps its material's fade distances; and the
+    // nebula rule on X4's materials (after take 482).
+    if (strcmp(argv[1], "fade-block") == 0 && argc >= 3) {
+        const std::vector<uint32_t> code = load_spv(argv[2]);
+        x4vr::spv::FadeBlock fb;
+        if (code.empty() || !x4vr::spv::fade_block(code, &fb)) {
+            printf("IS=0 WHY=%s\n", code.empty() ? "load" : fb.why);
+        } else {
+            printf("IS=1 SET=%u BINDING=%u OFF=%u,%u,%u,%u\n", fb.set, fb.binding, fb.off[0],
+                   fb.off[1], fb.off[2], fb.off[3]);
+        }
+        // fog_02, fog_pattern_new_near_01: nebula; a ship trail (500..15000), a hologram
+        // (0.1..400), an explosion (0..35000), the default (100..120000): not.
+        printf("NEB=%d%d%d%d%d%d\n", x4vr::spv::is_nebula_fade(500.f, 3000.f),
+               x4vr::spv::is_nebula_fade(500.f, 2900.f), x4vr::spv::is_nebula_fade(500.f, 15000.f),
+               x4vr::spv::is_nebula_fade(0.1f, 400.f), x4vr::spv::is_nebula_fade(0.f, 35000.f),
+               x4vr::spv::is_nebula_fade(100.f, 120000.f));
+        return 0;
+    }
     // retarget-set <in.spv> <from> <to> <out.spv>: our module's placeholder set moved to the
     // layer's, and how many decorations moved.
     if (strcmp(argv[1], "retarget-set") == 0 && argc >= 6) {
