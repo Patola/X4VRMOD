@@ -2163,6 +2163,10 @@ static x4vr::spv::FogProbe fog_probe_params() {
     x4vr::spv::FogProbe p;
     p.strength = 25.f;
     p.radius_out = 100.f;
+    if (const char *e = getenv("X4VR_FOG_PROBE"); e && !strcmp(e, "noise")) {
+        p.mode = 1;
+        p.far = 2000.f;
+    }
     auto num = [](const char *n, float dflt) {
         const char *e = getenv(n);
         const float v = e && *e ? strtof(e, nullptr) : dflt;
@@ -2173,6 +2177,10 @@ static x4vr::spv::FogProbe fog_probe_params() {
     p.radius_out = num("X4VR_FOG_PROBE_RADIUS", p.radius_out);
     p.radius_in = p.radius_out * 0.4f; // soft edges
     p.far = num("X4VR_FOG_PROBE_FAR", p.far);
+    p.scale = num("X4VR_FOG_PROBE_SCALE", p.scale);
+    p.cover = num("X4VR_FOG_PROBE_COVER", p.cover);
+    p.soft = num("X4VR_FOG_PROBE_SOFT", p.soft);
+    p.drift = num("X4VR_FOG_PROBE_DRIFT", p.drift);
     return p;
 }
 std::atomic<uint32_t> g_fog_vol_modules{0}, g_fog_vol_refused{0};
@@ -2212,6 +2220,16 @@ std::unordered_map<VkCommandBuffer, bool> &g_fog_apply_cb =
 // turn, and the angle between them.
 std::unordered_map<VkCommandBuffer, std::vector<ViewSlot>> &g_fog_apply_pending =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, std::vector<ViewSlot>>>();
+// **The sun's direction** (after take 478: the puffs held still with the head, yet their
+// light "changes gradually" as it turns): X4 lights its fog by the angle between the view
+// ray and V_light_direction_view, the sun in the view's axes; it should be mat3(M_view)
+// times V_direction1, the sun in the world's. Their angle, by how far the head-look is
+// turned: zero whatever the head does if X4 turns it with head-look, the head-look if not.
+struct FogSunCheck {
+    uint64_t n[4] = {};
+    double sum[4] = {}, max[4] = {};
+};
+FogSunCheck g_fog_sun;
 struct FogSameCamera {
     bool have_volume = false;
     float volume_turn[9] = {};
@@ -5209,6 +5227,21 @@ void shader_knob_report(const char *when) {
     if (fog_probe_on()) {
         std::lock_guard<std::mutex> lock(g_track.mu);
         const FogProbeSeen &sn = g_fog_probe_seen;
+        {
+            static const char *const kB[4] = {"<2", "2-10", "10-30", "30+"};
+            std::string row;
+            for (int b = 0; b < 4; b++) {
+                char t[96];
+                const double n = (double)std::max<uint64_t>(g_fog_sun.n[b], 1);
+                snprintf(t, sizeof t, "%s%s deg: %llu, %.2f (max %.2f)", b ? "; " : "", kB[b],
+                         (unsigned long long)g_fog_sun.n[b], g_fog_sun.sum[b] / n,
+                         g_fog_sun.max[b]);
+                row += t;
+            }
+            X4VR_LOG("fog probe %s: X4's sun in the view against the world's turned by the "
+                     "view, by head-look turned — %s",
+                     when, row.c_str());
+        }
         const FogSameCamera &fs = g_fog_same;
         X4VR_LOG("fog probe %s: the blend against the camera that built the volume — %llu "
                  "draw(s), mean %.3f deg, max %.2f deg; <0.01 %llu, <0.1 %llu, <1 %llu, <5 %llu, "
@@ -8593,6 +8626,11 @@ std::vector<uint32_t> fogpoint_patch_facing(const VkShaderModuleCreateInfo *ci);
 // the nebula becoming an effect of our own. X4VR_FOG_PROBE_DENSITY, _CELL, _RADIUS and
 // _FAR size it. Defaults since take 477 (thin, small puffs out to 6 km aliased on X4's
 // grid): density 25, a puff every 400 m, soft out to 100 m, fading by 1500 m.
+// X4VR_FOG_PROBE=noise (after take 478, where the puffs moved right with the ship and
+// stayed put with the head): the smoke -- drifting 3D noise, _SCALE (350 m), _COVER
+// (0.57), _SOFT (0.06): the noise sits near 0.5 (std 0.11), so this leaves about 60% of
+// space clear and the clouds with soft edges, where 0.5/0.2 was a haze everywhere --
+// _DRIFT (4 m/s), density 25, fading by 2000 m.
 
 
 std::vector<uint32_t> fogpoint_patch_module(const VkShaderModuleCreateInfo *ci) {
@@ -8632,12 +8670,22 @@ std::vector<uint32_t> fog_volume_module(const VkShaderModuleCreateInfo *ci) {
                                           sizeof x4vr::kFogVolumeComp / sizeof(uint32_t));
     tl_fog_vol = true;
     const x4vr::spv::FogProbe pr = fog_probe_params();
-    if (++g_fog_vol_modules <= 3)
-        X4VR_LOG("fog volume: X4's volume_base (%zu bytes) replaced by ours — the probe's puffs "
-                 "every %.0f m, %.0f..%.0f m across, density %.4f, fixed in the world, fading "
-                 "out by %.0f m, in X4's froxel fog — DIAGNOSTIC",
-                 (size_t)ci->codeSize, pr.cell, 2.f * pr.radius_in, 2.f * pr.radius_out,
-                 pr.strength, pr.far);
+    if (++g_fog_vol_modules <= 3) {
+        if (pr.mode == 1) {
+            X4VR_LOG("fog volume: X4's volume_base (%zu bytes) replaced by ours — the smoke: "
+                         "drifting 3D noise, features %.0f m, cover %.2f, edges %.2f, drift %.1f "
+                         "m/s, density %.4f, fixed in the world, fading out by %.0f m, in X4's "
+                         "froxel fog — DIAGNOSTIC",
+                         (size_t)ci->codeSize, pr.scale, pr.cover, pr.soft, pr.drift,
+                         pr.strength, pr.far);
+        } else {
+            X4VR_LOG("fog volume: X4's volume_base (%zu bytes) replaced by ours — the probe's "
+                     "puffs every %.0f m, %.0f..%.0f m across, density %.4f, fixed in the "
+                     "world, fading out by %.0f m, in X4's froxel fog — DIAGNOSTIC",
+                     (size_t)ci->codeSize, pr.cell, 2.f * pr.radius_in, 2.f * pr.radius_out,
+                     pr.strength, pr.far);
+        }
+    }
     return code;
 }
 
@@ -10518,13 +10566,21 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
     std::vector<VkComputePipelineCreateInfo> csubs;
     // Our fog's pipelines: its parameters as specialisation constants (after take 474).
     std::vector<VkComputePipelineCreateInfo> fsubs;
-    static const VkSpecializationMapEntry kFogMap[5] = {
-        {0, 0, 4}, {1, 4, 4}, {2, 8, 4}, {3, 12, 4}, {4, 16, 4}};
-    static const std::array<float, 5> fog_data = [] {
+    static const VkSpecializationMapEntry kFogMap[10] = {
+        {0, 0, 4},  {1, 4, 4},  {2, 8, 4},  {3, 12, 4}, {4, 16, 4},
+        {5, 20, 4}, {6, 24, 4}, {7, 28, 4}, {8, 32, 4}, {9, 36, 4}};
+    // Ten 4-byte constants: the floats, and kMode (id 5) an int in its slot.
+    static const std::array<uint32_t, 10> fog_data = [] {
         const x4vr::spv::FogProbe p = fog_probe_params();
-        return std::array<float, 5>{p.cell, p.radius_in, p.radius_out, p.strength, p.far};
+        const float f[10] = {p.cell, p.radius_in, p.radius_out, p.strength, p.far,
+                             0.f,    p.scale,     p.cover,      p.soft,     p.drift};
+        std::array<uint32_t, 10> d{};
+        std::memcpy(d.data(), f, sizeof f);
+        d[5] = (uint32_t)p.mode;
+        return d;
     }();
-    static const VkSpecializationInfo kFogSpec = {5, kFogMap, sizeof(float) * 5, fog_data.data()};
+    static const VkSpecializationInfo kFogSpec = {10, kFogMap, sizeof(uint32_t) * 10,
+                                                  fog_data.data()};
     if (fog_probe_on()) {
         bool any = false;
         {
@@ -10667,6 +10723,33 @@ static void fog_probe_at_submit(uint32_t submitCount, const VkSubmitInfo *submit
                     sn.size[k] = cb[240 + k];
                 }
                 sn.ftime = cb[355];
+                {
+                    // The sun: the world's (V_direction1, float 192) turned by the view
+                    // (M_view, floats 0..15) against X4's own in the view's axes
+                    // (V_light_direction_view[0], float 216).
+                    double w[3] = {cb[192], cb[193], cb[194]}, v[3] = {0, 0, 0},
+                           x4[3] = {cb[216], cb[217], cb[218]};
+                    double lw = 0, lv = 0, lx = 0, dot = 0;
+                    for (int rr = 0; rr < 3; rr++)
+                        for (int k = 0; k < 3; k++)
+                            v[rr] += (double)cb[k * 4 + rr] * w[k];
+                    for (int k = 0; k < 3; k++) {
+                        lw += w[k] * w[k];
+                        lv += v[k] * v[k];
+                        lx += x4[k] * x4[k];
+                        dot += v[k] * x4[k];
+                    }
+                    float fy = 0.f, fp = 0.f;
+                    if (lw > 0 && lv > 0 && lx > 0 && frame_look(&fy, &fp)) {
+                        const double ang = std::acos(std::fmax(-1.0, std::fmin(1.0,
+                                               dot / std::sqrt(lv * lx)))) * 57.2957795;
+                        const double hl = std::max(std::fabs(fy), std::fabs(fp));
+                        const int b = hl < 2.0 ? 0 : hl < 10.0 ? 1 : hl < 30.0 ? 2 : 3;
+                        g_fog_sun.n[b]++;
+                        g_fog_sun.sum[b] += ang;
+                        g_fog_sun.max[b] = std::max(g_fog_sun.max[b], ang);
+                    }
+                }
                 g_fog_same.have_volume = true;
                 for (int col = 0; col < 3; col++)
                     for (int row = 0; row < 3; row++)
