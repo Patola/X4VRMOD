@@ -2365,11 +2365,15 @@ std::unordered_map<uint64_t, FixLearn> &g_fix_learn =
 struct FixStats {
     uint64_t rewritten = 0, unlearned = 0, refused = 0, mismatch = 0, noflight = 0, full = 0,
              killed = 0;
-    // Drift by arm (0 X4's own, 1 the fix) and head-look moved since the reference
-    // (<2, <10, <30, more deg): draws, turn drift sum and max.
-    uint64_t dn[2][4] = {};
-    double dturn[2][4] = {}, dturn_max[2][4] = {};
+    // Drift by how the stretch turns them (0 X4's own, 1 to the eye, 2 to the ship, 3 the
+    // hybrid) and head-look moved since the reference (<2, <10, <30, more deg): draws,
+    // turn drift sum and max.
+    uint64_t dn[4][4] = {};
+    double dturn[4][4] = {}, dturn_max[4][4] = {};
     uint64_t to_eye = 0, to_ship = 0;
+    // Whose head-look turned them: X4's camera at the frame's first pass (camstamp), or
+    // the headset's newest (take 472 used only the second: the fix left ~30% of the turn).
+    uint64_t look_frame = 0, look_newest = 0;
     // The cost: time in the submit hook's card work.
     uint64_t calls = 0;
     double ns = 0.0, ns_max = 0.0;
@@ -2417,9 +2421,109 @@ static uint64_t fade_signature(const float *o, const float *c) {
     }
     return h;
 }
-static void fix_draw(float *o, const float *c, int mode,
+// The head-look this frame was drawn with: X4's camera as it stood at the frame's first
+// render pass (camstamp, X4VR_DECLARE_RENDERED_ROT=2's), else the headset's newest.
+static bool frame_look(float *yaw, float *pitch) {
+    const uint32_t f = g_camstamp.frame.load(std::memory_order_relaxed);
+    if (g_camstamp.seq.load(std::memory_order_acquire) &&
+        g_camstamp.stamped.load(std::memory_order_relaxed) == f) {
+        *yaw = g_camstamp.yaw.load(std::memory_order_relaxed);
+        *pitch = g_camstamp.pitch.load(std::memory_order_relaxed);
+        return true;
+    }
+    *yaw = g_census_yaw.load(std::memory_order_relaxed);
+    *pitch = g_census_pitch.load(std::memory_order_relaxed);
+    return false;
+}
+
+// **The head-look check** (after take 472): V^T * L is the ship's camera in the world --
+// X4's camera with the head-look undone -- and with the ship still it must not move
+// whatever the head does. For each way of reading the head-look, its drift against the
+// stretch's first frame, by how far the head-look moved: the way that holds still is
+// the one X4 draws with. 0 the headset's newest, 1 X4's camera at the first pass, 2 the
+// same with pitch applied before yaw, 3 with the pitch's sign flipped, 4 the yaw's.
+struct LookCheck {
+    static constexpr int kWays = 5;
+    bool have[kWays] = {};
+    uint64_t phase = ~0ull;
+    float ref[kWays][9] = {}, ref_yaw = 0.f, ref_pitch = 0.f;
+    uint64_t n[kWays][4] = {};
+    double sum[kWays][4] = {}, max[kWays][4] = {};
+};
+LookCheck g_lookcheck;
+static void look_matrix(float yaw, float pitch, int way, float L[9]) {
+    // H, the head-look in the ship's camera axes: Ry(-yaw) Rx(-pitch) (look_rows'
+    // convention), or the variant; L = H^T.
+    const double d = 0.017453292519943295;
+    const double y = (way == 4 ? yaw : -yaw) * d, p = (way == 3 ? pitch : -pitch) * d;
+    const double cy = std::cos(y), sy = std::sin(y), cp = std::cos(p), sp = std::sin(p);
+    const double ry[3][3] = {{cy, 0, sy}, {0, 1, 0}, {-sy, 0, cy}}; // [row][col]
+    const double rx[3][3] = {{1, 0, 0}, {0, cp, -sp}, {0, sp, cp}};
+    double h[3][3];
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) {
+            double acc = 0.0;
+            for (int k = 0; k < 3; k++)
+                acc += way == 2 ? rx[i][k] * ry[k][j] : ry[i][k] * rx[k][j];
+            h[i][j] = acc;
+        }
+    for (int c = 0; c < 3; c++)
+        for (int rr = 0; rr < 3; rr++)
+            L[c * 3 + rr] = (float)h[c][rr]; // L = H^T, column-major: L[c][r] = H[c][r]^T... = H[c][rr]
+}
+static void look_check(const float *cb) {
+    float fy = 0.f, fp = 0.f;
+    const bool fr = frame_look(&fy, &fp);
+    if (!fr || !g_census_look_valid.load(std::memory_order_relaxed))
+        return;
+    const float ny = g_census_yaw.load(std::memory_order_relaxed),
+                np = g_census_pitch.load(std::memory_order_relaxed);
+    LookCheck &k = g_lookcheck;
+    const uint64_t phase = g_fix_phase.load(std::memory_order_relaxed);
+    if (phase != k.phase) {
+        k.phase = phase;
+        for (bool &h : k.have)
+            h = false;
+    }
+    for (int w = 0; w < LookCheck::kWays; w++) {
+        float L[9];
+        look_matrix(w ? fy : ny, w ? fp : np, w, L);
+        float m[9]; // V^T L, column-major
+        for (int c = 0; c < 3; c++)
+            for (int rr = 0; rr < 3; rr++) {
+                double acc = 0.0;
+                for (int q = 0; q < 3; q++)
+                    acc += (double)cb[rr * 4 + q] * L[c * 3 + q];
+                m[c * 3 + rr] = (float)acc;
+            }
+        if (!k.have[w]) {
+            k.have[w] = true;
+            std::memcpy(k.ref[w], m, sizeof m);
+            if (w == 1) {
+                k.ref_yaw = fy;
+                k.ref_pitch = fp;
+            }
+            continue;
+        }
+        double tr = 0.0;
+        for (int i = 0; i < 9; i++)
+            tr += (double)k.ref[w][i] * m[i];
+        const double ang = std::acos(std::fmax(-1.0, std::fmin(1.0, (tr - 1.0) / 2.0))) * 57.2957795;
+        const double dh = std::max(std::fabs(fy - k.ref_yaw), std::fabs(fp - k.ref_pitch));
+        const int bin = dh < 2.0 ? 0 : dh < 10.0 ? 1 : dh < 30.0 ? 2 : 3;
+        k.n[w][bin]++;
+        k.sum[w][bin] += ang;
+        k.max[w][bin] = std::max(k.max[w][bin], ang);
+    }
+}
+
+// o_dst: X4's mapped object block; o: this draw's copy of its members 0 and 1 (32
+// floats); c: its camera block's copy (M_view at 0, M_viewprojection at 112). X4's
+// constants are slow for the CPU to read (take 471-472: 164-240 us a submit), so each
+// is read once.
+static void fix_draw(float *o_dst, float *o, const float *c, int mode,
                      std::unordered_set<const float *> &done) {
-    if (done.count(o))
+    if (done.count(o_dst))
         return; // drawn twice from one slot: turned once
     if (!fade_consistent(o, c)) {
         g_fix_stats.mismatch++;
@@ -2429,8 +2533,11 @@ static void fix_draw(float *o, const float *c, int mode,
         g_fix_stats.noflight++;
         return;
     }
-    const float yaw = g_census_yaw.load(std::memory_order_relaxed),
-                pitch = g_census_pitch.load(std::memory_order_relaxed);
+    // Learning reads the headset's newest (any change will do); the turn, the frame's.
+    const float ly = g_census_yaw.load(std::memory_order_relaxed),
+                lp = g_census_pitch.load(std::memory_order_relaxed);
+    float yaw = 0.f, pitch = 0.f;
+    (frame_look(&yaw, &pitch) ? g_fix_stats.look_frame : g_fix_stats.look_newest)++;
     const uint64_t h = fade_signature(o, c);
     auto it = g_fix_learn.find(h);
     if (it == g_fix_learn.end()) {
@@ -2438,11 +2545,11 @@ static void fix_draw(float *o, const float *c, int mode,
             g_fix_stats.full++;
             return;
         }
-        it = g_fix_learn.emplace(h, FixLearn{yaw, pitch, g_fix_submits, false}).first;
+        it = g_fix_learn.emplace(h, FixLearn{ly, lp, g_fix_submits, false}).first;
     }
     FixLearn &e = it->second;
     e.last = g_fix_submits;
-    if (!e.learned && (std::fabs(yaw - e.yaw) >= 1.5f || std::fabs(pitch - e.pitch) >= 1.5f))
+    if (!e.learned && (std::fabs(ly - e.yaw) >= 1.5f || std::fabs(lp - e.pitch) >= 1.5f))
         e.learned = true;
     if (!e.learned) {
         g_fix_stats.unlearned++;
@@ -2460,7 +2567,8 @@ static void fix_draw(float *o, const float *c, int mode,
                     acc += (double)c[7 * 16 + k * 4 + row] * o[16 + col * 4 + k];
                 o[col * 4 + row] = (float)acc;
             }
-        done.insert(o);
+        std::memcpy(o_dst, o, 32 * sizeof(float));
+        done.insert(o_dst);
         g_fix_stats.killed++;
         return;
     }
@@ -2506,12 +2614,13 @@ static void fix_draw(float *o, const float *c, int mode,
             g_fix_stats.refused++;
             return;
         }
-        done.insert(o);
+        std::memcpy(o_dst, o, 32 * sizeof(float));
+        done.insert(o_dst);
         g_fix_stats.rewritten++;
         (eye ? g_fix_stats.to_eye : g_fix_stats.to_ship)++;
     }
     // The drift check, on the card as it will be drawn.
-    const int arm = mode ? 1 : 0;
+    const int arm = mode;
     float wn[9];
     for (int col = 0; col < 3; col++) {
         double l = 0.0;
@@ -2570,6 +2679,11 @@ static void census_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) 
                          ? g_fix_mode.load(std::memory_order_relaxed)
                          : 0;
     std::unordered_set<const float *> done;
+    struct CamCopy {
+        float f[128];
+    };
+    std::unordered_map<const float *, CamCopy> cams;
+    bool checked = false;
     if (fixing && (++g_fix_submits & 1023) == 0)
         for (auto it = g_fix_learn.begin(); it != g_fix_learn.end();)
             it = !it->second.learned && it->second.last + 4096 < g_fix_submits
@@ -2592,8 +2706,22 @@ static void census_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) 
                     else
                         census_classify(o, c);
                 }
-                if (fixing && o && c)
-                    fix_draw(o, c, mode, done);
+                if (fixing && o && c) {
+                    auto cc = cams.find(c);
+                    if (cc == cams.end()) {
+                        CamCopy cp;
+                        std::memcpy(cp.f, c, 16 * sizeof(float));
+                        std::memcpy(cp.f + 112, c + 112, 16 * sizeof(float));
+                        cc = cams.emplace(c, cp).first;
+                        if (!checked) {
+                            checked = true;
+                            look_check(cc->second.f);
+                        }
+                    }
+                    float ol[32];
+                    std::memcpy(ol, o, sizeof ol);
+                    fix_draw(o, ol, cc->second.f, mode, done);
+                }
             }
             it->second.clear();
         }
@@ -2616,7 +2744,10 @@ static void fix_report(const char *when) {
         X4VR_LOG("facing cpu %s: K removed %llu draw(s) of learned cards — DIAGNOSTIC", when,
                  (unsigned long long)f.killed);
     static const char *const kBin[4] = {"<2", "2-10", "10-30", "30+"};
-    for (int arm = 0; arm < 2; arm++) {
+    static const char *const kArm[4] = {"X4's own", "to the eye", "to the ship", "the hybrid"};
+    for (int arm = 0; arm < 4; arm++) {
+        if (arm && !(f.dn[arm][0] + f.dn[arm][1] + f.dn[arm][2] + f.dn[arm][3]))
+            continue;
         std::string row;
         for (int b = 0; b < 4; b++) {
             char t[160];
@@ -2628,7 +2759,27 @@ static void fix_report(const char *when) {
         }
         X4VR_LOG("facing cpu drift %s (%s): each card in the world against its first draw in "
                  "the stretch, by head-look moved — %s",
-                 when, arm ? "the fix" : "X4's own", row.c_str());
+                 when, kArm[arm], row.c_str());
+    }
+    X4VR_LOG("facing cpu look %s: %llu draw(s) turned by X4's camera at the frame's first pass, "
+             "%llu by the headset's newest",
+             when, (unsigned long long)f.look_frame, (unsigned long long)f.look_newest);
+    static const char *const kWay[LookCheck::kWays] = {
+        "the headset's newest", "X4's camera at the first pass", "the same, pitch before yaw",
+        "the same, pitch's sign flipped", "the same, yaw's sign flipped"};
+    for (int w = 0; w < LookCheck::kWays; w++) {
+        std::string row;
+        for (int b = 0; b < 4; b++) {
+            char t[120];
+            const double n = (double)std::max<uint64_t>(g_lookcheck.n[w][b], 1);
+            snprintf(t, sizeof t, "%s%s deg: %llu frame(s), %.2f (max %.2f)", b ? "; " : "",
+                     kBin[b], (unsigned long long)g_lookcheck.n[w][b], g_lookcheck.sum[w][b] / n,
+                     g_lookcheck.max[w][b]);
+            row += t;
+        }
+        X4VR_LOG("facing cpu ship %s (%s): X4's camera with the head-look undone, against the "
+                 "stretch's first frame, by head-look moved — %s",
+                 when, kWay[w], row.c_str());
     }
     X4VR_LOG("facing cpu turns %s: %llu draw(s) turned to the eye, %llu to the ship", when,
              (unsigned long long)f.to_eye, (unsigned long long)f.to_ship);

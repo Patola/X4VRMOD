@@ -2333,6 +2333,8 @@ want "cpu fix: in flight, a fixing arm, none turned -> FAIL" /tmp/census-fx-zero
 for f in '"facing cpu drift %s (%s): each card in the world against its first draw in "' \
          '"facing cpu turns %s: %llu draw(s) turned to the eye, %llu to the ship"' \
          '"H, billboards face the eye, tilted cards the ship"' \
+         '"facing cpu ship %s (%s): X4'"'"'s camera with the head-look undone, against the "' \
+         '"facing cpu look %s: %llu draw(s) turned by X4'"'"'s camera at the frame'"'"'s first pass, "' \
          '"facing cpu cost %s: %llu submit(s) with X4'"'"'s cards, mean %.1f us, max %.1f us, "' \
          '"facing cpu %s: K removed %llu draw(s) of learned cards — DIAGNOSTIC"'; do
     grep -qF -- "$f" layer/x4vr_layer.cpp && ok "cpu fix: the layer still prints $f" \
@@ -2344,6 +2346,9 @@ fxc='[  99900.010] layer   facing cpu cost final: 9000 submit(s) with X4'"'"'s c
 { fbase; printf '%s\n' "$fxok" "$fxd" "$fxc" "$fxt"; } > /tmp/census-fx-drift.log
 want "cpu fix: drift said" /tmp/census-fx-drift.log facing "cpu drift final (the fix): each card in the world"
 want "cpu fix: turns said" /tmp/census-fx-drift.log facing "cpu turns: 500 draw(s) turned to the eye, 300 to the ship"
+fxs='[  99900.012] layer   facing cpu ship final (X4'"'"'s camera at the first pass): X4'"'"'s camera with the head-look undone, against the stretch'"'"'s first frame, by head-look moved — <2 deg: 100 frame(s), 0.05 (max 0.20)'
+{ fbase; printf '%s\n' "$fxok" "$fxs"; } > /tmp/census-fx-ship.log
+want "cpu fix: the head-look check said" /tmp/census-fx-ship.log facing "cpu ship final (X4's camera at the first pass)"
 flkh='[  99900.002] layer   facing look final: 10 headset frame(s) with the head-look undone, 2 with X4'"'"'s camera angles not valid (identity); DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4'"'"'s own, S (cards turned to the ship) and H (billboards to the eye, tilted cards to the ship)'
 fph='[  99870.000] layer   facing: phase #3 — H, billboards face the eye, tilted cards the ship (X4VR_FACING_AB=recentre)'
 { sed 's/env: run = /env: run = X4VR_FACING=1 X4VR_FACING_AB=recentre X4VR_FACING_DEBUG=compare /' "$BASE"; printf '%s\n' "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$farm" "$fcab0" "$flkh" "$fpa1" "$fps" "$fph" "$fxok"; } > /tmp/census-fx-sh.log
