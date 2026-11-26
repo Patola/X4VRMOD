@@ -32,8 +32,9 @@
 //    stable", the two sizes alike because the clouds "compound on each other"). In the
 //    model, edges down to 1.5 columns and mottling down to 3 change under a 30 deg head
 //    turn less than take 481's smoke did (0.0005 of glow at most, against 0.0013); 1
-//    column changes about twice as much. The cloud's two octaves now slide against each
-//    other (kMorph) so its outline changes, and its curl churns (kChurn).
+//    column with edges 0.44 as soft, about 2.4 times as much. The cloud's two octaves now
+//    slide against each other (kMorph) so its outline changes, and its curl churns
+//    (kChurn).
 //  * **Cheaper.** A point outside every cloud costs one or two noise lookups: the cloud
 //    test comes first, and its second octave is skipped where it cannot make a cloud.
 //    Its colour is the sector's light colour deepened (each channel to the power kTint):
@@ -49,7 +50,8 @@
 // And the layer's own block, x4vr::PoseBlock, at the set the layer binds it to: written
 // here as 31 and renumbered by the layer when it creates the module. Its `fog` member
 // scales the smoke's density (x, 0 for none), its glow (y), its size (z) and the sharpest
-// it may be (w, times kRes): an A/B's phases switch them without a new pipeline.
+// it may be (w: kRes times w, kSoft times w squared): an A/B's phases switch them without
+// a new pipeline.
 #extension GL_ARB_enhanced_layouts : require
 
 #ifndef OUT_IDX_OFFSET
@@ -128,8 +130,8 @@ float sheet(float n) {
 
 // The smoke's density, 0..1, at a world point at time t, `dist` metres from the camera,
 // where one of X4's columns is `cell` metres wide; `size` scales every length, and
-// nothing is drawn sharper than `res` columns.
-float smoke(vec3 world, float t, float dist, float cell, float size, float res) {
+// nothing is drawn sharper than `res` columns, nor a cloud's edge softer than `edge`.
+float smoke(vec3 world, float t, float dist, float cell, float size, float res, float edge) {
     // The clouds drift; kept small, since the world is millions of metres across and a
     // float has 24 bits. The outline's finer octave slides against the coarser one.
     vec3 p = world + vec3(0.0, 0.0, t * kDrift);
@@ -137,7 +139,7 @@ float smoke(vec3 world, float t, float dist, float cell, float size, float res) 
     vec3 p2 = p + vec3(0.6, 0.5, -0.6) * (t * kMorph);
     p2 -= floor(p2 / 65536.0) * 65536.0;
     const float cl = kCloud * size;
-    const float soft = max(kSoft, 0.45 * res * cell / cl);
+    const float soft = max(edge, 0.45 * res * cell / cl);
     const float lo = kCover - soft;
     const float c1 = vnoise(p / cl + vec3(3.3, 7.1, 1.9));
     if (0.65 * c1 + 0.35 <= lo)
@@ -198,7 +200,10 @@ void main() {
     const float col = abs(b.x - a.x) / max(abs(a.z), 1e-6) / size.x;
     const vec4 knobs = pose.fog;
     const float shape = knobs.z > 0.0 ? knobs.z : 1.0; // the smoke's size
-    const float res = kRes * (knobs.w > 0.0 ? knobs.w : 1.0); // and its sharpest
+    // Its sharpest: columns times w, a cloud's edge softness times w squared (after take
+    // 482, the column limit alone left the edges where kSoft put them).
+    const float sharp = knobs.w > 0.0 ? knobs.w : 1.0;
+    const float res = kRes * sharp, edge = kSoft * sharp * sharp;
     const vec3 lc = max(V_lightcolor1.rgb, vec3(1e-4));
     const vec3 glow = kBright * knobs.y * pow(lc / max(max(lc.r, lc.g), lc.b), vec3(kTint));
 
@@ -216,7 +221,7 @@ void main() {
             const float stp = seg / float(n);
             for (int i = 0; i < n; ++i) {
                 const float t = prev + (float(i) + 0.5) * stp;
-                const float d = knobs.x * smoke(origin + ray * t, F_time, t, col * t, shape, res) *
+                const float d = knobs.x * smoke(origin + ray * t, F_time, t, col * t, shape, res, edge) *
                                 (1.0 - smoothstep(0.6 * kFar, kFar, t));
                 if (d > 0.0) {
                     const float slice = exp(-kSigma * d * stp);

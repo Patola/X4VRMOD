@@ -2242,7 +2242,7 @@ static bool fog_ab() {
     }();
     return ab;
 }
-constexpr float kFogSharper = 1.f / 1.5f; // B: 1 column where A keeps 1.5
+constexpr float kFogSharper = 1.f / 1.5f; // B: 1 column where A keeps 1.5, edges 0.44 as soft
 std::atomic<int> g_fog_arm{1}; // 0 V, 1 A, 2 B
 std::unordered_set<VkPipeline> &g_fog_probe_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
 std::unordered_map<VkCommandBuffer, bool> &g_fog_probe_cb =
@@ -10365,9 +10365,10 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                              (unsigned long long)phase);
                 else
                     X4VR_LOG("fog smoke: phase #%llu — %s, the smoke, nothing sharper than "
-                             "%.1f columns, no cards (X4VR_FOG_AB=recentre)",
+                             "%.1f columns, cloud edges %.3f, no cards (X4VR_FOG_AB=recentre)",
                              (unsigned long long)phase, fa == 1 ? "A" : "B",
-                             (fa == 2 ? kFogSharper : 1.f) * fog_smoke_params()[3]);
+                             (fa == 2 ? kFogSharper : 1.f) * fog_smoke_params()[3],
+                             (fa == 2 ? kFogSharper * kFogSharper : 1.f) * fog_smoke_params()[2]);
             }
         }
         x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face, arm == 4);
