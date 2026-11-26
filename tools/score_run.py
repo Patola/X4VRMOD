@@ -5479,7 +5479,7 @@ def main(path):
     fc = re.findall(r"facing (?:periodic|final): (ON|A/B by recentre|OFF \(X4VR_FACING=0\)) — (\d+) "
                     r"vertex module\(s\) turn X4's billboards to the ship, (\d+) input read\(s\) "
                     r"turned, (\d+) partial left", text)
-    fphases = re.findall(r"facing: phase #(\d+) — ([AB])\b", text)
+    fphases = re.findall(r"facing: phase #(\d+) — ([ABK])\b", text)
     if fc:
         mode, nmod, ninp, npart = fc[-1]
         print(f"facing  {mode}: {nmod} vertex module(s) turn X4's billboards to the ship, {ninp} "
@@ -5497,9 +5497,29 @@ def main(path):
     if fphases:
         print("facing  phases: " + ", ".join(f"#{n} {k}" for n, k in fphases[:16])
               + (" ..." if len(fphases) > 16 else ""))
-    if re.search(r"\bX4VR_FACING_AB=recentre\b", run or "") and len({k for _, k in fphases}) < 2:
-        fails.append("X4VR_FACING_AB=recentre and the two phases did not both run: nothing to "
-                     "compare (a build without it, or no recentre)")
+    # Three arms only from the build that has them (its look line says so); take 466's
+    # collapse alternated two.
+    collapse = (bool(re.search(r"\bX4VR_FACING_DEBUG=collapse\b", run or ""))
+                and "phases cycle X4's own, the fix, and K" in text)
+    if re.search(r"\bX4VR_FACING_AB=recentre\b", run or ""):
+        if collapse and len({k for _, k in fphases}) < 3:
+            fails.append("X4VR_FACING_AB=recentre with the collapse diagnostic, and the three arms "
+                         "(A X4's own, B the fix, K removed) did not all run: too few recentres")
+        elif len({k for _, k in fphases}) < 2:
+            fails.append("X4VR_FACING_AB=recentre and the two phases did not both run: nothing to "
+                         "compare (a build without it, or no recentre)")
+    # X4's fog blobs (after take 466): the froxel pass, its blobs' frames turned.
+    ff = re.findall(r"facing fog (?:periodic|final): (\d+) froxel module\(s\) turn X4's fog blobs to "
+                    r"the ship \((\d+) product\(s\)\), (\d+) refused", text)
+    if ff:
+        nfm, nfp, nfr = map(int, ff[-1])
+        print(f"facing  fog blobs: {nfm} froxel module(s) patched, {nfp} product(s), {nfr} refused")
+        flying = "inject  headlook write: ARMED" in text or "headlook write: ARMED" in text
+        if fc and fc[-1][0] != "OFF (X4VR_FACING=0)" and nfm == 0 and "pose: " in text and flying:
+            fails.append("facing: on, and X4's froxel fog pass was not patched"
+                         + (f" ({nfr} refused — the log says why)" if nfr else
+                            " (none created, or its module lost M_offset / I_point_num)")
+                         + ": the fog blobs still turn with the head")
 
     # --- declfield: whose field of view the frames are declared with (issue #3) --
     #

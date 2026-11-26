@@ -4310,10 +4310,12 @@ bool facing_ab() {
 }
 static uint64_t forward_latches(); // defined beside the latch
 std::atomic<uint32_t> g_facing_modules{0}, g_facing_inputs{0}, g_facing_partial{0};
-// X4VR_FACING_DEBUG=collapse, DIAGNOSTIC: in the fix's phases the look slot is zero, so
-// every card the patch takes for a billboard collapses to its centre and vanishes,
-// whatever head-look does (take 465: the fix ran in 326 modules and changed nothing
-// Patola could see). Which clouds vanish is which clouds are those cards.
+// X4VR_FACING_DEBUG=collapse, DIAGNOSTIC: a third arm, K, in which the look slot is zero,
+// so every card the billboard patch finds collapses to its centre and every fog blob the
+// froxel patch finds is put out of reach: they vanish, whatever head-look does. With
+// X4VR_FACING_AB=recentre the arms cycle A, B, K by recentre (take 466: the cards'
+// collapse removed X4's menus but no nebula; the froxel blobs are the next suspect).
+// Which clouds vanish is which clouds are those.
 bool facing_collapse() {
     static const bool on = [] {
         const char *e = getenv("X4VR_FACING_DEBUG");
@@ -4324,6 +4326,9 @@ bool facing_collapse() {
 // Headset frames whose look slot was the head-look undone, and those left at identity
 // because X4's camera angles weren't valid.
 std::atomic<uint64_t> g_facing_driven{0}, g_facing_idle{0};
+// X4's fog blobs (patch_fog_points_facing, after take 466): froxel modules created with
+// each blob's frame turned, the products turned, and modules naming M_offset refused.
+std::atomic<uint32_t> g_facing_fog_modules{0}, g_facing_fog_products{0}, g_facing_fog_refused{0};
 
 void shader_knob_report(const char *when) {
     // Zeros included. A line that only appears when the knob fired cannot tell
@@ -4341,9 +4346,16 @@ void shader_knob_report(const char *when) {
              "camera angles not valid (identity)%s",
              when, (unsigned long long)g_facing_driven.load(),
              (unsigned long long)g_facing_idle.load(),
-             facing_collapse() ? "; DIAGNOSTIC X4VR_FACING_DEBUG=collapse: the fix's phases "
-                                 "collapse every billboard the patch finds"
+             facing_collapse() ? "; DIAGNOSTIC X4VR_FACING_DEBUG=collapse: phases cycle X4's own, "
+                                 "the fix, and K, where every fog blob and billboard the patches "
+                                 "find is removed"
                                : "");
+    // Zero with the pose channel up: X4 created no froxel fog pass, or its module no
+    // longer has M_offset and I_point_num by name.
+    X4VR_LOG("facing fog %s: %u froxel module(s) turn X4's fog blobs to the ship (%u "
+             "product(s)), %u refused",
+             when, g_facing_fog_modules.load(), g_facing_fog_products.load(),
+             g_facing_fog_refused.load());
     // The FSR fix (take 380), same rule: a log without this line predates the
     // fix, and "armed" with 0 patched means X4 created no FSR pass (no FSR
     // upscaler) or the signature no longer matches. X4 creates the passes
@@ -7677,6 +7689,40 @@ std::vector<uint32_t> fsr_patch_module(const VkShaderModuleCreateInfo *ci) {
     return code;
 }
 
+// X4's froxel fog pass (volume_point.comp), created with each fog blob's frame turned by
+// the head-look undone (patch_fog_points_facing, after take 466). Empty to create the
+// module as X4 wrote it. Only a module naming M_offset is tried: one of ~400.
+std::vector<uint32_t> fogpoint_patch_module(const VkShaderModuleCreateInfo *ci) {
+    std::vector<uint32_t> code;
+    if (!g_active || !facing_enabled() || !pose_active() || !ci || ci->codeSize < 20)
+        return code;
+    static const char kName[] = "M_offset";
+    if (!memmem(ci->pCode, ci->codeSize, kName, sizeof kName - 1))
+        return code;
+    code.resize(ci->codeSize / 4);
+    memcpy(code.data(), ci->pCode, ci->codeSize);
+    x4vr::spv::FogPointReport rep;
+    if (!x4vr::spv::patch_fog_points_facing(code, pose_set_index(), kPoseBinding, &rep)) {
+        if (strcmp(rep.why, "no block with M_offset and I_point_num") != 0) {
+            const uint32_t n = ++g_facing_fog_refused;
+            if (n <= 3)
+                X4VR_LOG("facing fog: a module naming M_offset (%zu bytes) REFUSED: %s — "
+                         "its fog blobs still turn with the head",
+                         (size_t)ci->codeSize, rep.why);
+        }
+        code.clear();
+        return code;
+    }
+    const uint32_t n = ++g_facing_fog_modules;
+    g_facing_fog_products += rep.products;
+    if (n <= 3)
+        X4VR_LOG("facing fog: X4's froxel fog pass (%zu bytes) patched — %u product(s) of a "
+                 "blob's frame turned to the ship%s",
+                 (size_t)ci->codeSize, rep.products,
+                 facing_ab() ? " (A/B by recentre)" : "");
+    return code;
+}
+
 // The z group count for a dispatch: 2 for an eye-sized dispatch of a patched
 // FSR pipeline (its 16x16 tiles cover the eye), as asked otherwise. Smaller
 // FSR passes (a 768x512 target) stay one-eyed: their output may be a single
@@ -8346,8 +8392,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     }
     count_module_stage(ci);
     bool frag_patched = false;
-    // X4's FSR pass, created with per-eye table access (take 380).
-    const std::vector<uint32_t> fsr_code = fsr_patch_module(ci);
+    // X4's FSR pass, created with per-eye table access (take 380); X4's froxel fog
+    // pass, with its fog blobs turned to the ship (after take 466).
+    std::vector<uint32_t> fsr_code = fsr_patch_module(ci);
+    const bool is_fsr = !fsr_code.empty();
+    if (fsr_code.empty())
+        fsr_code = fogpoint_patch_module(ci);
     VkShaderModuleCreateInfo fsr_ci{};
     if (!fsr_code.empty()) {
         fsr_ci = *ci;
@@ -8356,7 +8406,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     }
     VkResult r = create_shader_module_inner(device, fsr_code.empty() ? ci : &fsr_ci,
                                             ac, out, &frag_patched);
-    if (r == VK_SUCCESS && !fsr_code.empty()) {
+    if (r == VK_SUCCESS && is_fsr) {
         std::lock_guard<std::mutex> lock(g_fsr_mu);
         g_fsr_modules.insert(*out);
     }
@@ -8897,26 +8947,32 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
         // with a valid read of them; and in an A/B's A phases, X4's own.
         bool face = cmd_valid && facing_enabled();
         (cmd_valid ? g_facing_driven : g_facing_idle)++;
-        bool phase_b = true;
+        // The arm: 0 A, X4's own; 1 B, the fix; 2 K, the collapse diagnostic (every
+        // fog blob and billboard the patches find removed). Without the A/B, B; with
+        // the diagnostic alone, K.
+        int arm = facing_collapse() ? 2 : 1;
         if (facing_enabled() && facing_ab()) {
-            // Blind: which phase is the fix is drawn at random, once a run, and only
-            // the log knows.
-            static const uint64_t draw = (uint64_t)std::chrono::steady_clock::now()
-                                             .time_since_epoch().count() >> 10 & 1;
+            // Blind: which phase is which arm is drawn at random, once a run, and
+            // only the log knows. With the diagnostic, three arms in turn.
+            static const uint64_t draw = ((uint64_t)std::chrono::steady_clock::now()
+                                              .time_since_epoch().count() >> 10) % 6;
             const uint64_t phase = forward_latches();
-            phase_b = ((phase + draw) & 1) != 0;
-            face = face && phase_b;
+            arm = (int)((phase + draw) % (facing_collapse() ? 3u : 2u));
             static uint64_t said = ~0ull;
             if (said != phase) {
                 said = phase;
+                static const char *const kArm[3] = {
+                    "A, the billboards turn with the head, as X4 draws them",
+                    "B, the billboards face the ship",
+                    "K, X4's fog blobs and billboards removed — DIAGNOSTIC"};
                 X4VR_LOG("facing: phase #%llu — %s (X4VR_FACING_AB=recentre)",
-                         (unsigned long long)phase,
-                         phase_b ? "B, the billboards face the ship"
-                                 : "A, the billboards turn with the head, as X4 draws them");
+                         (unsigned long long)phase, kArm[arm]);
             }
         }
+        face = face && arm == 1;
         x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face);
-        if (facing_collapse() && facing_enabled() && phase_b)
+        // K only in flight (X4's camera angles valid): a start menu stays a menu.
+        if (facing_enabled() && arm == 2 && cmd_valid)
             std::memset(g_pose.value.look, 0, sizeof g_pose.value.look);
         g_pose.res_yaw = cy;
         g_pose.res_pitch = cp;

@@ -1302,15 +1302,20 @@ int main(int argc, char **argv) {
         const float trans[][3] = {{120, -40, 900}, {-2500, 300, -1800}};
         const float corners[][3] = {{-64, -64, 0}, {64, -64, 0}, {64, 64, 0}, {-30, 50, 2}};
         const float normal_in[4] = {0.f, 0.f, -1.f, 0.f};
-        int checked = 0, bad = 0, ctrl_seen = 0, ctrl_runs = 0;
+        int checked = 0, bad = 0, ctrl_seen = 0, ctrl_runs = 0, ortho_kept = 0, ortho_runs = 0;
         double worst = 0.0;
         std::string why;
+        // An orthographic camera (a menu, the HUD): clip w is 1, column 2's w is 0.
+        float Portho[16] = {};
+        Portho[0] = 0.01f, Portho[5] = -0.01f, Portho[10] = 0.001f, Portho[15] = 1.f;
+        bool ortho_cam = false;
         auto run = [&](const std::vector<uint32_t> &c, const float view[16], const float world[16],
                        const float wvp[16], const x4vr::PoseBlock &pb, const float pos[3],
                        float out_pos[3], float out_n[3], float clip[4]) {
             x4vr::interp::Machine m;
             std::vector<uint8_t> cam(9 * 64, 0), obj(3 * 64, 0), pose(sizeof pb);
             memcpy(&cam[0], view, 64);
+            memcpy(&cam[64], ortho_cam ? Portho : P, 64); // M_projection, member 1
             memcpy(&obj[0], wvp, 64);
             memcpy(&obj[64], world, 64);
             memcpy(pose.data(), &pb, sizeof pb);
@@ -1426,17 +1431,271 @@ int main(int argc, char **argv) {
                         e3 = std::max(e3, (double)fabsf(g3[k] - want[k]));
                     if (e3 > 1.0)
                         ctrl_seen++;
+                    // 4: the same card under an orthographic camera: no billboard,
+                    // untouched however the head turned.
+                    float g4[3], n4[3], cl4[4];
+                    ortho_cam = true;
+                    const bool ok4 = run(code, view, world, wvp, pb, pc, g4, n4, cl4);
+                    ortho_cam = false;
+                    if (!ok4)
+                        return printf("FAIL=interp %s\n", why.c_str()), 1;
+                    ortho_runs++;
+                    double e4 = 0.0;
+                    for (int k = 0; k < 3; k++)
+                        e4 = std::max(e4, (double)fabsf(g4[k] - g3[k]));
+                    if (e4 <= 1e-3 * scale)
+                        ortho_kept++;
+                    else
+                        bad++;
                 }
                 (void)ownw;
             }
         }
-        printf("CHECKED=%d BAD=%d WORST=%.2e CONTROL_CAUGHT=%d/%d\n", checked, bad, worst, ctrl_seen,
-               ctrl_runs);
+        printf("CHECKED=%d BAD=%d WORST=%.2e CONTROL_CAUGHT=%d/%d ORTHO_KEPT=%d/%d\n", checked, bad,
+               worst, ctrl_seen, ctrl_runs, ortho_kept, ortho_runs);
         printf(bad == 0 && ctrl_runs > 0 && ctrl_seen == ctrl_runs && rep.inputs >= 2 ? "PASS\n"
                                                                                        : "FAIL\n");
         return bad == 0 && ctrl_seen == ctrl_runs ? 0 : 1;
     }
 
+    // fog-points-check <in.spv> [out.spv]
+    //
+    // patch_fog_points_facing, run on a straight-line stand-in for X4's froxel fog
+    // pass: a blob whose view-to-blob matrix X4 built along the camera's axes (with a
+    // roll and a scale of its own) must come out sampled as X4 would sample it with
+    // the head straight -- the ship's axes -- for ships, head-looks, blobs and froxel
+    // points swept. Controls: the head-look at identity is X4's own; a zero look slot
+    // (the collapse diagnostic) puts every froxel out of every blob's reach; the
+    // unpatched module, head turned, must be measurably wrong.
+    if (strcmp(argv[1], "fog-points-check") == 0) {
+        const std::vector<uint32_t> orig = load_spv(argv[2]);
+        std::vector<uint32_t> code = orig;
+        x4vr::spv::FogPointReport rep;
+        if (orig.empty() || !x4vr::spv::patch_fog_points_facing(code, 31, 0, &rep)) {
+            printf("FAIL=patch_refused %s\n", rep.why);
+            return 1;
+        }
+        printf("PRODUCTS=%u\n", rep.products);
+        if (argc >= 4) {
+            FILE *f = fopen(argv[3], "wb");
+            if (!f || fwrite(code.data(), 4, code.size(), f) != code.size()) {
+                printf("FAIL=write\n");
+                return 1;
+            }
+            fclose(f);
+        }
+        using M3 = std::array<float, 9>; // column-major
+        auto rot = [](float yaw, float pitch, float roll) {
+            const float k = 0.01745329f, cy = cosf(yaw * k), sy = sinf(yaw * k),
+                        cx = cosf(pitch * k), sx = sinf(pitch * k), cz = cosf(roll * k),
+                        sz = sinf(roll * k);
+            return M3{cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz,
+                      -cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz,
+                      sy * cx, -sx, cy * cx};
+        };
+        auto mul = [](const M3 &a, const M3 &b) {
+            M3 o{};
+            for (int c = 0; c < 3; c++)
+                for (int r = 0; r < 3; r++)
+                    for (int k = 0; k < 3; k++)
+                        o[c * 3 + r] += a[k * 3 + r] * b[c * 3 + k];
+            return o;
+        };
+        auto tr = [](const M3 &a) {
+            M3 o{};
+            for (int c = 0; c < 3; c++)
+                for (int r = 0; r < 3; r++)
+                    o[c * 3 + r] = a[r * 3 + c];
+            return o;
+        };
+        auto mv = [](const M3 &a, const float v[3], float o[3]) {
+            for (int r = 0; r < 3; r++)
+                o[r] = a[r] * v[0] + a[3 + r] * v[1] + a[6 + r] * v[2];
+        };
+        // std140: M_texturematrix0 at 0, U_bias 64, M_offset 80 (32 x 64), V_scale 2128,
+        // I_index 2640 (stride 16), I_point_num 3152.
+        const size_t kOff = 80, kBlock = 3168;
+        struct Blob { float c[3], s, roll; };
+        auto block_of = [&](const M3 &cam, const Blob (&b)[2]) {
+            std::vector<uint8_t> buf(kBlock, 0);
+            for (int i = 0; i < 2; i++) {
+                // X4's matrix along the camera's axes: A = Rz(roll) / s, t = -A p,
+                // p the blob's centre in the camera's space.
+                M3 A = rot(0, 0, b[i].roll);
+                for (float &x : A)
+                    x /= b[i].s;
+                float p[3], ap[3];
+                mv(tr(cam), b[i].c, p);
+                mv(A, p, ap);
+                float m[16] = {};
+                for (int c = 0; c < 3; c++)
+                    for (int r = 0; r < 3; r++)
+                        m[c * 4 + r] = A[c * 3 + r];
+                for (int r = 0; r < 3; r++)
+                    m[12 + r] = -ap[r];
+                m[15] = 1.f;
+                memcpy(&buf[kOff + 64 * i], m, 64);
+            }
+            int n = 2;
+            memcpy(&buf[3152], &n, 4);
+            return buf;
+        };
+        std::string why;
+        auto run = [&](const std::vector<uint32_t> &c, const std::vector<uint8_t> &blk,
+                       const x4vr::PoseBlock &pb, const float v[3], float o0[3], float o1[3],
+                       float o2[3]) {
+            x4vr::interp::Machine m;
+            std::vector<uint8_t> pose(sizeof pb);
+            memcpy(pose.data(), &pb, sizeof pb);
+            m.buffers[{4, 0}] = blk;
+            m.buffers[{31, 0}] = pose;
+            m.input_location[0] = {v[0], v[1], v[2]};
+            if (!m.run(c, 0)) {
+                why = m.error;
+                return false;
+            }
+            for (int k = 0; k < 3; k++) {
+                o0[k] = m.outputs[0][k];
+                o1[k] = m.outputs[1][k];
+                o2[k] = m.outputs[2][k];
+            }
+            return true;
+        };
+        const float ships[][3] = {{0, 0, 0}, {37, -12, 8}, {-140, 60, -30}};
+        const float looks[][2] = {{0, 0}, {30, 0}, {-45, 20}, {120, -50}, {-10, 74}};
+        const Blob blobs[][2] = {{{{0, 0, 30000}, 22000, 0}, {{-9000, 4000, 52000}, 30000, 0}},
+                                 {{{15000, -8000, -40000}, 44000, 35}, {{500, 300, 800}, 900, -70}}};
+        const float points[][3] = {{0, 0, 30000}, {12000, -3000, 25000}, {-20000, 9000, 41000},
+                                   {3000, 2000, -1000}};
+        int checked = 0, bad = 0, ident_ok = 0, ident_runs = 0, killed = 0, kill_runs = 0,
+            ctrl_seen = 0, ctrl_runs = 0;
+        double worst = 0.0;
+        for (const auto &sh : ships)
+            for (const auto &lk : looks)
+                for (const auto &bl : blobs)
+                    for (const auto &X : points) {
+            const M3 body = rot(sh[0], sh[1], sh[2]);
+            x4vr::PoseBlock pb = x4vr::pose_identity();
+            x4vr::pose_set_look(pb, lk[0], lk[1], true);
+            M3 rows{};
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    rows[c * 3 + r] = pb.look[c * 4 + r];
+            const M3 cam = mul(body, tr(rows)); // the head's camera (x4vr_camwrite.hpp)
+            const std::vector<uint8_t> blk = block_of(cam, bl);
+            float v[3];
+            mv(tr(cam), X, v); // the froxel, in the camera's space
+            float g0[3], g1[3], g2[3];
+            if (!run(code, blk, pb, v, g0, g1, g2))
+                return printf("FAIL=interp %s\n", why.c_str()), 1;
+            // Expected: the blob's frame along the SHIP's axes: A body^T (X - c).
+            double err = 0.0;
+            for (int i = 0; i < 2; i++) {
+                M3 A = rot(0, 0, bl[i].roll);
+                for (float &x : A)
+                    x /= bl[i].s;
+                float d[3] = {X[0] - bl[i].c[0], X[1] - bl[i].c[1], X[2] - bl[i].c[2]}, ds[3],
+                      want[3];
+                mv(tr(body), d, ds);
+                mv(A, ds, want);
+                const float *got = i ? g1 : g0;
+                for (int k = 0; k < 3; k++)
+                    err = std::max(err, (double)fabsf(got[k] - want[k]));
+            }
+            {
+                // The gradient's point, view + (1,1,1): in the world X + cam (1,1,1).
+                const float one[3] = {1, 1, 1};
+                float dw[3], ds[3], want[3];
+                mv(cam, one, dw);
+                M3 A = rot(0, 0, bl[0].roll);
+                for (float &x : A)
+                    x /= bl[0].s;
+                float d[3] = {X[0] + dw[0] - bl[0].c[0], X[1] + dw[1] - bl[0].c[1],
+                              X[2] + dw[2] - bl[0].c[2]};
+                mv(tr(body), d, ds);
+                mv(A, ds, want);
+                for (int k = 0; k < 3; k++)
+                    err = std::max(err, (double)fabsf(g2[k] - want[k]));
+            }
+            worst = std::max(worst, err);
+            checked++;
+            if (err > 2e-4) {
+                if (getenv("X4VR_FACING_DEBUG"))
+                    printf("bad: ship %g,%g,%g look %g,%g err %.3g\n", sh[0], sh[1], sh[2], lk[0],
+                           lk[1], err);
+                bad++;
+            }
+            // Controls.
+            float u0[3], u1[3], u2[3];
+            if (!run(orig, blk, pb, v, u0, u1, u2))
+                return printf("FAIL=interp %s\n", why.c_str()), 1;
+            // 1: the head-look at identity is X4's own.
+            float i0[3], i1[3], i2[3];
+            if (!run(code, blk, x4vr::pose_identity(), v, i0, i1, i2))
+                return printf("FAIL=interp %s\n", why.c_str()), 1;
+            ident_runs++;
+            double e1 = 0.0;
+            for (int k = 0; k < 3; k++)
+                e1 = std::max({e1, (double)fabsf(i0[k] - u0[k]), (double)fabsf(i1[k] - u1[k]),
+                               (double)fabsf(i2[k] - u2[k])});
+            if (e1 <= 2e-4)
+                ident_ok++;
+            else
+                bad++;
+            // 2: a zero look slot puts the froxel out of every blob's reach.
+            x4vr::PoseBlock zero = pb;
+            memset(zero.look, 0, sizeof zero.look);
+            float k0[3], k1[3], k2[3];
+            if (!run(code, blk, zero, v, k0, k1, k2))
+                return printf("FAIL=interp %s\n", why.c_str()), 1;
+            kill_runs++;
+            if (k0[0] > 1e8f && k0[1] > 1e8f && k0[2] > 1e8f && k1[0] > 1e8f && k2[0] > 1e8f)
+                killed++;
+            else
+                bad++;
+            // 3: unpatched, the head turned: the blob along the head's axes, wrong.
+            if (lk[0] != 0 || lk[1] != 0) {
+                ctrl_runs++;
+                double e3 = 0.0;
+                for (int i = 0; i < 2; i++) {
+                    M3 A = rot(0, 0, bl[i].roll);
+                    for (float &x : A)
+                        x /= bl[i].s;
+                    float d[3] = {X[0] - bl[i].c[0], X[1] - bl[i].c[1], X[2] - bl[i].c[2]}, ds[3],
+                          want[3];
+                    mv(tr(body), d, ds);
+                    mv(A, ds, want);
+                    const float *u = i ? u1 : u0;
+                    for (int k = 0; k < 3; k++)
+                        e3 = std::max(e3, (double)fabsf(u[k] - want[k]));
+                }
+                if (e3 > 1e-2)
+                    ctrl_seen++;
+            }
+        }
+        printf("CHECKED=%d BAD=%d WORST=%.2e IDENTITY=%d/%d KILLED=%d/%d CONTROL_CAUGHT=%d/%d\n",
+               checked, bad, worst, ident_ok, ident_runs, killed, kill_runs, ctrl_seen, ctrl_runs);
+        const bool pass = bad == 0 && ctrl_runs > 0 && ctrl_seen == ctrl_runs && rep.products >= 3;
+        printf(pass ? "PASS\n" : "FAIL\n");
+        return pass ? 0 : 1;
+    }
+
+    // fog-points <in.spv> <out.spv>: patch_fog_points_facing alone, for X4's own
+    // froxel module from a dump (/tmp only), which the interpreter cannot run.
+    if (strcmp(argv[1], "fog-points") == 0 && argc >= 4) {
+        std::vector<uint32_t> code = load_spv(argv[2]);
+        x4vr::spv::FogPointReport rep;
+        if (code.empty() || !x4vr::spv::patch_fog_points_facing(code, 31, 0, &rep)) {
+            printf("REFUSED=1 WHY=%s\n", rep.why);
+            return 0;
+        }
+        printf("REFUSED=0 PRODUCTS=%u WORDS=%zu\n", rep.products, code.size());
+        FILE *f = fopen(argv[3], "wb");
+        if (!f) { printf("FAIL=open\n"); return 1; }
+        fwrite(code.data(), 4, code.size(), f);
+        fclose(f);
+        return 0;
+    }
     if (strcmp(argv[1], "vert-pose-rotate") == 0 && argc >= 4) {
         std::vector<uint32_t> code = load_spv(argv[2]);
         if (code.empty()) { printf("FAIL=load\n"); return 1; }

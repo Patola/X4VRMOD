@@ -1353,6 +1353,19 @@ else
     fails=$((fails + 1))
 fi
 
+# X4's fog blobs face the ship, not the head (after take 466): the froxel pass's
+# view-to-blob frame, built along the camera's axes, must come out along the ship's,
+# with X4's identity, the collapse diagnostic and the unpatched module as controls;
+# and the patched module must validate.
+fout="$PATCHDIR/fogpoints.spv"
+out=$("$PATCHER" fog-points-check "$BUILD/tests/sample_fog_points.vert.spv" "$fout" 2>&1)
+if grep -qx PASS <<<"$out" && spirv-val "$fout" >/dev/null 2>&1; then
+    printf 'ok   %-38s %s\n' "facing: fog blobs turned to the ship" "$(grep CHECKED <<<"$out")"
+else
+    printf 'FAIL %-38s %s\n' "facing: fog blobs turned to the ship" "$(tr '\n' ' ' <<<"$out")"
+    fails=$((fails + 1))
+fi
+
 # The per-eye M_invprojection correction (task #22). The deferred passes
 # reconstruct position from depth in the *eye's* frame and then light it with
 # centre-frame shadow matrices, which puts the two eyes' shadows on different

@@ -1091,7 +1091,9 @@ inline bool patch_vertex_pose_clip(std::vector<uint32_t> &code, uint32_t set,
 /// of the sky, stay put).
 ///
 /// Such a card is drawn by a world matrix whose turn is the camera's:
-/// `mat3(M_view) * mat3(M_world)` is diagonal, its diagonal D the card's scale.
+/// `mat3(M_view) * mat3(M_world)` is diagonal, its diagonal D the card's scale,
+/// under a perspective camera (an orthographic one, a menu's or the HUD's, has
+/// that diagonal too: take 466's collapse removed X4's menus).
 /// No ordinary object is turned exactly as the camera is. For those cards this
 /// turns each vertex in the card's own frame by `C = D^-1 * L * D`, L being the
 /// pose block's `look` (the head-look undone), so the card stands as X4 would
@@ -1262,9 +1264,14 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
         }
         return false;
     };
-    uint32_t cam_var = 0, view_m = 0, obj_var = 0, world_m = 0;
+    uint32_t cam_var = 0, view_m = 0, obj_var = 0, world_m = 0, proj_var = 0, proj_m = 0;
     if (!block_member(cam_set, cam_binding, "M_view", &cam_var, &view_m))
         return rep.why = "no M_view in the camera block", false;
+    // Perspective draws only: an orthographic camera (a menu, the HUD) has a diagonal
+    // turn too, and is no billboard (take 466: X4's menus took the collapse).
+    if (!block_member(cam_set, cam_binding, "M_projection", &proj_var, &proj_m) ||
+        proj_var != cam_var)
+        return rep.why = "no M_projection in the camera block", false;
     if (!block_member(obj_set, obj_binding, "M_world", &obj_var, &world_m))
         return rep.why = "no M_world in the object block", false;
     // The inputs, whole: vec3 or vec4 of float. X4's GLSL says IN_VERTEXLOCATION_*,
@@ -1330,7 +1337,9 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
     // to nothing: the division by d_i is undone by the world matrix's own d_i, so
     // only a true zero matters (a ten-thousandth of the largest, squared).
     const uint32_t f_eps = fconst(1e-6f), f_flat = fconst(1e-8f);
-    const uint32_t c_view = iconst(view_m), c_world = iconst(world_m), c_zero = iconst(0);
+    const uint32_t c_view = iconst(view_m), c_world = iconst(world_m), c_zero = iconst(0),
+                   c_proj = iconst(proj_m);
+    const uint32_t f_quarter = fconst(0.25f);
     uint32_t e[3];
     for (int k = 0; k < 3; k++) {
         e[k] = new_id();
@@ -1420,6 +1429,20 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
         s = op2(OpFMul, t_float, s, sel(ok, f1, f0));
         d[k] = sel(ok, b[k][k], f1); // never a division by nearly zero
     }
+    {
+        // Perspective when clip w takes view z: column 2's w, 1 in magnitude in X4's
+        // projection, 0 in an orthographic one.
+        const uint32_t pp = new_id();
+        emit(calc, OpAccessChain, {ptr_uni_mat4, pp, cam_var, c_proj});
+        const uint32_t pm = new_id();
+        emit(calc, OpLoad, {t_mat4, pm, pp});
+        const uint32_t pc2 = new_id();
+        emit(calc, OpCompositeExtract, {t_v4, pc2, pm, 2});
+        const uint32_t pw = new_id();
+        emit(calc, OpCompositeExtract, {t_float, pw, pc2, 3});
+        const uint32_t persp = op2(OpFOrdGreaterThan, t_bool, sq(pw), f_quarter);
+        s = op2(OpFMul, t_float, s, sel(persp, f1, f0));
+    }
     const uint32_t dv = new_id();
     emit(calc, OpCompositeConstruct, {t_v3, dv, d[0], d[1], d[2]});
     const uint32_t invd = op2(OpFDiv, t_v3, ones, dv);
@@ -1482,6 +1505,358 @@ inline bool patch_vertex_facing_body(std::vector<uint32_t> &code, uint32_t cam_s
         out.insert(out.end(), code.begin() + in.start, code.begin() + in.start + in.len);
     }
     if (!calc_done || !rep.inputs)
+        return rep.why = "nothing to turn", false;
+    out[3] = bound;
+    code.swap(out);
+    return true;
+}
+
+/// **X4's fog blobs face the ship, not the head** (2026-11-26, after take 466).
+///
+/// A sector's `<volumetricfog>` fields (the Turquoise Sea's: 44 and 60 km blobs of
+/// fog_patterncloud_06/08) are not geometry. X4's `volume_point.comp` injects each
+/// into a froxel volume laid out in the CAMERA's space: for every froxel it takes the
+/// view-space position `view` and samples the blob's pattern, three planes, at
+/// `off = (M_offset[i] * vec4(view, 1)).xyz`, a view-to-blob matrix X4 builds on the
+/// CPU. If that matrix turns as the camera does, every blob's pattern is fixed to the
+/// camera's axes, and head-look turns them all with the head: a card's swivel, in
+/// three dimensions. Flat, the screen IS the camera, so it doesn't show.
+///
+/// This turns each blob's frame by the head-look undone: with A = mat3(M_offset[i]),
+///
+///     off' = A * L^T * A^-1 * off
+///
+/// which is the pattern X4 computes with the head straight, the camera being the
+/// ship's (L, PoseBlock::look, maps the ship's view axes to the head's: rows =
+/// x4vr_camwrite rows_for). The blob's centre and size are unchanged: off is zero at
+/// the centre either way, and L is a rotation. L at identity gives the identity, so
+/// X4's own phases are X4's own.
+///
+/// A look slot of zero (X4VR_FACING_DEBUG=collapse, a DIAGNOSTIC) puts every froxel
+/// a billion units from every blob: the blobs vanish, which is how a take learns
+/// whether the clouds it sees are these.
+///
+/// Recognised by its block: a Uniform block with members `M_offset` (an array of
+/// mat4) and `I_point_num`; every product of a loaded `M_offset[i]` with a vec4 is
+/// turned. Any entry point (X4's is compute; the offline check runs a straight-line
+/// vertex stand-in through the interpreter). Refused at SPIR-V 1.4 and later, like
+/// the vertex patches, and without GLSL.std.450 imported (the inverse and the
+/// determinant are its instructions).
+struct FogPointReport {
+    uint32_t products = 0; // M_offset[i] * v turned
+    const char *why = "";
+};
+inline bool patch_fog_points_facing(std::vector<uint32_t> &code, uint32_t pose_set,
+                                    uint32_t pose_binding, FogPointReport *report = nullptr) {
+    FogPointReport dummy;
+    FogPointReport &rep = report ? *report : dummy;
+    rep = FogPointReport{};
+    std::vector<Inst> insts;
+    if (!iterate(code, insts) || code[1] >= 0x00010400u)
+        return rep.why = "not SPIR-V below 1.4", false;
+    uint32_t bound = code[3];
+    auto new_id = [&bound] { return bound++; };
+    auto str_of = [&code](const Inst &in, uint32_t first) {
+        std::string s;
+        for (uint32_t i = first; i < in.len; i++)
+            for (int b = 0; b < 4; b++) {
+                const char c = (char)((code[in.start + i] >> (8 * b)) & 0xff);
+                if (!c)
+                    return s;
+                s.push_back(c);
+            }
+        return s;
+    };
+    enum : uint32_t {
+        kOpTranspose = 84,
+        kOpLabel = 248,
+        kGlslDeterminant = 33,
+        kGlslMatrixInverse = 34,
+    };
+
+    uint32_t entry_fn = 0, glsl = 0, t_float = 0, t_int = 0, t_bool = 0, t_v3 = 0, t_v4 = 0,
+             t_bv3 = 0, t_mat3 = 0, t_mat4 = 0;
+    std::map<std::pair<uint32_t, uint32_t>, std::string> member_names;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> struct_members;
+    std::unordered_map<uint32_t, uint32_t> array_elem, int_consts;
+    struct PtrType { uint32_t storage, pointee; };
+    std::unordered_map<uint32_t, PtrType> ptr_types;
+    struct Var { uint32_t ptr, storage; };
+    std::unordered_map<uint32_t, Var> vars;
+    size_t first_fn = 0, last_annotation_end = 0, first_global = 0;
+    bool have_first_fn = false, have_first_global = false;
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (!have_first_global)
+            switch (in.op) {
+            case OpTypeInt: case OpTypeFloat: case OpTypeVector: case OpTypeBool:
+            case OpTypeMatrix: case OpTypeStruct: case OpTypePointer:
+            case OpConstant: case OpConstantComposite: case OpVariable:
+                first_global = in.start;
+                have_first_global = true;
+                break;
+            default:
+                break;
+            }
+        switch (in.op) {
+        case OpEntryPoint:
+            if (in.len >= 3 && !entry_fn)
+                entry_fn = w[2];
+            break;
+        case OpExtInstImport:
+            if (in.len >= 3 && str_of(in, 2) == "GLSL.std.450")
+                glsl = w[1];
+            break;
+        case OpMemberName:
+            if (in.len >= 4)
+                member_names[{w[1], w[2]}] = str_of(in, 3);
+            break;
+        case OpDecorate:
+        case OpMemberDecorate:
+            last_annotation_end = in.start + in.len;
+            break;
+        case OpTypeFloat:
+            if (in.len >= 3 && w[2] == 32)
+                t_float = w[1];
+            break;
+        case OpTypeInt:
+            if (in.len >= 4 && w[2] == 32 && w[3] == 1)
+                t_int = w[1];
+            break;
+        case OpTypeBool:
+            t_bool = w[1];
+            break;
+        case OpTypeVector:
+            if (in.len >= 4 && w[2] == t_float && t_float && w[3] == 3)
+                t_v3 = w[1];
+            if (in.len >= 4 && w[2] == t_float && t_float && w[3] == 4)
+                t_v4 = w[1];
+            if (in.len >= 4 && w[2] == t_bool && t_bool && w[3] == 3)
+                t_bv3 = w[1];
+            break;
+        case OpTypeMatrix:
+            if (in.len >= 4 && w[2] == t_v3 && t_v3 && w[3] == 3)
+                t_mat3 = w[1];
+            if (in.len >= 4 && w[2] == t_v4 && t_v4 && w[3] == 4)
+                t_mat4 = w[1];
+            break;
+        case OpTypeArray:
+            if (in.len >= 4)
+                array_elem[w[1]] = w[2];
+            break;
+        case OpTypeStruct:
+            struct_members[w[1]].assign(w + 2, w + in.len);
+            break;
+        case OpTypePointer:
+            if (in.len >= 4)
+                ptr_types[w[1]] = {w[2], w[3]};
+            break;
+        case OpConstant:
+            if (in.len == 4)
+                int_consts[w[2]] = w[3];
+            break;
+        case OpVariable:
+            if (in.len >= 4)
+                vars[w[2]] = {w[1], w[3]};
+            break;
+        case OpFunction:
+            if (!have_first_fn) {
+                first_fn = in.start;
+                have_first_fn = true;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    if (!entry_fn || !have_first_fn)
+        return rep.why = "no entry point", false;
+    if (!glsl)
+        return rep.why = "GLSL.std.450 not imported", false;
+    if (!t_float || !t_v3 || !t_v4 || !t_mat4)
+        return rep.why = "no vec3, vec4 or mat4", false;
+
+    // The block: M_offset (mat4[]) and I_point_num, by name.
+    uint32_t block_var = 0, off_member = 0;
+    for (auto &[id, v] : vars) {
+        if (v.storage != StorageClassUniform)
+            continue;
+        auto pt = ptr_types.find(v.ptr);
+        if (pt == ptr_types.end())
+            continue;
+        auto sm = struct_members.find(pt->second.pointee);
+        if (sm == struct_members.end())
+            continue;
+        bool has_off = false, has_num = false;
+        uint32_t om = 0;
+        for (uint32_t m = 0; m < sm->second.size(); m++) {
+            auto mn = member_names.find({pt->second.pointee, m});
+            if (mn == member_names.end())
+                continue;
+            if (mn->second == "M_offset") {
+                auto ae = array_elem.find(sm->second[m]);
+                if (ae != array_elem.end() && ae->second == t_mat4) {
+                    has_off = true;
+                    om = m;
+                }
+            }
+            if (mn->second == "I_point_num")
+                has_num = true;
+        }
+        if (has_off && has_num) {
+            block_var = id;
+            off_member = om;
+            break;
+        }
+    }
+    if (!block_var)
+        return rep.why = "no block with M_offset and I_point_num", false;
+
+    // M_offset[i] pointers, their loads, the loads' products with a vec4.
+    std::unordered_set<uint32_t> mptrs, mloads;
+    std::unordered_map<uint32_t, uint32_t> product_matrix; // product result -> matrix
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.op == OpAccessChain && in.len >= 6 && w[3] == block_var) {
+            auto c = int_consts.find(w[4]);
+            if (c != int_consts.end() && c->second == off_member)
+                mptrs.insert(w[2]);
+        }
+        if (in.op == OpLoad && in.len >= 4 && w[1] == t_mat4 && mptrs.count(w[3]))
+            mloads.insert(w[2]);
+        if (in.op == OpMatrixTimesVector && in.len >= 5 && w[1] == t_v4 && mloads.count(w[3]))
+            product_matrix[w[2]] = w[3];
+    }
+    if (product_matrix.empty())
+        return rep.why = "no M_offset[i] * vec4", false;
+
+    // --- declarations --------------------------------------------------
+    std::vector<uint32_t> decls, annos;
+    if (!t_mat3) {
+        t_mat3 = new_id();
+        emit(decls, OpTypeMatrix, {t_mat3, t_v3, 3});
+    }
+    if (!t_int) {
+        t_int = new_id();
+        emit(decls, OpTypeInt, {t_int, 32, 1});
+    }
+    if (!t_bool) {
+        t_bool = new_id();
+        emit(decls, OpTypeBool, {t_bool});
+    }
+    if (!t_bv3) {
+        t_bv3 = new_id();
+        emit(decls, OpTypeVector, {t_bv3, t_bool, 3});
+    }
+    auto fconst = [&](float f) {
+        const uint32_t id = new_id();
+        uint32_t bits;
+        std::memcpy(&bits, &f, 4);
+        emit(decls, OpConstant, {t_float, id, bits});
+        return id;
+    };
+    const uint32_t f_half = fconst(0.5f), f_far = fconst(1e9f);
+    const uint32_t c_zero = new_id();
+    emit(decls, OpConstant, {t_int, c_zero, 0});
+    const uint32_t far3 = new_id();
+    emit(decls, OpConstantComposite, {t_v3, far3, f_far, f_far, f_far});
+    const uint32_t ptr_uni_mat4 = new_id();
+    emit(decls, OpTypePointer, {ptr_uni_mat4, StorageClassUniform, t_mat4});
+    // The pose block's `look`, alone, at its offset (as patch_vertex_facing_body).
+    const uint32_t t_block = new_id();
+    emit(decls, OpTypeStruct, {t_block, t_mat4});
+    const uint32_t ptr_block = new_id();
+    emit(decls, OpTypePointer, {ptr_block, StorageClassUniform, t_block});
+    const uint32_t pose_var = new_id();
+    emit(decls, OpVariable, {ptr_block, pose_var, StorageClassUniform});
+    emit(annos, OpDecorate, {t_block, DecorationBlock});
+    emit(annos, OpMemberDecorate, {t_block, 0, DecorationOffset, x4vr::kPoseLookOffset});
+    emit(annos, OpMemberDecorate, {t_block, 0, DecorationColMajor});
+    emit(annos, OpMemberDecorate, {t_block, 0, DecorationMatrixStride, 16});
+    emit(annos, OpDecorate, {pose_var, DecorationDescriptorSet, pose_set});
+    emit(annos, OpDecorate, {pose_var, DecorationBinding, pose_binding});
+    const size_t anno_at = last_annotation_end ? last_annotation_end
+                                               : (have_first_global ? first_global : first_fn);
+
+    // --- L^T and "alive", at the top of the entry -----------------------
+    std::vector<uint32_t> calc;
+    auto mat3_of = [&](std::vector<uint32_t> &dst, uint32_t m4) {
+        uint32_t col[3];
+        for (uint32_t k = 0; k < 3; k++) {
+            const uint32_t c4 = new_id();
+            emit(dst, OpCompositeExtract, {t_v4, c4, m4, k});
+            col[k] = new_id();
+            emit(dst, OpVectorShuffle, {t_v3, col[k], c4, c4, 0, 1, 2});
+        }
+        const uint32_t m3 = new_id();
+        emit(dst, OpCompositeConstruct, {t_mat3, m3, col[0], col[1], col[2]});
+        return m3;
+    };
+    const uint32_t lp = new_id();
+    emit(calc, OpAccessChain, {ptr_uni_mat4, lp, pose_var, c_zero});
+    const uint32_t l4 = new_id();
+    emit(calc, OpLoad, {t_mat4, l4, lp});
+    const uint32_t l3 = mat3_of(calc, l4);
+    const uint32_t lt = new_id();
+    emit(calc, kOpTranspose, {t_mat3, lt, l3});
+    const uint32_t det = new_id();
+    emit(calc, OpExtInst, {t_float, det, glsl, kGlslDeterminant, l3});
+    const uint32_t alive = new_id();
+    emit(calc, OpFOrdGreaterThan, {t_bool, alive, det, f_half});
+    const uint32_t alive3 = new_id();
+    emit(calc, OpCompositeConstruct, {t_bv3, alive3, alive, alive, alive});
+
+    // --- rewrite -------------------------------------------------------
+    std::unordered_map<uint32_t, uint32_t> turn_of; // M_offset[i] load -> A L^T A^-1
+    std::vector<uint32_t> out;
+    out.reserve(code.size() + decls.size() + annos.size() + calc.size() + 256);
+    out.insert(out.end(), code.begin(), code.begin() + 5);
+    bool in_entry = false, calc_done = false, after_label = false;
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        if (in.start == anno_at)
+            out.insert(out.end(), annos.begin(), annos.end());
+        if (in.start == first_fn)
+            out.insert(out.end(), decls.begin(), decls.end());
+        if (in.op == OpFunction && in.len >= 3)
+            in_entry = w[2] == entry_fn;
+        // The entry's first block: after its OpVariables, which must come first.
+        if (in_entry && !calc_done && after_label && in.op != OpVariable) {
+            out.insert(out.end(), calc.begin(), calc.end());
+            calc_done = true;
+        }
+        if (in_entry && in.op == kOpLabel)
+            after_label = true;
+        if (in.op == OpMatrixTimesVector && in.len >= 5 && product_matrix.count(w[2])) {
+            auto t = turn_of.find(w[3]);
+            if (t == turn_of.end()) {
+                out.insert(out.end(), code.begin() + in.start, code.begin() + in.start + in.len);
+                return rep.why = "a product before its matrix's turn", false;
+            }
+            const uint32_t result = w[2], raw = new_id();
+            emit(out, OpMatrixTimesVector, {t_v4, raw, w[3], w[4]});
+            const uint32_t xyz = new_id(), turned = new_id(), kept = new_id();
+            emit(out, OpVectorShuffle, {t_v3, xyz, raw, raw, 0, 1, 2});
+            emit(out, OpMatrixTimesVector, {t_v3, turned, t->second, xyz});
+            emit(out, OpSelect, {t_v3, kept, alive3, turned, far3});
+            emit(out, OpVectorShuffle, {t_v4, result, kept, raw, 0, 1, 2, 6});
+            rep.products++;
+            continue;
+        }
+        out.insert(out.end(), code.begin() + in.start, code.begin() + in.start + in.len);
+        if (in.op == OpLoad && in.len >= 4 && mloads.count(w[2])) {
+            // Right after the load, so the turn dominates every use of the matrix.
+            const uint32_t a = mat3_of(out, w[2]);
+            const uint32_t ainv = new_id();
+            emit(out, OpExtInst, {t_mat3, ainv, glsl, kGlslMatrixInverse, a});
+            const uint32_t al = new_id();
+            emit(out, OpMatrixTimesMatrix, {t_mat3, al, a, lt});
+            const uint32_t turn = new_id();
+            emit(out, OpMatrixTimesMatrix, {t_mat3, turn, al, ainv});
+            turn_of[w[2]] = turn;
+        }
+    }
+    if (!calc_done || !rep.products)
         return rep.why = "nothing to turn", false;
     out[3] = bound;
     code.swap(out);

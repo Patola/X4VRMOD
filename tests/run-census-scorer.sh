@@ -2216,14 +2216,50 @@ fpa='[  99800.000] layer   facing: phase #1 — B, the billboards face the ship 
 fpb='[  99850.000] layer   facing: phase #2 — A, the billboards turn with the head, as X4 draws them (X4VR_FACING_AB=recentre)'
 plant /tmp/census-fc-ok.log "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$fcon"
 want "facing: patched modules said" /tmp/census-fc-ok.log facing "ON: 12 vertex module(s) turn X4's billboards to the ship"
-absent "facing: patched -> no FAIL" /tmp/census-fc-ok.log "lack IN_VERTEXLOCATION_POSITION"
+absent "facing: patched -> no FAIL" /tmp/census-fc-ok.log "FAIL .*lack IN_VERTEXLOCATION_POSITION"
 plant /tmp/census-fc-none.log "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$fnone"
 want "facing: on, none patched -> FAIL" /tmp/census-fc-none.log "FAIL|  - " "lack IN_VERTEXLOCATION_POSITION"
 { sed 's/env: run = /env: run = X4VR_FACING_AB=recentre /' "$BASE"; printf '%s\n' "$fcon" "$fpa" "$fpb"; } > /tmp/census-fc-ab.log
 want "facing: A/B phases said" /tmp/census-fc-ab.log facing "phases: #1 B, #2 A"
-absent "facing: both phases -> no FAIL" /tmp/census-fc-ab.log "the two phases did not both run"
+absent "facing: both phases -> no FAIL" /tmp/census-fc-ab.log "FAIL .*the two phases did not both run"
 { sed 's/env: run = /env: run = X4VR_FACING_AB=recentre /' "$BASE"; printf '%s\n' "$fcon" "$fpa"; } > /tmp/census-fc-ab1.log
 want "facing: one phase only -> FAIL" /tmp/census-fc-ab1.log "FAIL|  - " "the two phases did not both run"
+# The absent checks above must be able to fail: on the FAIL logs they would report.
+for neg in "/tmp/census-fc-none.log:FAIL .*lack IN_VERTEXLOCATION_POSITION" \
+           "/tmp/census-fc-ab1.log:FAIL .*the two phases did not both run"; do
+    if python3 tools/score_run.py "${neg%%:*}" 2>&1 | grep -qE "^${neg#*:}"; then
+        ok "facing: the absent check would catch ${neg#*:}"
+    else
+        bad "facing: the absent check cannot fail: ${neg#*:}"
+    fi
+done
+
+# X4's fog blobs face the ship (after take 466): the froxel pass, and three arms.
+for f in '"facing fog %s: %u froxel module(s) turn X4'"'"'s fog blobs to the ship (%u "' \
+         '"the fix, and K, where every fog blob and billboard the patches "' \
+         '"K, X4'"'"'s fog blobs and billboards removed — DIAGNOSTIC"'; do
+    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "facing fog: the layer still prints $f" \
+        || bad "facing fog: the layer's format moved: $f"
+done
+farm='[  99700.500] inject  headlook write: ARMED on camera 0x1 (mode 0)'
+ffok='[  99900.001] layer   facing fog final: 1 froxel module(s) turn X4'"'"'s fog blobs to the ship (2 product(s)), 0 refused'
+ffnone='[  99900.001] layer   facing fog final: 0 froxel module(s) turn X4'"'"'s fog blobs to the ship (0 product(s)), 0 refused'
+plant /tmp/census-ff-ok.log "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$farm" "$fcon" "$ffok"
+want "facing fog: patched said" /tmp/census-ff-ok.log facing "fog blobs: 1 froxel module(s) patched, 2 product(s), 0 refused"
+absent "facing fog: patched -> no FAIL" /tmp/census-ff-ok.log "FAIL .*froxel fog pass was not patched"
+plant /tmp/census-ff-none.log "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$farm" "$fcon" "$ffnone"
+want "facing fog: in flight, none patched -> FAIL" /tmp/census-ff-none.log "FAIL|  - " "froxel fog pass was not patched"
+plant /tmp/census-ff-menu.log "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$fcon" "$ffnone"
+absent "facing fog: never flew -> no FAIL" /tmp/census-ff-menu.log "FAIL .*froxel fog pass was not patched"
+flk='[  99900.002] layer   facing look final: 10 headset frame(s) with the head-look undone, 2 with X4'"'"'s camera angles not valid (identity); DIAGNOSTIC X4VR_FACING_DEBUG=collapse: phases cycle X4'"'"'s own, the fix, and K, where every fog blob and billboard the patches find is removed'
+fpk='[  99870.000] layer   facing: phase #3 — K, X4'"'"'s fog blobs and billboards removed — DIAGNOSTIC (X4VR_FACING_AB=recentre)'
+{ sed 's/env: run = /env: run = X4VR_FACING_AB=recentre X4VR_FACING_DEBUG=collapse /' "$BASE"; printf '%s\n' "$fcon" "$flk" "$fpa" "$fpb" "$fpk"; } > /tmp/census-fc-abk.log
+want "facing: three arms said" /tmp/census-fc-abk.log facing "phases: #1 B, #2 A, #3 K"
+absent "facing: three arms -> no FAIL" /tmp/census-fc-abk.log "FAIL .*the three arms"
+{ sed 's/env: run = /env: run = X4VR_FACING_AB=recentre X4VR_FACING_DEBUG=collapse /' "$BASE"; printf '%s\n' "$fcon" "$flk" "$fpa" "$fpb"; } > /tmp/census-fc-ab2k.log
+want "facing: collapse build, two arms -> FAIL" /tmp/census-fc-ab2k.log "FAIL|  - " "the three arms"
+{ sed 's/env: run = /env: run = X4VR_FACING_AB=recentre X4VR_FACING_DEBUG=collapse /' "$BASE"; printf '%s\n' "$fcon" "$fpa" "$fpb"; } > /tmp/census-fc-ab466.log
+absent "facing: a two-arm collapse build (466) -> no three-arm FAIL" /tmp/census-fc-ab466.log "FAIL .*the three arms"
 
 # Whose field of view is declared, and the runtime's eyes (issue #3, 2026-11-25).
 for f in '"xr: a field of view of our own is %s (fovMutable)"' '"NOT allowed: the runtime'"'"'s own has to be declared"'; do

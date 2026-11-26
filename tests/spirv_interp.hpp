@@ -36,7 +36,8 @@ constexpr uint32_t ExtInst = 12, TypeVoid = 19, TypeBool = 20, TypeInt = 21,
                    CompositeExtract = 81, CompositeInsert = 82,
                    ConvertSToF = 111, FNegate = 127, FAdd = 129, FSub = 131,
                    FMul = 133, FDiv = 136, VectorTimesScalar = 142,
-                   MatrixTimesVector = 145, Select = 169,
+                   Transpose = 84, MatrixTimesVector = 145, MatrixTimesMatrix = 146,
+                   Select = 169,
                    FOrdGreaterThan = 186, Label = 248, Return = 253,
                    EntryPoint = 15;
 } // namespace op
@@ -47,7 +48,7 @@ constexpr uint32_t kDecBuiltIn = 11, kDecOffset = 35, kDecMatrixStride = 7,
 constexpr uint32_t kBuiltInPosition = 0, kBuiltInViewIndex = 4440;
 constexpr uint32_t kSCInput = 1, kSCUniform = 2, kSCOutput = 3,
                    kSCFunction = 7, kSCPrivate = 6;
-constexpr uint32_t kGlslSqrt = 31;
+constexpr uint32_t kGlslSqrt = 31, kGlslDeterminant = 33, kGlslMatrixInverse = 34;
 
 struct Type {
     uint32_t op = 0;
@@ -529,14 +530,77 @@ private:
         case op::FOrdGreaterThan:
             put(w[1], w[2], {in(w[3])[0] > in(w[4])[0] ? 1.f : 0.f});
             return true;
-        case op::Select:
-            put(w[1], w[2], in(w[3])[0] != 0.f ? in(w[4]) : in(w[5]));
+        case op::Select: {
+            // A scalar condition picks a whole operand; a vector one, per component.
+            const std::vector<float> &c = in(w[3]), &a = in(w[4]), &b = in(w[5]);
+            if (c.size() <= 1) {
+                put(w[1], w[2], !c.empty() && c[0] != 0.f ? a : b);
+                return true;
+            }
+            if (a.size() != c.size() || b.size() != c.size())
+                return fail("vector select of a different size");
+            std::vector<float> v(c.size());
+            for (size_t k = 0; k < c.size(); k++)
+                v[k] = c[k] != 0.f ? a[k] : b[k];
+            put(w[1], w[2], v);
             return true;
-        case op::ExtInst:
-            if (w[4] != kGlslSqrt)
-                return fail("ExtInst other than Sqrt");
-            put(w[1], w[2], {std::sqrt(in(w[5])[0])});
+        }
+        case op::Transpose: {
+            const std::vector<float> &m = in(w[3]);
+            const Type &rt = types_[w[1]];
+            const size_t cols = rt.count, rows = cols ? m.size() / cols : 0;
+            std::vector<float> v(m.size());
+            // result column c, row r = source column r, row c
+            for (size_t c = 0; c < cols; c++)
+                for (size_t r = 0; r < rows; r++)
+                    v[c * rows + r] = m[r * cols + c];
+            put(w[1], w[2], v);
             return true;
+        }
+        case op::MatrixTimesMatrix: {
+            const std::vector<float> &a = in(w[3]), &b = in(w[4]);
+            const size_t n = 3;
+            if (a.size() != n * n || b.size() != n * n)
+                return fail("MatrixTimesMatrix other than mat3");
+            std::vector<float> v(n * n, 0.f);
+            for (size_t c = 0; c < n; c++)
+                for (size_t r = 0; r < n; r++) {
+                    float acc = 0.f;
+                    for (size_t k = 0; k < n; k++)
+                        acc = acc + a[k * n + r] * b[c * n + k];
+                    v[c * n + r] = acc;
+                }
+            put(w[1], w[2], v);
+            return true;
+        }
+        case op::ExtInst: {
+            const std::vector<float> &x = in(w[5]);
+            auto m = [&](int c, int r) { return (double)x[c * 3 + r]; };
+            if (w[4] == kGlslSqrt) {
+                put(w[1], w[2], {std::sqrt(x[0])});
+                return true;
+            }
+            if ((w[4] == kGlslDeterminant || w[4] == kGlslMatrixInverse) && x.size() == 9) {
+                const double det = m(0, 0) * (m(1, 1) * m(2, 2) - m(2, 1) * m(1, 2)) -
+                                   m(1, 0) * (m(0, 1) * m(2, 2) - m(2, 1) * m(0, 2)) +
+                                   m(2, 0) * (m(0, 1) * m(1, 2) - m(1, 1) * m(0, 2));
+                if (w[4] == kGlslDeterminant) {
+                    put(w[1], w[2], {(float)det});
+                    return true;
+                }
+                std::vector<float> v(9);
+                // inverse = adjugate / det; adj(c, r) = cofactor(r, c)
+                for (int c = 0; c < 3; c++)
+                    for (int r = 0; r < 3; r++) {
+                        const int c1 = (r + 1) % 3, c2 = (r + 2) % 3, r1 = (c + 1) % 3,
+                                  r2 = (c + 2) % 3;
+                        v[c * 3 + r] = (float)((m(c1, r1) * m(c2, r2) - m(c2, r1) * m(c1, r2)) / det);
+                    }
+                put(w[1], w[2], v);
+                return true;
+            }
+            return fail("ExtInst other than Sqrt, Determinant or MatrixInverse of a mat3");
+        }
         default:
             return fail("unsupported opcode " + std::to_string(o));
         }
