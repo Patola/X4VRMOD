@@ -16,9 +16,13 @@
 // this suite's cases are shaders the patch is *supposed* to leave alone -- so
 // the exit status is 0 either way and the runner reads the key.
 #include "../common/x4vr_spirv.hpp"
+#include "../injector/x4vr_camwrite.hpp"
 #include "spirv_interp.hpp"
 
+#include <array>
+#include <cmath>
 #include <cstdio>
+#include <string>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -1195,6 +1199,244 @@ int main(int argc, char **argv) {
     // #33's conjugation. Emits to <out> so spirv-val can judge it, and prints
     // REFUSED for a module with no camera block -- which is the correct answer
     // for the 54 non-World modules and must not read as a failure.
+    // vert-facing-check <in.spv> [out.spv]
+    //
+    // patch_vertex_facing_body, run: a card X4 turned to its camera (a world
+    // matrix whose turn is the camera's) must come out turned to the ship's
+    // forward, as X4 would draw it with the head straight -- the head-look in
+    // x4vr_camwrite.hpp's convention, swept with several ships, scales (one of
+    // them unequal and with a flipped axis) and positions. Its normal follows.
+    // Three controls: the head-look at identity gives X4's own card; an object
+    // not turned as the camera is moves not at all; and the unpatched module is
+    // caught (it puts the card where the head turned it). gl_Position must be
+    // X4's world-view-projection of the same world point.
+    if (strcmp(argv[1], "vert-facing-check") == 0) {
+        const std::vector<uint32_t> orig = load_spv(argv[2]);
+        std::vector<uint32_t> code = orig;
+        x4vr::spv::FacingReport rep;
+        if (orig.empty() || !x4vr::spv::patch_vertex_facing_body(code, 1, 0, 3, 0, 31, 0, &rep)) {
+            printf("FAIL=patch_refused\n");
+            return 1;
+        }
+        printf("INPUTS=%u PARTIAL=%u\n", rep.inputs, rep.partial);
+        // The look slot's rows ARE the rows the injector writes into X4's camera.
+        {
+            double far_off = 0.0;
+            for (float y : {0.f, 30.f, -45.f, 120.f, -170.f})
+                for (float p : {0.f, 20.f, -50.f, 74.f}) {
+                    x4vr::PoseBlock pb = x4vr::pose_identity();
+                    x4vr::pose_set_look(pb, y, p, true);
+                    float rows[12] = {};
+                    x4vr::camwrite::rows_for(y, p, rows);
+                    for (int r = 0; r < 3; r++)
+                        for (int c = 0; c < 3; c++)
+                            far_off = std::max(far_off, (double)fabsf(pb.look[c * 4 + r] -
+                                                                      rows[r * 4 + c]));
+                }
+            printf("LOOK_VS_CAMWRITE=%.2e\n", far_off);
+            if (far_off > 1e-6) {
+                printf("FAIL=look_rows\n");
+                return 1;
+            }
+        }
+        if (argc >= 4) {
+            FILE *f = fopen(argv[3], "wb");
+            if (!f || fwrite(code.data(), 4, code.size(), f) != code.size()) {
+                printf("FAIL=write\n");
+                return 1;
+            }
+            fclose(f);
+        }
+        using M3 = std::array<float, 9>; // column-major
+        auto rot = [](float yaw, float pitch, float roll) {
+            const float k = 0.01745329f, cy = cosf(yaw * k), sy = sinf(yaw * k),
+                        cx = cosf(pitch * k), sx = sinf(pitch * k), cz = cosf(roll * k),
+                        sz = sinf(roll * k);
+            // Ry * Rx * Rz, column-major
+            return M3{cy * cz + sy * sx * sz, cx * sz, -sy * cz + cy * sx * sz,
+                      -cy * sz + sy * sx * cz, cx * cz, sy * sz + cy * sx * cz,
+                      sy * cx, -sx, cy * cx};
+        };
+        auto mul = [](const M3 &a, const M3 &b) {
+            M3 o{};
+            for (int c = 0; c < 3; c++)
+                for (int r = 0; r < 3; r++)
+                    for (int k = 0; k < 3; k++)
+                        o[c * 3 + r] += a[k * 3 + r] * b[c * 3 + k];
+            return o;
+        };
+        auto tr = [](const M3 &a) {
+            M3 o{};
+            for (int c = 0; c < 3; c++)
+                for (int r = 0; r < 3; r++)
+                    o[c * 3 + r] = a[r * 3 + c];
+            return o;
+        };
+        auto mv = [](const M3 &a, const float v[3], float o[3]) {
+            for (int r = 0; r < 3; r++)
+                o[r] = a[r] * v[0] + a[3 + r] * v[1] + a[6 + r] * v[2];
+        };
+        auto m4 = [](const M3 &a, const float t[3], float o[16]) {
+            for (int c = 0; c < 4; c++)
+                for (int r = 0; r < 4; r++)
+                    o[c * 4 + r] = (c < 3 && r < 3) ? a[c * 3 + r]
+                                   : (c == 3 && r < 3) ? (t ? t[r] : 0.f)
+                                   : (c == 3 && r == 3) ? 1.f
+                                                        : 0.f;
+        };
+        auto mul4 = [](const float *a, const float *b, float *o) {
+            for (int c = 0; c < 4; c++)
+                for (int r = 0; r < 4; r++) {
+                    float s = 0.f;
+                    for (int k = 0; k < 4; k++)
+                        s += a[k * 4 + r] * b[c * 4 + k];
+                    o[c * 4 + r] = s;
+                }
+        };
+        // X4's projection: row3 = [0 0 1 0], m[10] = 0, reversed-Z near 0.1.
+        float P[16] = {};
+        P[0] = 0.7f, P[5] = -0.7f, P[2 * 4 + 3] = 1.f, P[3 * 4 + 2] = 0.1f;
+        const float ships[][3] = {{0, 0, 0}, {37, -12, 8}, {-140, 60, -30}};
+        const float looks[][2] = {{0, 0}, {30, 0}, {-45, 20}, {120, -50}, {-10, 74}};
+        const float scales[][3] = {{1, 1, 1}, {3.5f, 3.5f, 3.5f}, {2, 5, 0.5f}, {4, 4, -4}};
+        const float trans[][3] = {{120, -40, 900}, {-2500, 300, -1800}};
+        const float corners[][3] = {{-64, -64, 0}, {64, -64, 0}, {64, 64, 0}, {-30, 50, 2}};
+        const float normal_in[4] = {0.f, 0.f, -1.f, 0.f};
+        int checked = 0, bad = 0, ctrl_seen = 0, ctrl_runs = 0;
+        double worst = 0.0;
+        std::string why;
+        auto run = [&](const std::vector<uint32_t> &c, const float view[16], const float world[16],
+                       const float wvp[16], const x4vr::PoseBlock &pb, const float pos[3],
+                       float out_pos[3], float out_n[3], float clip[4]) {
+            x4vr::interp::Machine m;
+            std::vector<uint8_t> cam(9 * 64, 0), obj(3 * 64, 0), pose(sizeof pb);
+            memcpy(&cam[0], view, 64);
+            memcpy(&obj[0], wvp, 64);
+            memcpy(&obj[64], world, 64);
+            memcpy(pose.data(), &pb, sizeof pb);
+            m.buffers[{1, 0}] = cam;
+            m.buffers[{3, 0}] = obj;
+            m.buffers[{31, 0}] = pose;
+            m.input_location[0] = {pos[0], pos[1], pos[2]};
+            m.input_location[1] = {normal_in[0], normal_in[1], normal_in[2], normal_in[3]};
+            if (!m.run(c, 0)) {
+                why = m.error;
+                return false;
+            }
+            for (int k = 0; k < 3; k++) {
+                out_pos[k] = m.outputs[0][k];
+                out_n[k] = m.outputs[1][k];
+            }
+            memcpy(clip, m.position, 16);
+            return true;
+        };
+        for (const auto &sh : ships)
+            for (const auto &lk : looks)
+                for (const auto &sc : scales)
+                    for (const auto &t : trans)
+                        for (const auto &pc : corners) {
+            const M3 body = rot(sh[0], sh[1], sh[2]);
+            x4vr::PoseBlock pb = x4vr::pose_identity();
+            x4vr::pose_set_look(pb, lk[0], lk[1], true);
+            // The camera's axes in the ship's are look's rows (x4vr_camwrite.hpp):
+            // camera = body * rows^T.
+            M3 rows{};
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    rows[c * 3 + r] = pb.look[c * 4 + r];
+            const M3 cam = mul(body, tr(rows));
+            const M3 S{sc[0], 0, 0, 0, sc[1], 0, 0, 0, sc[2]};
+            float view[16], world[16], vw[16], wvp[16], ownw[16];
+            m4(tr(cam), nullptr, view); // camera-relative: X4's view has no translation
+            m4(mul(cam, S), t, world);  // the card, turned to the camera
+            mul4(view, world, vw);
+            mul4(P, vw, wvp);
+            float got[3], gn[3], clip[4];
+            if (!run(code, view, world, wvp, pb, pc, got, gn, clip)) {
+                printf("FAIL=interp %s\n", why.c_str());
+                return 1;
+            }
+            // Expected: the card turned to the ship.
+            float want[3], wn[3], sp[3], sn[3];
+            const M3 bs = mul(body, S);
+            mv(bs, pc, sp);
+            for (int k = 0; k < 3; k++)
+                want[k] = t[k] + sp[k];
+            mv(bs, normal_in, sn);
+            for (int k = 0; k < 3; k++)
+                wn[k] = sn[k];
+            // gl_Position = X4's projection of the same world point.
+            float wp4[4] = {want[0], want[1], want[2], 1.f}, cw[4] = {}, c4[4] = {};
+            for (int r = 0; r < 4; r++)
+                for (int k = 0; k < 4; k++)
+                    cw[r] += view[k * 4 + r] * wp4[k];
+            for (int r = 0; r < 4; r++)
+                for (int k = 0; k < 4; k++)
+                    c4[r] += P[k * 4 + r] * cw[k];
+            double err = 0.0, scale = 1.0;
+            for (int k = 0; k < 3; k++) {
+                err = std::max(err, (double)fabsf(got[k] - want[k]));
+                err = std::max(err, (double)fabsf(gn[k] - wn[k]));
+                scale = std::max(scale, (double)fabsf(want[k]));
+            }
+            for (int k = 0; k < 4; k++)
+                err = std::max(err, (double)fabsf(clip[k] - c4[k]) / std::max(1.f, fabsf(c4[3])));
+            err /= scale;
+            worst = std::max(worst, err);
+            checked++;
+            if (err > 2e-4) {
+                if (getenv("X4VR_FACING_DEBUG"))
+                    printf("bad: ship %g,%g,%g look %g,%g scale %g,%g,%g err %.3g got %g %g %g want %g %g %g\n",
+                           sh[0], sh[1], sh[2], lk[0], lk[1], sc[0], sc[1], sc[2], err, got[0], got[1],
+                           got[2], want[0], want[1], want[2]);
+                bad++;
+            }
+            // Controls, once per ship and look.
+            if (&sc[0] == scales[0] && &t[0] == trans[0] && &pc[0] == corners[0]) {
+                // 1: the head-look at identity: X4's own card, turned to the camera.
+                x4vr::PoseBlock id = x4vr::pose_identity();
+                float g1[3], n1[3], cl1[4], own[3];
+                if (!run(code, view, world, wvp, id, pc, g1, n1, cl1))
+                    return printf("FAIL=interp %s\n", why.c_str()), 1;
+                mv(mul(cam, S), pc, own);
+                for (int k = 0; k < 3; k++)
+                    if (fabsf(g1[k] - (t[k] + own[k])) > 1e-3f * scale)
+                        bad++;
+                // 2: an object turned as the ship is: no billboard, untouched.
+                float objw[16], objvw[16], objwvp[16], g2[3], n2[3], cl2[4], ob[3];
+                m4(mul(body, S), t, objw);
+                mul4(view, objw, objvw);
+                mul4(P, objvw, objwvp);
+                if (!run(code, view, objw, objwvp, pb, pc, g2, n2, cl2))
+                    return printf("FAIL=interp %s\n", why.c_str()), 1;
+                mv(mul(body, S), pc, ob);
+                const bool head_straight = lk[0] == 0 && lk[1] == 0;
+                for (int k = 0; k < 3; k++)
+                    if (fabsf(g2[k] - (t[k] + ob[k])) > 1e-3f * scale)
+                        bad++;
+                (void)head_straight;
+                // 3: the unpatched module puts the card where the head turned it.
+                float g3[3], n3[3], cl3[4];
+                if (!run(orig, view, world, wvp, pb, pc, g3, n3, cl3))
+                    return printf("FAIL=interp %s\n", why.c_str()), 1;
+                if (lk[0] != 0 || lk[1] != 0) {
+                    ctrl_runs++;
+                    double e3 = 0.0;
+                    for (int k = 0; k < 3; k++)
+                        e3 = std::max(e3, (double)fabsf(g3[k] - want[k]));
+                    if (e3 > 1.0)
+                        ctrl_seen++;
+                }
+                (void)ownw;
+            }
+        }
+        printf("CHECKED=%d BAD=%d WORST=%.2e CONTROL_CAUGHT=%d/%d\n", checked, bad, worst, ctrl_seen,
+               ctrl_runs);
+        printf(bad == 0 && ctrl_runs > 0 && ctrl_seen == ctrl_runs && rep.inputs >= 2 ? "PASS\n"
+                                                                                       : "FAIL\n");
+        return bad == 0 && ctrl_seen == ctrl_runs ? 0 : 1;
+    }
+
     if (strcmp(argv[1], "vert-pose-rotate") == 0 && argc >= 4) {
         std::vector<uint32_t> code = load_spv(argv[2]);
         if (code.empty()) { printf("FAIL=load\n"); return 1; }

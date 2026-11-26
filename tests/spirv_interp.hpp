@@ -160,6 +160,8 @@ struct Machine {
             case op::Variable:
                 var_type_[w[2]] = w[1];
                 var_storage_[w[2]] = w[3];
+                if (len > 4)
+                    var_init_[w[2]] = w[4]; // a Private one's initial value
                 break;
             default:
                 break;
@@ -175,6 +177,13 @@ struct Machine {
                 continue;
             const uint32_t pointee = types_[pt].pointee;
             std::vector<float> s(flat_size(pointee), 0.f);
+            auto init = var_init_.find(id);
+            if (init != var_init_.end()) {
+                auto c = consts_.find(init->second);
+                if (c == consts_.end() || c->second.size() != s.size())
+                    return fail("a variable's initialiser isn't a constant of its size");
+                s = c->second;
+            }
             if (sc == kSCInput) {
                 auto b = builtin_.find(id);
                 if (b != builtin_.end() && b->second == kBuiltInViewIndex)
@@ -218,7 +227,7 @@ private:
     std::unordered_map<uint32_t, std::vector<float>> consts_, vals_, store_;
     std::unordered_map<uint32_t, uint32_t> ctype_, vtype_;
     std::unordered_map<uint32_t, uint32_t> set_, binding_, location_, builtin_,
-        array_stride_, var_type_, var_storage_;
+        array_stride_, var_type_, var_storage_, var_init_;
     std::map<std::pair<uint32_t, uint32_t>, uint32_t> member_off_,
         member_mstride_, member_builtin_;
     std::map<std::pair<uint32_t, uint32_t>, bool> member_rowmajor_;

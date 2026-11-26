@@ -2205,6 +2205,26 @@ want "memlog: the failed allocation named" /tmp/census-ml-ok.log memlog "FAILED:
 want "memlog: asked, no line -> FAIL" /tmp/census-ml-base.log "FAIL|  - " "X4VR_MEMLOG=1 but no mem: line"
 absent "memlog: not asked -> silent" "$BASE" memlog
 
+# X4's billboards face the ship, not the head (2026-11-26).
+for f in '"facing %s: %s — %u vertex module(s) turn X4'"'"'s billboards to the ship, %u input "' '"facing: phase #%llu — %s (X4VR_FACING_AB=recentre)"'; do
+    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "facing: the layer still prints $f" \
+        || bad "facing: the layer's format moved: $f"
+done
+fcon='[  99900.000] layer   facing final: ON — 12 vertex module(s) turn X4'"'"'s billboards to the ship, 30 input read(s) turned, 0 partial left'
+fnone='[  99900.000] layer   facing final: ON — 0 vertex module(s) turn X4'"'"'s billboards to the ship, 0 input read(s) turned, 0 partial left'
+fpa='[  99800.000] layer   facing: phase #1 — B, the billboards face the ship (X4VR_FACING_AB=recentre)'
+fpb='[  99850.000] layer   facing: phase #2 — A, the billboards turn with the head, as X4 draws them (X4VR_FACING_AB=recentre)'
+plant /tmp/census-fc-ok.log "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$fcon"
+want "facing: patched modules said" /tmp/census-fc-ok.log facing "ON: 12 vertex module(s) turn X4's billboards to the ship"
+absent "facing: patched -> no FAIL" /tmp/census-fc-ok.log "lack IN_VERTEXLOCATION_POSITION"
+plant /tmp/census-fc-none.log "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$fnone"
+want "facing: on, none patched -> FAIL" /tmp/census-fc-none.log "FAIL|  - " "lack IN_VERTEXLOCATION_POSITION"
+{ sed 's/env: run = /env: run = X4VR_FACING_AB=recentre /' "$BASE"; printf '%s\n' "$fcon" "$fpa" "$fpb"; } > /tmp/census-fc-ab.log
+want "facing: A/B phases said" /tmp/census-fc-ab.log facing "phases: #1 B, #2 A"
+absent "facing: both phases -> no FAIL" /tmp/census-fc-ab.log "the two phases did not both run"
+{ sed 's/env: run = /env: run = X4VR_FACING_AB=recentre /' "$BASE"; printf '%s\n' "$fcon" "$fpa"; } > /tmp/census-fc-ab1.log
+want "facing: one phase only -> FAIL" /tmp/census-fc-ab1.log "FAIL|  - " "the two phases did not both run"
+
 # Whose field of view is declared, and the runtime's eyes (issue #3, 2026-11-25).
 for f in '"xr: a field of view of our own is %s (fovMutable)"' '"NOT allowed: the runtime'"'"'s own has to be declared"'; do
     grep -qF "$f" common/x4vr_xr.hpp && ok "declfield: the runtime's answer still reads $f" \

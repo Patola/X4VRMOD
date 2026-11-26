@@ -4294,12 +4294,35 @@ void canvas_report(const char *when) {
 // This is the take-173 failure once more: two unrelated features on one gate,
 // with no log line saying so. The comment three functions down says exactly
 // that about X4VR_BINDLESS_PATCH silently disabling X4VR_PROJ_INVPROJ.
+// X4's billboards face the ship, not the head (patch_vertex_facing_body, 2026-11-26).
+// X4VR_FACING=0 leaves them as X4 turns them; X4VR_FACING_AB=recentre alternates, by
+// the mod's forward latches (the panel's and each recentre's), B being the fix.
+bool facing_enabled() {
+    static const bool on = x4vr::env_on("X4VR_FACING", true);
+    return on;
+}
+bool facing_ab() {
+    static const bool ab = [] {
+        const char *e = getenv("X4VR_FACING_AB");
+        return e && !strcmp(e, "recentre");
+    }();
+    return ab;
+}
+static uint64_t forward_latches(); // defined beside the latch
+std::atomic<uint32_t> g_facing_modules{0}, g_facing_inputs{0}, g_facing_partial{0};
+
 void shader_knob_report(const char *when) {
     // Zeros included. A line that only appears when the knob fired cannot tell
     // "the knob did nothing" from "the run predates the knob".
     X4VR_LOG("fog %s: volumetric composite forced to passthrough in %llu "
              "module(s) (offline: 8 of 409 match the fog signature)",
              when, (unsigned long long)g_fog_disabled.load());
+    // The billboards (2026-11-26). Zero here with the pose channel up means X4's
+    // modules don't carry the names the patch looks for: the clouds still turn.
+    X4VR_LOG("facing %s: %s — %u vertex module(s) turn X4's billboards to the ship, %u input "
+             "read(s) turned, %u partial left",
+             when, facing_enabled() ? (facing_ab() ? "A/B by recentre" : "ON") : "OFF (X4VR_FACING=0)",
+             g_facing_modules.load(), g_facing_inputs.load(), g_facing_partial.load());
     // The FSR fix (take 380), same rule: a log without this line predates the
     // fix, and "armed" with 0 patched means X4 created no FSR pass (no FSR
     // upscaler) or the signature no longer matches. X4 creates the passes
@@ -6788,6 +6811,34 @@ VkResult create_shader_module_inner(
         } else {
             did = x4vr::spv::patch_vertex_pose_clip(pc, pose_set_index(), 0);
         }
+        // The billboards: a vertex module with X4's names gets it, whatever the pose
+        // patch above did; it reads the same set, and only cards turned as the camera
+        // is are changed. Rides the patched variant, as the pose does: not in the
+        // shadow or UI passes.
+        x4vr::spv::FacingReport frep;
+        const bool facing = facing_enabled() &&
+                            x4vr::spv::patch_vertex_facing_body(pc, kCameraSet, kCameraBinding,
+                                                                 kObjectSet, kObjectBinding,
+                                                                 pose_set_index(), 0, &frep);
+        // The first refusals of modules that position by the object block, by reason:
+        // a reason in every one would mean X4's modules lack a name the patch reads.
+        if (facing_enabled() && !facing && strcmp(frep.why, "no vertex entry") != 0 &&
+            strcmp(frep.why, "no M_world in the object block") != 0) {
+            static uint32_t said = 0;
+            if (++said <= 3)
+                X4VR_LOG("facing: a vertex module with X4's object matrix was refused: %s",
+                         frep.why);
+        }
+        if (facing) {
+            const uint32_t n = ++g_facing_modules;
+            g_facing_inputs += frep.inputs;
+            g_facing_partial += frep.partial;
+            if (n <= 3 || (n % 100) == 0)
+                X4VR_LOG("facing: %u vertex module(s) turn X4's billboards to the ship, not the "
+                         "head (this one: %u input read(s) turned, %u partial left)",
+                         n, frep.inputs, frep.partial);
+        }
+        did = did || facing;
         if (did) {
             static uint32_t n = 0;
             n++;
@@ -8818,6 +8869,26 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
         // every temporal pass along the head's motion.
         x4vr::pose_roll_frame(g_pose.value);
         x4vr::pose_set_euler(g_pose.value, cy, cp, 0.0f);
+        // X4's camera angles, which head-look set, undone for its billboards. Only
+        // with a valid read of them; and in an A/B's A phases, X4's own.
+        bool face = cmd_valid && facing_enabled();
+        if (face && facing_ab()) {
+            // Blind: which phase is the fix is drawn at random, once a run, and only
+            // the log knows.
+            static const uint64_t draw = (uint64_t)std::chrono::steady_clock::now()
+                                             .time_since_epoch().count() >> 10 & 1;
+            const uint64_t phase = forward_latches();
+            face = ((phase + draw) & 1) != 0;
+            static uint64_t said = ~0ull;
+            if (said != phase) {
+                said = phase;
+                X4VR_LOG("facing: phase #%llu — %s (X4VR_FACING_AB=recentre)",
+                         (unsigned long long)phase,
+                         face ? "B, the billboards face the ship"
+                              : "A, the billboards turn with the head, as X4 draws them");
+            }
+        }
+        x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face);
         g_pose.res_yaw = cy;
         g_pose.res_pitch = cp;
         // **Task #77, and it is NOT the same rotation as the line above.**
@@ -15541,6 +15612,7 @@ struct ForwardLatch {
     uint64_t latches = 0;
 };
 static ForwardLatch g_fwd;
+static uint64_t forward_latches() { return g_fwd.latches; }
 
 static bool forward_latch_on() {
     static const bool on = x4vr::env_on("X4VR_FORWARD_LATCH", true);

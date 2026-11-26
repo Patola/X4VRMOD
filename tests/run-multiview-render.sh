@@ -1340,6 +1340,19 @@ else
     fails=$((fails + 1))
 fi
 
+# X4's billboards face the ship, not the head (2026-11-26): the card turned to the
+# camera must come out turned to the ship, the head-look in the injector's own
+# convention, with X4's identity, an ordinary object and the unpatched module as
+# controls; and the patched module must validate.
+fout="$PATCHDIR/facing.spv"
+out=$("$PATCHER" vert-facing-check "$BUILD/tests/sample_billboard.vert.spv" "$fout" 2>&1)
+if grep -qx PASS <<<"$out" && spirv-val "$fout" >/dev/null 2>&1; then
+    printf 'ok   %-38s %s\n' "facing: billboards turned to the ship" "$(grep CHECKED <<<"$out")"
+else
+    printf 'FAIL %-38s %s\n' "facing: billboards turned to the ship" "$(tr '\n' ' ' <<<"$out")"
+    fails=$((fails + 1))
+fi
+
 # The per-eye M_invprojection correction (task #22). The deferred passes
 # reconstruct position from depth in the *eye's* frame and then light it with
 # centre-frame shadow matrices, which puts the two eyes' shadows on different

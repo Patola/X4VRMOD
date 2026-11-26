@@ -439,11 +439,24 @@ struct PoseBlock {
     // is +-1 for a perspective projection, 0 for an orthographic one, which
     // then moves nothing). Zero is the identity.
     float head_fwd[4];
+    // **The head-look, undone: X4's billboards face the ship, not the head**
+    // (2026-11-26, Patola: "all the nebulae rotate simultaneously proportionally to
+    // my head's rotation"). X4's fog clouds are flat cards tagged `billboard_view`:
+    // X4 turns each to its camera's orientation every frame, and head-look turns
+    // that camera. This is the inverse of the head-look rotation in X4's view axes
+    // (x right, y up, z forward): its rows are the camera's right, up and forward
+    // in the ship's axes, as x4vr_camwrite.hpp writes them into X4. A card whose
+    // turn equals the camera's is turned by it to face the ship's forward, as X4
+    // would draw it with the head straight (patch_vertex_facing_body). Identity
+    // leaves every card as X4 turned it.
+    float look[16];
 };
-static_assert(sizeof(PoseBlock) == 224,
-              "std140: three mat4 at 0, 64, 128 and vec4s at 192 and 208");
+static_assert(sizeof(PoseBlock) == 288,
+              "std140: three mat4 at 0, 64, 128, vec4s at 192 and 208, a mat4 at 224");
 // Where head_fwd sits, for the SPIR-V patch's second member.
 constexpr uint32_t kPoseHeadFwdOffset = 208;
+// Where look sits, for patch_vertex_facing_body.
+constexpr uint32_t kPoseLookOffset = 224;
 // The offset the SPIR-V patch decorates its one-member view with. Named here so
 // the shader-side constant and the struct cannot drift apart silently.
 constexpr uint32_t kPoseEyeOfsOffset = 192;
@@ -536,6 +549,8 @@ constexpr float kIpdStep = 0.00005f;
 // the shader would then have to be robust to.
 inline void pose_set_euler(PoseBlock &p, float yaw_deg, float pitch_deg,
                            float roll_deg) {
+    float look[16];
+    std::memcpy(look, p.look, sizeof look); // not this function's: kept
     const float d = 0.01745329251994330f;
     const float cy = std::cos(yaw_deg * d), sy = std::sin(yaw_deg * d);
     const float cp = std::cos(pitch_deg * d), sp = std::sin(pitch_deg * d);
@@ -569,6 +584,26 @@ inline void pose_set_euler(PoseBlock &p, float yaw_deg, float pitch_deg,
     // motion for one frame. pose_roll_frame() advances it afterwards.
     for (int i = 0; i < 16; i++)
         p.r_prev[i] = p.r[i];
+    std::memcpy(p.look, look, sizeof look);
+}
+
+// The look slot from X4's free-look angles, in the head-look's convention (yaw
+// positive to the LEFT, pitch positive up: x4vr::head_angles). The rows are the
+// camera's axes in the ship's, exactly x4vr_camwrite.hpp's rows_for, which is what
+// X4 turns its camera by; column-major for std140, so look[c*4 + r] = row r's c.
+// Not driving, the identity: X4's own billboards.
+inline void pose_set_look(PoseBlock &p, float yaw_deg, float pitch_deg, bool drive) {
+    for (int i = 0; i < 16; i++)
+        p.look[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+    if (!drive)
+        return;
+    const float d = 0.01745329251994330f;
+    const float psi = -yaw_deg * d, th = pitch_deg * d;
+    const float cy = std::cos(psi), sy = std::sin(psi), cp = std::cos(th), sp = std::sin(th);
+    const float rows[3][3] = {{cy, 0.f, -sy}, {-sy * sp, cp, -cy * sp}, {sy * cp, sp, cy * cp}};
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++)
+            p.look[c * 4 + r] = rows[r][c];
 }
 
 inline PoseBlock pose_identity() {
@@ -583,6 +618,7 @@ inline PoseBlock pose_identity() {
     p.eye_ofs[1] = 0.0f;
     p.eye_ofs[2] = 0.0f;
     p.eye_ofs[3] = 0.0f;
+    pose_set_look(p, 0.0f, 0.0f, false);
     return p;
 }
 
