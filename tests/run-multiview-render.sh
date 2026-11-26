@@ -1369,6 +1369,20 @@ else
     fails=$((fails + 1))
 fi
 
+# Our fog in X4's froxel volume (after take 474): the module put in the place of X4's
+# volume_base must have the interface is_x4_volume_base checks X4's against -- and a
+# copy of it with one member moved must be refused.
+out=$("$PATCHER" volume-base "$ROOT/layer/fog_volume.comp.spv" 2>&1)
+"$PATCHER" volume-base-offset "$ROOT/layer/fog_volume.comp.spv" "$PATCHDIR/vb_bad.spv" V_volume_size 976 >/dev/null 2>&1
+bad_out=$("$PATCHER" volume-base "$PATCHDIR/vb_bad.spv" 2>&1)
+if grep -q '^IS=1' <<<"$out" && grep -q '^IS=0' <<<"$bad_out" && \
+    spirv-val --target-env vulkan1.0 "$ROOT/layer/fog_volume.comp.spv" >/dev/null 2>&1; then
+    printf 'ok   %-38s %s\n' "fog volume: X4's interface, exactly" "$(tr '\n' ' ' <<<"$bad_out")"
+else
+    printf 'FAIL %-38s %s | %s\n' "fog volume: X4's interface, exactly" "$out" "$bad_out"
+    fails=$((fails + 1))
+fi
+
 # X4's fog blobs face the ship, not the head (after take 466): the froxel pass's
 # view-to-blob frame, built along the camera's axes, must come out along the ship's,
 # with X4's identity, the collapse diagnostic and the unpatched module as controls;

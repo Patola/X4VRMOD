@@ -46,6 +46,7 @@
 #include "../common/x4vr_png.hpp"
 #include "../common/x4vr_sbs.hpp"
 #include "../common/x4vr_billboard.hpp"
+#include "fog_shaders.hpp"
 #include "../common/x4vr_spirv.hpp"
 #include "../common/x4vr_guard.hpp"
 #include "../common/x4vr_field.hpp"
@@ -2171,9 +2172,10 @@ static x4vr::spv::FogProbe fog_probe_params() {
     p.radius_in = p.radius_out * (2.f / 3.f);
     return p;
 }
-std::atomic<uint32_t> g_fog_probe_modules{0}, g_fog_probe_refused{0};
+std::atomic<uint32_t> g_fog_vol_modules{0}, g_fog_vol_refused{0};
 std::mutex g_fog_probe_mu;
-std::unordered_set<VkShaderModule> &g_fog_probe_mods =
+// X4's volume_base modules replaced by ours, under g_fog_probe_mu.
+std::unordered_set<VkShaderModule> &g_fog_vol_mods =
     x4vr::immortal<std::unordered_set<VkShaderModule>>();
 std::unordered_set<VkPipeline> &g_fog_probe_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
 std::unordered_map<VkCommandBuffer, bool> &g_fog_probe_cb =
@@ -2193,8 +2195,6 @@ struct FogProbeSeen {
     uint32_t x = 0, y = 0, z = 0;
 };
 FogProbeSeen g_fog_probe_seen;
-// The last module creation's probe result, for the hook that records the handle.
-thread_local bool tl_fog_probe_patched = false;
 
 // **The census** (with X4VR_FACING_DEBUG=collapse, after take 467): X4's own matrices for
 // the draws of its near/far-faded effects (its fog cards among them), read at submit --
@@ -2209,8 +2209,19 @@ bool facing_compare();
 bool facing_census() { return facing_collapse(); }
 bool facing_enabled(); // beside the other facing switches
 bool facing_ab();
-// The tracking of X4's near/far-faded draws: for the census, or for the fix on the CPU.
-bool fade_tracking() { return facing_census() || facing_enabled(); }
+// X4VR_FOG_CARDS=off (after take 474, DIAGNOSTIC): X4's nebula cards removed, so our own
+// fog shows alone -- every card the CPU has learned X4 turns with its camera, farther
+// than 50 m (the radar, which X4 turns with the camera too, is a metre or two away).
+bool fog_cards_off() {
+    static const bool off = [] {
+        const char *e = getenv("X4VR_FOG_CARDS");
+        return e && !strcmp(e, "off");
+    }();
+    return off;
+}
+// The tracking of X4's near/far-faded draws: for the census, the fix on the CPU, or the
+// cards' removal.
+bool fade_tracking() { return facing_census() || facing_enabled() || fog_cards_off(); }
 // The GPU patches (cards in the vertex stage, fog blobs in the froxel pass), only with
 // X4VR_FACING_GPU=1: takes 465-469, they missed the third of X4's cards that it turns
 // with the camera by a tilt of their own, which no single frame can tell. The fix is
@@ -2407,7 +2418,7 @@ std::unordered_map<uint64_t, FixLearn> &g_fix_learn =
     x4vr::immortal<std::unordered_map<uint64_t, FixLearn>>();
 struct FixStats {
     uint64_t rewritten = 0, unlearned = 0, refused = 0, mismatch = 0, noflight = 0, full = 0,
-             killed = 0;
+             killed = 0, cards_removed = 0, cards_kept_near = 0;
     // Drift by how the stretch turns them (0 X4's own, 1 to the eye, 2 to the ship, 3 the
     // hybrid) and head-look moved since the reference (<2, <10, <30, more deg): draws,
     // turn drift sum and max.
@@ -2598,8 +2609,21 @@ static void fix_draw(float *o_dst, float *o, const float *c, int mode,
         g_fix_stats.unlearned++;
         return;
     }
-    if (g_fix_kill.load(std::memory_order_relaxed)) {
-        // K: the card's turn scaled to nothing, its WVP to match.
+    bool remove = g_fix_kill.load(std::memory_order_relaxed);
+    if (fog_cards_off() && !remove) {
+        double dist2 = 0.0;
+        for (int row = 0; row < 3; row++) {
+            double pv = c[12 + row];
+            for (int k = 0; k < 3; k++)
+                pv += (double)c[k * 4 + row] * o[16 + 12 + k];
+            dist2 += pv * pv;
+        }
+        remove = dist2 > 50.0 * 50.0;
+        if (!remove)
+            g_fix_stats.cards_kept_near++;
+    }
+    if (remove) {
+        // K, or the cards off: the card's turn scaled to nothing, its WVP to match.
         for (int col = 0; col < 3; col++)
             for (int row = 0; row < 3; row++)
                 o[16 + col * 4 + row] = 0.f;
@@ -2612,7 +2636,8 @@ static void fix_draw(float *o_dst, float *o, const float *c, int mode,
             }
         std::memcpy(o_dst, o, 32 * sizeof(float));
         done.insert(o_dst);
-        g_fix_stats.killed++;
+        (g_fix_kill.load(std::memory_order_relaxed) ? g_fix_stats.killed
+                                                    : g_fix_stats.cards_removed)++;
         return;
     }
     // The card's kind, direction and distance from the eye, for the drift check: its
@@ -2717,7 +2742,7 @@ static void census_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) 
             g_fix_stats.ns_max = std::max(g_fix_stats.ns_max, ns);
         }
     } timed{t0};
-    const bool census = facing_census(), fixing = facing_enabled();
+    const bool census = facing_census(), fixing = facing_enabled() || fog_cards_off();
     const int mode = fixing && g_fix_active.load(std::memory_order_relaxed)
                          ? g_fix_mode.load(std::memory_order_relaxed)
                          : 0;
@@ -5151,7 +5176,7 @@ void shader_knob_report(const char *when) {
         X4VR_LOG("fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(es), "
                  "%llu read (%llu camera-relative), %llu unreadable; last grid "
                  "%.0fx%.0fx%.0f, range %.1f..%.1f m",
-                 when, g_fog_probe_modules.load(), g_fog_probe_refused.load(),
+                 when, g_fog_vol_modules.load(), g_fog_vol_refused.load(),
                  (unsigned long long)sn.dispatches, (unsigned long long)sn.read,
                  (unsigned long long)sn.relative, (unsigned long long)sn.unread, sn.size[0],
                  sn.size[1], sn.size[2], sn.range[0], sn.range[1]);
@@ -5162,8 +5187,17 @@ void shader_knob_report(const char *when) {
              "product(s)), %u refused",
              when, g_facing_fog_modules.load(), g_facing_fog_products.load(),
              g_facing_fog_refused.load());
-    if (facing_enabled())
+    if (facing_enabled() || fog_cards_off())
         fix_report(when);
+    if (fog_cards_off()) {
+        std::lock_guard<std::mutex> lock(g_track.mu);
+        X4VR_LOG("fog cards %s: off — %llu draw(s) of X4's camera-turned cards removed "
+                 "(farther than 50 m), %llu kept as nearer, %llu seen before learned — "
+                 "DIAGNOSTIC",
+                 when, (unsigned long long)g_fix_stats.cards_removed,
+                 (unsigned long long)g_fix_stats.cards_kept_near,
+                 (unsigned long long)g_fix_stats.unlearned);
+    }
     if (facing_census()) {
         {
             std::lock_guard<std::mutex> lock(g_census_mu);
@@ -8515,43 +8549,51 @@ std::vector<uint32_t> fogpoint_patch_facing(const VkShaderModuleCreateInfo *ci);
 // becoming an effect of our own. X4VR_FOG_PROBE_DENSITY (0.004), _CELL (400 m) and
 // _RADIUS (60 m) size it.
 
-static void fog_probe_apply(std::vector<uint32_t> &code, size_t bytes) {
-    x4vr::spv::FogProbeReport rep;
-    const x4vr::spv::FogProbe pr = fog_probe_params();
-    if (!x4vr::spv::patch_fog_probe(code, pr, &rep)) {
-        if (strcmp(rep.why, "no block with M_offset and I_point_num") != 0 &&
-            ++g_fog_probe_refused <= 3)
-            X4VR_LOG("fog probe: a module naming M_offset (%zu bytes) REFUSED: %s", bytes,
-                     rep.why);
-        return;
-    }
-    tl_fog_probe_patched = true;
-    if (++g_fog_probe_modules <= 3)
-        X4VR_LOG("fog probe: X4's froxel fog pass (%zu bytes) patched — puffs every %.0f m, "
-                 "%.0f..%.0f m across, density %.4f, fixed in the world — DIAGNOSTIC",
-                 bytes, pr.cell, 2.f * pr.radius_in, 2.f * pr.radius_out, pr.strength);
-}
 
 std::vector<uint32_t> fogpoint_patch_module(const VkShaderModuleCreateInfo *ci) {
     std::vector<uint32_t> code;
-    tl_fog_probe_patched = false;
     if (!g_active || !ci || ci->codeSize < 20)
         return code;
-    static const char kName[] = "M_offset";
-    if (fog_probe_on() && memmem(ci->pCode, ci->codeSize, kName, sizeof kName - 1)) {
-        std::vector<uint32_t> base = fogpoint_patch_facing(ci);
-        if (base.empty()) {
-            base.resize(ci->codeSize / 4);
-            memcpy(base.data(), ci->pCode, ci->codeSize);
-            fog_probe_apply(base, ci->codeSize);
-            if (!tl_fog_probe_patched)
-                base.clear();
-        } else {
-            fog_probe_apply(base, ci->codeSize);
-        }
-        return base;
-    }
+    // Take 474: puffs added in volume_point.comp reached only the tiles X4 dispatches
+    // around its own fog points, and showed nowhere; the probe is now the whole first
+    // stage, volume_base, replaced (fog_volume_module).
     return fogpoint_patch_facing(ci);
+}
+
+// **Our fog in X4's froxel volume** (after take 474): X4's volume_base.comp, which writes
+// a density of zero into every cell, replaced by layer/fog_volume.comp, which writes
+// ours. Empty to create the module as X4 wrote it.
+thread_local bool tl_fog_vol = false;
+std::vector<uint32_t> fog_volume_module(const VkShaderModuleCreateInfo *ci) {
+    std::vector<uint32_t> code;
+    tl_fog_vol = false;
+    if (!g_active || !fog_probe_on() || !ci || ci->codeSize < 20)
+        return code;
+    static const char kName[] = "F_volume_scale";
+    if (!memmem(ci->pCode, ci->codeSize, kName, sizeof kName - 1))
+        return code;
+    std::vector<uint32_t> x4(ci->pCode, ci->pCode + ci->codeSize / 4);
+    x4vr::spv::VolumeBaseReport rep;
+    if (!x4vr::spv::is_x4_volume_base(x4, &rep)) {
+        // Every later fog stage names the scale too; only a module that looks like the
+        // first stage and differs from it is worth a line.
+        if (strstr(rep.why, "offsets") || strstr(rep.why, "R16f") || strstr(rep.why, "53306"))
+            if (++g_fog_vol_refused <= 3)
+                X4VR_LOG("fog volume: a module like X4's volume_base (%zu bytes) REFUSED: %s — "
+                         "X4's own stays", (size_t)ci->codeSize, rep.why);
+        return code;
+    }
+    code.assign(x4vr::kFogVolumeComp, x4vr::kFogVolumeComp +
+                                          sizeof x4vr::kFogVolumeComp / sizeof(uint32_t));
+    tl_fog_vol = true;
+    const x4vr::spv::FogProbe pr = fog_probe_params();
+    if (++g_fog_vol_modules <= 3)
+        X4VR_LOG("fog volume: X4's volume_base (%zu bytes) replaced by ours — the probe's puffs "
+                 "every %.0f m, %.0f..%.0f m across, density %.4f, fixed in the world, in every "
+                 "cell of X4's froxel fog — DIAGNOSTIC",
+                 (size_t)ci->codeSize, pr.cell, 2.f * pr.radius_in, 2.f * pr.radius_out,
+                 pr.strength);
+    return code;
 }
 
 std::vector<uint32_t> fogpoint_patch_facing(const VkShaderModuleCreateInfo *ci) {
@@ -9260,6 +9302,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     std::vector<uint32_t> fsr_code = fsr_patch_module(ci);
     const bool is_fsr = !fsr_code.empty();
     if (fsr_code.empty())
+        fsr_code = fog_volume_module(ci);
+    const bool is_fog_vol = tl_fog_vol && !fsr_code.empty();
+    if (fsr_code.empty())
         fsr_code = fogpoint_patch_module(ci);
     VkShaderModuleCreateInfo fsr_ci{};
     if (!fsr_code.empty()) {
@@ -9273,9 +9318,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         std::lock_guard<std::mutex> lock(g_fsr_mu);
         g_fsr_modules.insert(*out);
     }
-    if (r == VK_SUCCESS && !is_fsr && tl_fog_probe_patched) {
+    if (r == VK_SUCCESS && is_fog_vol) {
         std::lock_guard<std::mutex> lock(g_fog_probe_mu);
-        g_fog_probe_mods.insert(*out);
+        g_fog_vol_mods.insert(*out);
     }
     // X4's bytes, not ours: the handle is whatever the game will bind, but the
     // code written out is what it supplied. A dump that quietly contained our
@@ -10418,6 +10463,31 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
     // volume is filled by compute.
     const VkComputePipelineCreateInfo *ci_app = ci;
     std::vector<VkComputePipelineCreateInfo> csubs;
+    // Our fog's pipelines: its parameters as specialisation constants (after take 474).
+    std::vector<VkComputePipelineCreateInfo> fsubs;
+    static const VkSpecializationMapEntry kFogMap[4] = {
+        {0, 0, 4}, {1, 4, 4}, {2, 8, 4}, {3, 12, 4}};
+    static const std::array<float, 4> fog_data = [] {
+        const x4vr::spv::FogProbe p = fog_probe_params();
+        return std::array<float, 4>{p.cell, p.radius_in, p.radius_out, p.strength};
+    }();
+    static const VkSpecializationInfo kFogSpec = {4, kFogMap, sizeof(float) * 4, fog_data.data()};
+    if (fog_probe_on()) {
+        bool any = false;
+        {
+            std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+            for (uint32_t i = 0; i < count; i++)
+                any = any || g_fog_vol_mods.count(ci[i].stage.module);
+        }
+        if (any) {
+            fsubs.assign(ci, ci + count);
+            std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+            for (uint32_t i = 0; i < count; i++)
+                if (g_fog_vol_mods.count(ci[i].stage.module))
+                    fsubs[i].stage.pSpecializationInfo = &kFogSpec;
+            ci = fsubs.data();
+        }
+    }
     if (pose_active()) {
         std::lock_guard<std::mutex> lock(g_pose.mu);
         csubs.assign(ci, ci + count);
@@ -10452,7 +10522,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
     if (r == VK_SUCCESS && fog_probe_on()) {
         std::lock_guard<std::mutex> lock(g_fog_probe_mu);
         for (uint32_t i = 0; i < count; i++)
-            if (out[i] != VK_NULL_HANDLE && g_fog_probe_mods.count(ci[i].stage.module))
+            if (out[i] != VK_NULL_HANDLE && g_fog_vol_mods.count(ci[i].stage.module))
                 g_fog_probe_pipes.insert(out[i]);
     }
     if (r != VK_SUCCESS || !g_mv_inventory || !g_active)

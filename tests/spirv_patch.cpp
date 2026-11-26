@@ -1925,6 +1925,46 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    // volume-base <in.spv>: is_x4_volume_base's verdict and why.
+    if (strcmp(argv[1], "volume-base") == 0 && argc >= 3) {
+        const std::vector<uint32_t> code = load_spv(argv[2]);
+        x4vr::spv::VolumeBaseReport rep;
+        const bool is = !code.empty() && x4vr::spv::is_x4_volume_base(code, &rep);
+        printf("IS=%d WHY=%s\n", is ? 1 : 0, is ? "" : rep.why);
+        return 0;
+    }
+    // volume-base-offset <in.spv> <out.spv> <member-name> <new-offset>: a copy with one
+    // member's Offset moved, the negative control for the check above.
+    if (strcmp(argv[1], "volume-base-offset") == 0 && argc >= 6) {
+        std::vector<uint32_t> code = load_spv(argv[2]);
+        std::vector<x4vr::spv::Inst> insts;
+        if (code.empty() || !x4vr::spv::iterate(code, insts)) { printf("FAIL=load\n"); return 1; }
+        uint32_t st = 0, mi = 0;
+        bool found = false;
+        for (const auto &in : insts)
+            if (in.op == x4vr::spv::OpMemberName) {
+                const char *n = (const char *)&code[in.start + 3];
+                if (!strcmp(n, argv[4])) {
+                    st = code[in.start + 1];
+                    mi = code[in.start + 2];
+                    found = true;
+                }
+            }
+        int moved = 0;
+        for (const auto &in : insts)
+            if (found && in.op == x4vr::spv::OpMemberDecorate && code[in.start + 1] == st &&
+                code[in.start + 2] == mi && code[in.start + 3] == x4vr::spv::DecorationOffset) {
+                code[in.start + 4] = (uint32_t)atoi(argv[5]);
+                moved++;
+            }
+        FILE *f = fopen(argv[3], "wb");
+        if (!f) { printf("FAIL=open\n"); return 1; }
+        fwrite(code.data(), 4, code.size(), f);
+        fclose(f);
+        printf("MOVED=%d\n", moved);
+        return 0;
+    }
+
     if (strcmp(argv[1], "vert-pose-rotate") == 0 && argc >= 4) {
         std::vector<uint32_t> code = load_spv(argv[2]);
         if (code.empty()) { printf("FAIL=load\n"); return 1; }

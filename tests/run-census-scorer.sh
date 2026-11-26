@@ -2353,7 +2353,8 @@ want "cpu fix: the head-look check said" /tmp/census-fx-ship.log facing "cpu shi
 # The fog probe (after take 473).
 for f in '"fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(es), "' \
          '"fog probe: froxel dispatch %ux%ux%u, grid %.0fx%.0fx%.0f, range "' \
-         '"fog probe: X4'"'"'s froxel fog pass (%zu bytes) patched — puffs every %.0f m, "'; do
+         '"fog volume: X4'"'"'s volume_base (%zu bytes) replaced by ours — the probe'"'"'s puffs "' \
+         '"fog cards %s: off — %llu draw(s) of X4'"'"'s camera-turned cards removed "'; do
     grep -qF -- "$f" layer/x4vr_layer.cpp && ok "fog probe: the layer still prints $f" \
         || bad "fog probe: the layer's format moved: $f"
 done
@@ -2365,12 +2366,22 @@ pbase() { sed 's/env: run = /env: run = X4VR_FOG_PROBE=1 /' "$BASE"; printf '%s\
 want "fog probe: counts said" /tmp/census-fp-ok.log fogprobe "1 froxel module(s) patched, 0 refused; 9000 dispatch(es)"
 absent "fog probe: patched and dispatched -> no FAIL" /tmp/census-fp-ok.log "FAIL .*fog probe"
 { pbase; printf '%s\n' "$fpnone"; } > /tmp/census-fp-none.log
-want "fog probe: asked, none patched -> FAIL" /tmp/census-fp-none.log "FAIL|  - " "X4's froxel fog pass was not patched"
+want "fog probe: asked, none patched -> FAIL" /tmp/census-fp-none.log "FAIL|  - " "first stage was not replaced"
 { pbase; printf '%s\n' "$fpnod"; } > /tmp/census-fp-nod.log
 want "fog probe: never dispatched -> FAIL" /tmp/census-fp-nod.log "FAIL|  - " "never dispatched in flight"
 { pbase; } > /tmp/census-fp-silent.log
 want "fog probe: asked, no line -> FAIL" /tmp/census-fp-silent.log "FAIL|  - " "printed no fog probe line"
 absent "fog probe: not asked -> silent" "$BASE" fogprobe
+fcok='[  99900.021] layer   fog cards final: off — 5000 draw(s) of X4'"'"'s camera-turned cards removed (farther than 50 m), 40 kept as nearer, 300 seen before learned — DIAGNOSTIC'
+fczero='[  99900.021] layer   fog cards final: off — 0 draw(s) of X4'"'"'s camera-turned cards removed (farther than 50 m), 0 kept as nearer, 300 seen before learned — DIAGNOSTIC'
+fcpx='[  99900.022] layer   facing cpu final: ON — 0 draw(s) of X4'"'"'s cards turned to the eye; 300 seen before their turn was learned, 0 refused, 0 not X4'"'"'s (WVP != VP*W), 0 out of flight, 0 past the table; 40 turn(s) learned of 40 kept'
+cbase2() { sed 's/env: run = /env: run = X4VR_FOG_PROBE=1 X4VR_FOG_CARDS=off /' "$BASE"; printf '%s\n' "$farm" "$fpok" "$fcpx"; }
+{ cbase2; printf '%s\n' "$fcok"; } > /tmp/census-fc2-ok.log
+want "fog cards: removed said" /tmp/census-fc2-ok.log fogcards "off: 5000 draw(s) of X4's camera-turned cards removed"
+absent "fog cards: removed -> no FAIL" /tmp/census-fc2-ok.log "FAIL .*fog cards"
+absent "fog cards: no facing asked -> no fixing FAIL" /tmp/census-fc2-ok.log "FAIL .*facing cpu"
+{ cbase2; printf '%s\n' "$fczero"; } > /tmp/census-fc2-zero.log
+want "fog cards: off, in flight, none removed -> FAIL" /tmp/census-fc2-zero.log "FAIL|  - " "no card was removed"
 flkh='[  99900.002] layer   facing look final: 10 headset frame(s) with the head-look undone, 2 with X4'"'"'s camera angles not valid (identity); DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4'"'"'s own, S (cards turned to the ship) and H (billboards to the eye, tilted cards to the ship)'
 fph='[  99870.000] layer   facing: phase #3 — H, billboards face the eye, tilted cards the ship (X4VR_FACING_AB=recentre)'
 { sed 's/env: run = /env: run = X4VR_FACING=1 X4VR_FACING_AB=recentre X4VR_FACING_DEBUG=compare /' "$BASE"; printf '%s\n' "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$farm" "$fcab0" "$flkh" "$fpa1" "$fps" "$fph" "$fxok"; } > /tmp/census-fx-sh.log

@@ -5572,7 +5572,8 @@ def main(path):
         tl = re.findall(r"facing cpu turns final: (.*)$", text, re.M)
         if tl:
             print(f"facing  cpu turns: {tl[-1]}")
-        fixing = md == "ON" or bool({"B", "S", "H"} & {k for _, k in fphases})
+        fixing = (bool(re.search(r"\bX4VR_FACING=1\b", run or ""))
+                  and (md == "ON" or bool({"B", "S", "H"} & {k for _, k in fphases})))
         flying = "headlook write: ARMED" in text
         if fixing and flying and int(rw) == 0:
             fails.append("facing cpu: on and in flight, and no card was turned"
@@ -5591,7 +5592,7 @@ def main(path):
             print(f"fogprobe {ln}")
         if re.search(r"\bX4VR_FOG_PROBE=1\b", run or "") and "headlook write: ARMED" in text:
             if int(pm) == 0:
-                fails.append("fog probe: asked for, and X4's froxel fog pass was not patched"
+                fails.append("fog probe: asked for, and X4's froxel fog's first stage was not replaced"
                              + (f" ({pr_} refused — the log says why)" if int(pr_) else
                                 " (no module with M_offset and I_point_num was created)"))
             elif int(pdisp) == 0:
@@ -5600,6 +5601,22 @@ def main(path):
     elif re.search(r"\bX4VR_FOG_PROBE=1\b", run or ""):
         fails.append("fog probe: asked for, and the layer printed no fog probe line (a build "
                      "without it)")
+
+    # X4's nebula cards removed (X4VR_FOG_CARDS=off, after take 474).
+    fco = re.findall(r"fog cards (?:first present|final): off — (\d+) draw\(s\) of X4's camera-turned cards "
+                     r"removed \(farther than 50 m\), (\d+) kept as nearer, (\d+) seen before learned", text)
+    if fco:
+        cr, ck, cu = fco[-1]
+        print(f"fogcards off: {cr} draw(s) of X4's camera-turned cards removed, {ck} nearer kept, "
+              f"{cu} seen before learned")
+        if "headlook write: ARMED" in text and int(cr) == 0:
+            fails.append("fog cards: off, in flight, and no card was removed (none learned: the "
+                         "head-look never moved, or X4 drew no cards)")
+    elif re.search(r"\bX4VR_FOG_CARDS=off\b", run or ""):
+        fails.append("fog cards: asked off, and the layer printed no fog cards line (a build "
+                     "without it)")
+    for ln in re.findall(r"fog volume: (X4's volume_base .*|a module like .*)$", text, re.M)[:2]:
+        print(f"fogprobe {ln}")
 
     # X4's fog blobs (after take 466): the froxel pass, its blobs' frames turned.
     ff = re.findall(r"facing fog (?:periodic|final): (\d+) froxel module\(s\) turn X4's fog blobs to "
