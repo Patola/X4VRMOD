@@ -2161,7 +2161,9 @@ float *slot_host_ptr(const ViewSlot &s) {
 // camera" took them; this says what X4's turn of them is.
 bool facing_collapse(); // beside the other facing switches
 bool facing_compare();
-bool facing_census() { return facing_collapse() || facing_compare(); }
+// The census is heavy (take 471: with it, the card work was 240 us a submit), so only
+// with the collapse diagnostic.
+bool facing_census() { return facing_collapse(); }
 bool facing_enabled(); // beside the other facing switches
 bool facing_ab();
 // The tracking of X4's near/far-faded draws: for the census, or for the fix on the CPU.
@@ -2181,6 +2183,9 @@ std::atomic<bool> g_fix_active{false};
 // the clouds it sees (after take 470). And the stretch, so the drift check below
 // measures within one.
 std::atomic<bool> g_fix_kill{false};
+// How the fixing arm turns X4's cards: 1 to the eye, 2 to the ship, 3 billboards (facing
+// the view up to a roll) to the eye and the cards X4 tilts off it to the ship.
+std::atomic<int> g_fix_mode{1};
 std::atomic<uint64_t> g_fix_phase{0};
 // The head-look X4 was given, for the census's signatures (set by pose_drive_residual).
 std::atomic<float> g_census_yaw{0.f}, g_census_pitch{0.f};
@@ -2342,22 +2347,29 @@ struct FixLearn {
     float yaw = 0.f, pitch = 0.f;
     uint64_t last = 0;
     bool learned = false;
-    // The drift check (after take 470): the card as drawn -- its turn in the world, and
-    // its direction from the eye in the world -- at the first draw of a stretch, and the
-    // head-look then. X4's own (A) should drift by the head-look; the fix (B) not at all.
-    bool has_ref = false;
-    uint64_t ref_phase = 0;
-    float ref_w[9] = {}, ref_dir[3] = {}, ref_yaw = 0.f, ref_pitch = 0.f;
 };
+// The drift check (after take 470; per card since take 471, where one signature covered
+// every card of a kind and the check compared different clouds): each card, by its kind
+// and its direction and distance from the eye, as drawn -- its turn in the world -- at
+// its first draw in the stretch, with the head-look then. X4's own should drift by the
+// head-look; the fix by nothing.
+struct DriftRef {
+    float w[9];
+    float yaw, pitch;
+};
+std::unordered_map<uint64_t, DriftRef> &g_fix_drift =
+    x4vr::immortal<std::unordered_map<uint64_t, DriftRef>>();
+uint64_t g_fix_drift_phase = ~0ull;
 std::unordered_map<uint64_t, FixLearn> &g_fix_learn =
     x4vr::immortal<std::unordered_map<uint64_t, FixLearn>>();
 struct FixStats {
     uint64_t rewritten = 0, unlearned = 0, refused = 0, mismatch = 0, noflight = 0, full = 0,
              killed = 0;
     // Drift by arm (0 X4's own, 1 the fix) and head-look moved since the reference
-    // (<2, <10, <30, more deg): draws, turn drift sum and max, direction drift sum and max.
+    // (<2, <10, <30, more deg): draws, turn drift sum and max.
     uint64_t dn[2][4] = {};
-    double dturn[2][4] = {}, dturn_max[2][4] = {}, ddir[2][4] = {}, ddir_max[2][4] = {};
+    double dturn[2][4] = {}, dturn_max[2][4] = {};
+    uint64_t to_eye = 0, to_ship = 0;
     // The cost: time in the submit hook's card work.
     uint64_t calls = 0;
     double ns = 0.0, ns_max = 0.0;
@@ -2405,7 +2417,7 @@ static uint64_t fade_signature(const float *o, const float *c) {
     }
     return h;
 }
-static void fix_draw(float *o, const float *c, bool rewrite,
+static void fix_draw(float *o, const float *c, int mode,
                      std::unordered_set<const float *> &done) {
     if (done.count(o))
         return; // drawn twice from one slot: turned once
@@ -2452,29 +2464,10 @@ static void fix_draw(float *o, const float *c, bool rewrite,
         g_fix_stats.killed++;
         return;
     }
-    if (rewrite) {
-        float up[3];
-        x4vr::billboard::ship_up(yaw, pitch, up);
-        if (!x4vr::billboard::face_eye(c, c + 7 * 16, o + 16, o, up)) {
-            g_fix_stats.refused++;
-            return;
-        }
-        done.insert(o);
-        g_fix_stats.rewritten++;
-    }
-    // The drift check, on the card as it will be drawn.
-    const int arm = rewrite ? 1 : 0;
-    float wn[9], dir[3];
-    for (int col = 0; col < 3; col++) {
-        double l = 0.0;
-        for (int row = 0; row < 3; row++)
-            l += (double)o[16 + col * 4 + row] * o[16 + col * 4 + row];
-        l = std::sqrt(l);
-        for (int row = 0; row < 3; row++)
-            wn[col * 3 + row] = l > 0.0 ? (float)(o[16 + col * 4 + row] / l) : 0.f;
-    }
+    // The card's kind, direction and distance from the eye, for the drift check: its
+    // translation is X4's and stays.
+    uint64_t card = h;
     {
-        // The direction from the eye in the world: V^T (V W_t + V_t), normalised.
         double pv[3], pw[3] = {0, 0, 0}, l = 0.0;
         for (int row = 0; row < 3; row++) {
             pv[row] = c[12 + row];
@@ -2487,34 +2480,72 @@ static void fix_draw(float *o, const float *c, bool rewrite,
         for (double v : pw)
             l += v * v;
         l = std::sqrt(l);
+        auto mix = [&card](int64_t v) {
+            for (int b = 0; b < 8; b++) {
+                card ^= (uint64_t)(v >> (8 * b)) & 0xffu;
+                card *= 1099511628211ull;
+            }
+        };
         for (int row = 0; row < 3; row++)
-            dir[row] = l > 0.0 ? (float)(pw[row] / l) : 0.f;
+            mix((int64_t)std::llround(l > 0.0 ? pw[row] / l * 400.0 : 0.0));
+        mix((int64_t)std::llround(std::log(std::max(l, 1e-6)) * 20.0));
+    }
+    if (mode) {
+        const bool eye = mode == 1 || (mode == 3 && x4vr::billboard::faces_view(c, o + 16));
+        bool ok;
+        if (eye) {
+            float up[3];
+            x4vr::billboard::ship_up(yaw, pitch, up);
+            ok = x4vr::billboard::face_eye(c, c + 7 * 16, o + 16, o, up);
+        } else {
+            float L[9];
+            x4vr::billboard::look_rows(yaw, pitch, L);
+            ok = x4vr::billboard::face_ship(c, c + 7 * 16, o + 16, o, L);
+        }
+        if (!ok) {
+            g_fix_stats.refused++;
+            return;
+        }
+        done.insert(o);
+        g_fix_stats.rewritten++;
+        (eye ? g_fix_stats.to_eye : g_fix_stats.to_ship)++;
+    }
+    // The drift check, on the card as it will be drawn.
+    const int arm = mode ? 1 : 0;
+    float wn[9];
+    for (int col = 0; col < 3; col++) {
+        double l = 0.0;
+        for (int row = 0; row < 3; row++)
+            l += (double)o[16 + col * 4 + row] * o[16 + col * 4 + row];
+        l = std::sqrt(l);
+        for (int row = 0; row < 3; row++)
+            wn[col * 3 + row] = l > 0.0 ? (float)(o[16 + col * 4 + row] / l) : 0.f;
     }
     const uint64_t phase = g_fix_phase.load(std::memory_order_relaxed);
-    if (!e.has_ref || e.ref_phase != phase) {
-        e.has_ref = true;
-        e.ref_phase = phase;
-        std::memcpy(e.ref_w, wn, sizeof wn);
-        std::memcpy(e.ref_dir, dir, sizeof dir);
-        e.ref_yaw = yaw;
-        e.ref_pitch = pitch;
+    if (phase != g_fix_drift_phase) {
+        g_fix_drift.clear();
+        g_fix_drift_phase = phase;
+    }
+    auto dr = g_fix_drift.find(card);
+    if (dr == g_fix_drift.end()) {
+        if (g_fix_drift.size() < 100000) {
+            DriftRef ref;
+            std::memcpy(ref.w, wn, sizeof wn);
+            ref.yaw = yaw;
+            ref.pitch = pitch;
+            g_fix_drift.emplace(card, ref);
+        }
         return;
     }
-    const double dh = std::max(std::fabs(yaw - e.ref_yaw), std::fabs(pitch - e.ref_pitch));
+    const double dh = std::max(std::fabs(yaw - dr->second.yaw), std::fabs(pitch - dr->second.pitch));
     const int bin = dh < 2.0 ? 0 : dh < 10.0 ? 1 : dh < 30.0 ? 2 : 3;
-    // The turn between the reference and now: trace of Wref^T W over the columns.
-    double tr = 0.0, dd = 0.0;
+    double tr = 0.0;
     for (int i = 0; i < 9; i++)
-        tr += (double)e.ref_w[i] * wn[i];
-    for (int i = 0; i < 3; i++)
-        dd += (double)e.ref_dir[i] * dir[i];
-    const double turn = std::acos(std::fmax(-1.0, std::fmin(1.0, (tr - 1.0) / 2.0))) * 57.2957795,
-                 ddeg = std::acos(std::fmax(-1.0, std::fmin(1.0, dd))) * 57.2957795;
+        tr += (double)dr->second.w[i] * wn[i];
+    const double turn = std::acos(std::fmax(-1.0, std::fmin(1.0, (tr - 1.0) / 2.0))) * 57.2957795;
     g_fix_stats.dn[arm][bin]++;
     g_fix_stats.dturn[arm][bin] += turn;
     g_fix_stats.dturn_max[arm][bin] = std::max(g_fix_stats.dturn_max[arm][bin], turn);
-    g_fix_stats.ddir[arm][bin] += ddeg;
-    g_fix_stats.ddir_max[arm][bin] = std::max(g_fix_stats.ddir_max[arm][bin], ddeg);
 }
 
 // At submit, under g_track.mu: every fade draw the submitted recordings made -- the
@@ -2535,7 +2566,9 @@ static void census_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) 
         }
     } timed{t0};
     const bool census = facing_census(), fixing = facing_enabled();
-    const bool rewrite = fixing && g_fix_active.load(std::memory_order_relaxed);
+    const int mode = fixing && g_fix_active.load(std::memory_order_relaxed)
+                         ? g_fix_mode.load(std::memory_order_relaxed)
+                         : 0;
     std::unordered_set<const float *> done;
     if (fixing && (++g_fix_submits & 1023) == 0)
         for (auto it = g_fix_learn.begin(); it != g_fix_learn.end();)
@@ -2560,7 +2593,7 @@ static void census_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) 
                         census_classify(o, c);
                 }
                 if (fixing && o && c)
-                    fix_draw(o, c, rewrite, done);
+                    fix_draw(o, c, mode, done);
             }
             it->second.clear();
         }
@@ -2588,17 +2621,17 @@ static void fix_report(const char *when) {
         for (int b = 0; b < 4; b++) {
             char t[160];
             const double n = (double)std::max<uint64_t>(f.dn[arm][b], 1);
-            snprintf(t, sizeof t, "%s%s deg: %llu draw(s), turn %.2f (max %.2f), direction %.3f "
-                     "(max %.3f)",
-                     b ? "; " : "", kBin[b], (unsigned long long)f.dn[arm][b],
-                     f.dturn[arm][b] / n, f.dturn_max[arm][b], f.ddir[arm][b] / n,
-                     f.ddir_max[arm][b]);
+            snprintf(t, sizeof t, "%s%s deg: %llu draw(s), turn %.2f (max %.2f)", b ? "; " : "",
+                     kBin[b], (unsigned long long)f.dn[arm][b], f.dturn[arm][b] / n,
+                     f.dturn_max[arm][b]);
             row += t;
         }
-        X4VR_LOG("facing cpu drift %s (%s): the cards in the world against the stretch's "
-                 "first draw, by head-look moved — %s",
+        X4VR_LOG("facing cpu drift %s (%s): each card in the world against its first draw in "
+                 "the stretch, by head-look moved — %s",
                  when, arm ? "the fix" : "X4's own", row.c_str());
     }
+    X4VR_LOG("facing cpu turns %s: %llu draw(s) turned to the eye, %llu to the ship", when,
+             (unsigned long long)f.to_eye, (unsigned long long)f.to_ship);
     X4VR_LOG("facing cpu cost %s: %llu submit(s) with X4's cards, mean %.1f us, max %.1f us, "
              "total %.1f ms",
              when, (unsigned long long)f.calls, f.calls ? f.ns / f.calls / 1000.0 : 0.0,
@@ -4911,9 +4944,12 @@ void shader_knob_report(const char *when) {
                                  "the fix, and K, where every fog blob and billboard the patches "
                                  "find is removed, and every draw of X4's near/far-faded effects; "
                                  "the census reads their matrices"
-             : facing_compare() ? "; DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4's own, "
-                                  "S (cards turned to the ship) and E (to the eye); the census "
-                                  "reads their matrices"
+             : facing_compare() ? (facing_gpu()
+                                       ? "; DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4's "
+                                         "own, S (cards turned to the ship) and E (to the eye)"
+                                       : "; DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4's "
+                                         "own, S (cards turned to the ship) and H (billboards to "
+                                         "the eye, tilted cards to the ship)")
                                 : "");
     // Zero with the pose channel up: X4 created no froxel fog pass, or its module no
     // longer has M_offset and I_point_num by name.
@@ -9560,6 +9596,8 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             const bool three = facing_collapse() || facing_compare();
             const int a = (int)((phase + draw) % (three ? 3u : 2u));
             static const int kCollapse[3] = {0, 1, 2}, kCompare[3] = {0, 3, 4};
+            // Without the GPU patches the comparison is the CPU's: S, every card to the
+            // ship; H, billboards to the eye and tilted cards to the ship (after take 471).
             arm = facing_collapse() ? kCollapse[a] : facing_compare() ? kCompare[a] : a;
             static uint64_t said = ~0ull;
             if (said != phase) {
@@ -9569,13 +9607,15 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                     "B, the billboards face the ship",
                     "K, X4's fog blobs and billboards removed — DIAGNOSTIC",
                     "S, the billboards face the ship",
-                    "E, the billboards face the eye"};
+                    facing_gpu() ? "E, the billboards face the eye"
+                                 : "H, billboards face the eye, tilted cards the ship"};
                 X4VR_LOG("facing: phase #%llu — %s (X4VR_FACING_AB=recentre)",
                          (unsigned long long)phase, kArm[arm]);
             }
         }
         face = face && (arm == 1 || arm == 3 || arm == 4);
         g_fix_active.store(face, std::memory_order_relaxed);
+        g_fix_mode.store(arm == 3 ? 2 : arm == 4 ? 3 : 1, std::memory_order_relaxed);
         g_fix_kill.store(facing_enabled() && !facing_gpu() && arm == 2 && cmd_valid,
                          std::memory_order_relaxed);
         if (facing_enabled() && facing_ab())

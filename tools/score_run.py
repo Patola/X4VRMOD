@@ -5480,7 +5480,7 @@ def main(path):
                     r"OFF \(X4VR_FACING=1 turns it on\)) — (\d+) "
                     r"vertex module\(s\) turn X4's billboards to the ship, (\d+) input read\(s\) "
                     r"turned, (\d+) partial left", text)
-    fphases = re.findall(r"facing: phase #(\d+) — ([ABKSE])\b", text)
+    fphases = re.findall(r"facing: phase #(\d+) — ([ABKSEH])\b", text)
     if fc:
         mode, nmod, ninp, npart = fc[-1]
         print(f"facing  {mode}: {nmod} vertex module(s) turn X4's billboards to the ship, {ninp} "
@@ -5507,7 +5507,8 @@ def main(path):
     collapse = (bool(re.search(r"\bX4VR_FACING_DEBUG=collapse\b", run or ""))
                 and "phases cycle X4's own, the fix, and K" in text)
     compare = (bool(re.search(r"\bX4VR_FACING_DEBUG=compare\b", run or ""))
-               and "S (cards turned to the ship) and E (to the eye)" in text)
+               and ("S (cards turned to the ship) and E (to the eye)" in text
+                    or "S (cards turned to the ship) and H (billboards" in text))
     if re.search(r"\bX4VR_FACING_AB=recentre\b", run or ""):
         if collapse and len({k for _, k in fphases}) < 3:
             fails.append("X4VR_FACING_AB=recentre with the collapse diagnostic, and the three arms "
@@ -5568,7 +5569,10 @@ def main(path):
         kl = re.findall(r"facing cpu final: K removed (\d+) draw\(s\) of learned cards", text)
         if kl:
             print(f"facing  cpu K: {kl[-1]} draw(s) of learned cards removed")
-        fixing = md == "ON" or "B" in {k for _, k in fphases}
+        tl = re.findall(r"facing cpu turns final: (.*)$", text, re.M)
+        if tl:
+            print(f"facing  cpu turns: {tl[-1]}")
+        fixing = md == "ON" or bool({"B", "S", "H"} & {k for _, k in fphases})
         flying = "headlook write: ARMED" in text
         if fixing and flying and int(rw) == 0:
             fails.append("facing cpu: on and in flight, and no card was turned"

@@ -98,6 +98,95 @@ inline bool face_eye(const float V[16], const float VP[16], float W[16], float W
     return true;
 }
 
+// Turned to the ship's forward: Q' = L * Q, L the head-look undone in the view's axes
+// (column-major 3x3, PoseBlock::look's rows): what X4 draws with the head straight, so
+// the cards keep X4's own layout as seen along the ship's nose, held still while the
+// head looks around (after take 471: turned to the eye, the cards X4 tilts off the view
+// axis -- a third of them -- left their layout, and some went edge-on and faded).
+// Rewrites W's turn (its translation kept) and WVP = VP * W'. False where the view's
+// turn is not a rotation.
+inline bool face_ship(const float V[16], const float VP[16], float W[16], float WVP[16],
+                      const float L[9]) {
+    double v[3][3], w[3][3];
+    for (int c = 0; c < 3; c++)
+        for (int r = 0; r < 3; r++) {
+            v[c][r] = V[c * 4 + r];
+            w[c][r] = W[c * 4 + r];
+        }
+    for (int a = 0; a < 3; a++)
+        for (int b = 0; b < 3; b++) {
+            double d = 0.0;
+            for (int k = 0; k < 3; k++)
+                d += v[k][a] * v[k][b];
+            if (std::fabs(d - (a == b ? 1.0 : 0.0)) > 1e-3)
+                return false;
+        }
+    double q[3][3], q2[3][3];
+    for (int c = 0; c < 3; c++)
+        for (int r = 0; r < 3; r++) {
+            double acc = 0.0;
+            for (int k = 0; k < 3; k++)
+                acc += v[k][r] * w[c][k];
+            q[c][r] = acc;
+        }
+    for (int c = 0; c < 3; c++)
+        for (int r = 0; r < 3; r++) {
+            double acc = 0.0;
+            for (int k = 0; k < 3; k++)
+                acc += (double)L[k * 3 + r] * q[c][k];
+            q2[c][r] = acc;
+        }
+    for (int c = 0; c < 3; c++)
+        for (int r = 0; r < 3; r++) {
+            double acc = 0.0;
+            for (int k = 0; k < 3; k++)
+                acc += v[r][k] * q2[c][k];
+            W[c * 4 + r] = (float)acc;
+        }
+    for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++) {
+            double acc = 0.0;
+            for (int k = 0; k < 4; k++)
+                acc += (double)VP[k * 4 + r] * W[c * 4 + k];
+            WVP[c * 4 + r] = (float)acc;
+        }
+    return true;
+}
+
+// Whether a card faces the view up to a roll: its normal (Q's column 2) on the view
+// axis, its own x and y in the view plane -- X4's true billboards, as opposed to the
+// cards it tilts off the view axis (V, W column-major 4x4s).
+inline bool faces_view(const float V[16], const float W[16]) {
+    double q[3][3], n[3];
+    for (int c = 0; c < 3; c++) {
+        double l = 0.0;
+        for (int r = 0; r < 3; r++) {
+            double acc = 0.0;
+            for (int k = 0; k < 3; k++)
+                acc += (double)V[k * 4 + r] * W[c * 4 + k];
+            q[c][r] = acc;
+            l += acc * acc;
+        }
+        n[c] = std::sqrt(l);
+        if (!(n[c] > 0.0))
+            return false;
+    }
+    return std::fabs(q[2][0]) < 1e-3 * n[2] && std::fabs(q[2][1]) < 1e-3 * n[2] &&
+           std::fabs(q[0][2]) < 1e-3 * n[0] && std::fabs(q[1][2]) < 1e-3 * n[1];
+}
+
+// The head-look undone in the view's axes, for (yaw, pitch) in the injector's convention
+// (column-major 3x3; x4vr_view.hpp pose_set_look's rows, pinned to x4vr_camwrite).
+inline void look_rows(float yaw_deg, float pitch_deg, float L[9]) {
+    const float d = 0.01745329251994330f;
+    const float psi = -yaw_deg * d, th = pitch_deg * d;
+    const float cy = std::cos(psi), sy = std::sin(psi), cp = std::cos(th), sp = std::sin(th);
+    const float rows[3][3] = {{cy, 0.f, -sy}, {-sy * sp, cp, -cy * sp}, {sy * cp, sp, cy * cp}};
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++)
+            L[c * 3 + r] = rows[r][c];
+}
+
 // The ship's up in the view's axes, for a head-look of (yaw, pitch) in the injector's
 // convention: column 1 of the look rows (x4vr_view.hpp pose_set_look, pinned there to
 // x4vr_camwrite's rows_for).

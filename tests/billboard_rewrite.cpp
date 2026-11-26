@@ -55,8 +55,9 @@ static void mul4(const float *a, const float *b, float *o) {
 }
 
 int main() {
-    int checked = 0, bad = 0, ctrl_seen = 0, ctrl_runs = 0, refused = 0, up_bad = 0;
-    double worst = 0.0, worst_wvp = 0.0;
+    int checked = 0, bad = 0, ctrl_seen = 0, ctrl_runs = 0, refused = 0, up_bad = 0,
+        ship_checked = 0, faces_bad = 0;
+    double worst = 0.0, worst_wvp = 0.0, ship_worst = 0.0;
     // X4's projection: row3 = [0 0 1 0], reversed-Z near 0.1.
     float P[16] = {};
     P[0] = 0.7f, P[5] = -0.7f, P[2 * 4 + 3] = 1.f, P[3 * 4 + 2] = 0.1f;
@@ -111,6 +112,42 @@ int main() {
                         float W0[16];
                         for (int i = 0; i < 16; i++)
                             W0[i] = W[i];
+                        // Turned to the ship: X4's own card with the head straight, the
+                        // camera the ship's, from every head-look.
+                        {
+                            float Lr[9], Ws[16], WVPs[16];
+                            x4vr::billboard::look_rows((float)lk[0], (float)lk[1], Lr);
+                            for (int i = 0; i < 9; i++)
+                                if (fabs(Lr[i] - rows[i]) > 1e-6)
+                                    up_bad++;
+                            for (int i = 0; i < 16; i++) {
+                                Ws[i] = W[i];
+                                WVPs[i] = WVP[i];
+                            }
+                            if (!x4vr::billboard::face_ship(V, VP, Ws, WVPs, Lr)) {
+                                refused++;
+                            } else {
+                                const M3 ws = mul(body, mul(K, S));
+                                double es = 0.0, ms = 0.0;
+                                for (int c = 0; c < 3; c++)
+                                    for (int r = 0; r < 3; r++) {
+                                        es = std::max(es, fabs(Ws[c * 4 + r] - ws[c * 3 + r]));
+                                        ms = std::max(ms, fabs(ws[c * 3 + r]));
+                                    }
+                                for (int r = 0; r < 4; r++)
+                                    es = std::max(es, (double)fabs(Ws[12 + r] - W[12 + r]));
+                                ship_worst = std::max(ship_worst, es / ms);
+                                ship_checked++;
+                                if (es / ms > 2e-5)
+                                    bad++;
+                            }
+                            // faces_view: X4's true billboards (K facing, rolled, flipped)
+                            // and not the tilted ones.
+                            const bool facing = kk[0] == 0 && kk[1] == 0 ? true
+                                                : (kk[0] == 180 && kk[1] == 0);
+                            if (x4vr::billboard::faces_view(V, W) != facing)
+                                faces_bad++;
+                        }
                         if (!x4vr::billboard::face_eye(V, VP, W, WVP, up)) {
                             refused++;
                             continue;
@@ -153,8 +190,10 @@ int main() {
                 }
     printf("CHECKED=%d BAD=%d WORST=%.2e WVP_WORST=%.2e REFUSED=%d UP_BAD=%d CONTROL_CAUGHT=%d/%d\n",
            checked, bad, worst, worst_wvp, refused, up_bad, ctrl_seen, ctrl_runs);
-    const bool pass = bad == 0 && refused == 0 && up_bad == 0 && ctrl_runs > 0 &&
-                      ctrl_seen == ctrl_runs && checked > 0;
+    printf("SHIP_CHECKED=%d SHIP_WORST=%.2e FACES_VIEW_WRONG=%d\n", ship_checked, ship_worst,
+           faces_bad);
+    const bool pass = bad == 0 && refused == 0 && up_bad == 0 && faces_bad == 0 &&
+                      ship_checked > 0 && ctrl_runs > 0 && ctrl_seen == ctrl_runs && checked > 0;
     printf(pass ? "all passed\n" : "FAIL\n");
     return pass ? 0 : 1;
 }

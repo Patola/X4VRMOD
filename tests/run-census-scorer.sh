@@ -2292,7 +2292,7 @@ want "census: collapse ran, census silent -> FAIL" /tmp/census-cs-none.log "FAIL
 absent "census: a build before the census (467) -> no census FAIL" /tmp/census-fc-abk.log "FAIL .*facing census"
 
 # The comparison (after take 468): X4's own, S to the ship, E to the eye; signatures.
-for f in '"E, the billboards face the eye"' '"S (cards turned to the ship) and E (to the eye); the census "' \
+for f in '"E, the billboards face the eye"' '"own, S (cards turned to the ship) and E (to the eye)"' \
          '"facing census signatures %s: in flight, %llu draw(s) under %llu signature(s) "' \
          '"facing census kept (%s): %llu draw(s), head-look yaw %.1f..%.1f pitch "'; do
     grep -qF -- "$f" layer/x4vr_layer.cpp && ok "compare: the layer still prints $f" \
@@ -2330,16 +2330,26 @@ absent "cpu fix: cards turned -> no FAIL" /tmp/census-fx-ok.log "FAIL .*facing c
 absent "cpu fix: GPU patches not asked -> no vertex FAIL" /tmp/census-fx-ok.log "FAIL .*lack IN_VERTEXLOCATION_POSITION"
 { fbase; printf '%s\n' "$fxzero"; } > /tmp/census-fx-zero.log
 want "cpu fix: in flight, a fixing arm, none turned -> FAIL" /tmp/census-fx-zero.log "FAIL|  - " "no card was turned (none learned"
-for f in '"facing cpu drift %s (%s): the cards in the world against the stretch'"'"'s "' \
+for f in '"facing cpu drift %s (%s): each card in the world against its first draw in "' \
+         '"facing cpu turns %s: %llu draw(s) turned to the eye, %llu to the ship"' \
+         '"H, billboards face the eye, tilted cards the ship"' \
          '"facing cpu cost %s: %llu submit(s) with X4'"'"'s cards, mean %.1f us, max %.1f us, "' \
          '"facing cpu %s: K removed %llu draw(s) of learned cards — DIAGNOSTIC"'; do
     grep -qF -- "$f" layer/x4vr_layer.cpp && ok "cpu fix: the layer still prints $f" \
         || bad "cpu fix: the layer's format moved: $f"
 done
-fxd='[  99900.009] layer   facing cpu drift final (the fix): the cards in the world against the stretch'"'"'s first draw, by head-look moved — <2 deg: 10 draw(s), turn 0.01 (max 0.02), direction 0.000 (max 0.001)'
+fxd='[  99900.009] layer   facing cpu drift final (the fix): each card in the world against its first draw in the stretch, by head-look moved — <2 deg: 10 draw(s), turn 0.01 (max 0.02)'
+fxt='[  99900.011] layer   facing cpu turns final: 500 draw(s) turned to the eye, 300 to the ship'
 fxc='[  99900.010] layer   facing cpu cost final: 9000 submit(s) with X4'"'"'s cards, mean 12.0 us, max 80.0 us, total 108.0 ms'
-{ fbase; printf '%s\n' "$fxok" "$fxd" "$fxc"; } > /tmp/census-fx-drift.log
-want "cpu fix: drift said" /tmp/census-fx-drift.log facing "cpu drift final (the fix): the cards in the world"
+{ fbase; printf '%s\n' "$fxok" "$fxd" "$fxc" "$fxt"; } > /tmp/census-fx-drift.log
+want "cpu fix: drift said" /tmp/census-fx-drift.log facing "cpu drift final (the fix): each card in the world"
+want "cpu fix: turns said" /tmp/census-fx-drift.log facing "cpu turns: 500 draw(s) turned to the eye, 300 to the ship"
+flkh='[  99900.002] layer   facing look final: 10 headset frame(s) with the head-look undone, 2 with X4'"'"'s camera angles not valid (identity); DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4'"'"'s own, S (cards turned to the ship) and H (billboards to the eye, tilted cards to the ship)'
+fph='[  99870.000] layer   facing: phase #3 — H, billboards face the eye, tilted cards the ship (X4VR_FACING_AB=recentre)'
+{ sed 's/env: run = /env: run = X4VR_FACING=1 X4VR_FACING_AB=recentre X4VR_FACING_DEBUG=compare /' "$BASE"; printf '%s\n' "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$farm" "$fcab0" "$flkh" "$fpa1" "$fps" "$fph" "$fxok"; } > /tmp/census-fx-sh.log
+want "cpu fix: A, S, H said" /tmp/census-fx-sh.log facing "phases: #1 A, #2 S, #3 H"
+absent "cpu fix: three CPU arms -> no FAIL" /tmp/census-fx-sh.log "FAIL .*the comparison"
+absent "cpu fix: no census asked -> no census FAIL" /tmp/census-fx-sh.log "FAIL .*facing census"
 want "cpu fix: cost said" /tmp/census-fx-drift.log facing "cpu cost final: 9000 submit(s) with X4's cards, mean 12.0 us"
 
 # Whose field of view is declared, and the runtime's eyes (issue #3, 2026-11-25).
