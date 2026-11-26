@@ -5615,7 +5615,7 @@ def main(path):
     # category"): removed by their material -- X4's nebula materials fade in at 500 m and
     # out by 3 km -- and, where the material was unread, by a stopgap.
     fcm = re.findall(r"fog cards (?:first present|final): off — (\d+) draw\(s\) of X4's nebula material "
-                     r"removed \(fading in at 500 m, out by 3 km\), (\d+) of other fading materials left "
+                     r"(?:removed|fixed) \(fading in at 500 m, out by 3 km\), (\d+) of other fading materials left "
                      r"alone, (\d+) with the material unread \(fade blocks: (\d+) modules found, (\d+) "
                      r"not\)", text)
     fcs = re.findall(r"fog cards (?:first present|final): the stopgap where the material was unread — "
@@ -5625,11 +5625,20 @@ def main(path):
     if fcm:
         bym, other, unread, ffound, fnot = fcm[-1]
         bys = fcs[-1][0] if fcs else "0"
-        print(f"fogcards off by material: {bym} draw(s) of X4's nebula material removed, {other} of "
+        print(f"fogcards off by material: {bym} draw(s) of X4's nebula material handled, {other} of "
               f"other fading materials left alone, {unread} unread (fade blocks: {ffound} found, "
               f"{fnot} not); the stopgap removed {bys}")
         for ln in re.findall(r"fog cards final: (the fading materials drawn, .*)$", text, re.M)[-1:]:
             print(f"fogcards {ln}")
+        # X4VR_FOG_CARDS=fix (after take 483): the cards kept, turned to face the eye.
+        ffx = re.findall(r"fog cards (?:first present|final): fixed — (\d+) draw\(s\) of X4's nebula "
+                         r"material turned to face the eye with the sector's up, (\d+) refused", text)
+        if ffx:
+            nfx, nref = ffx[-1]
+            print(f"fogcards fixed: {nfx} draw(s) of X4's nebula material turned to face the eye, "
+                  f"{nref} refused")
+            if "headlook write: ARMED" in text and int(nfx) == 0 and int(bym) > 0:
+                fails.append("fog cards: =fix, in flight, and no card was turned (all refused)")
         if "headlook write: ARMED" in text:
             if int(bym) == 0 and int(bys) == 0:
                 fails.append("fog cards: off, in flight, and no card was removed (X4 drew no "

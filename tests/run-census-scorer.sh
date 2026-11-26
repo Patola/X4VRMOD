@@ -2354,8 +2354,10 @@ want "cpu fix: the head-look check said" /tmp/census-fx-ship.log facing "cpu shi
 for f in '"fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(es), "' \
          '"fog probe: froxel dispatch %ux%ux%u, grid %.0fx%.0fx%.0f, range "' \
          '"fog volume: X4'"'"'s volume_base (%zu bytes) replaced by ours — the probe'"'"'s "' \
-         '"fog cards %s: off — %llu draw(s) of X4'"'"'s nebula material removed (fading in "' \
+         '"fog cards %s: off — %llu draw(s) of X4'"'"'s nebula material %s (fading in "' \
          '"fog cards %s: the fading materials drawn, by where they fade in and out "' \
+         '"fog cards %s: fixed — %llu draw(s) of X4'"'"'s nebula material turned to face "' \
+         '"fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)"' \
          '"fog cards %s: the stopgap where the material was unread — %llu draw(s) of "' \
          '"fog cards: a fade module'"'"'s material %s set %u binding %u, fade "' \
          '"fog probe: X4'"'"'s light — sun (%.3g, %.3g, %.3g), ambient (%.3g, "' \
@@ -2442,13 +2444,23 @@ fcm2='[  99900.021] layer   fog cards final: off — 0 draw(s) of X4'"'"'s nebul
 fcm2s='[  99900.021] layer   fog cards final: the stopgap where the material was unread — 4000 draw(s) of X4'"'"'s camera-turned cards removed (50 m to 6.5 km, under 100 m across), 40 kept as nearer, 900 as farther, 300 as larger (X4'"'"'s radar among them), 300 seen before learned — DIAGNOSTIC'
 fcm3s='[  99900.021] layer   fog cards final: the stopgap where the material was unread — 0 draw(s) of X4'"'"'s camera-turned cards removed (50 m to 6.5 km, under 100 m across), 40 kept as nearer, 900 as farther, 300 as larger (X4'"'"'s radar among them), 300 seen before learned — DIAGNOSTIC'
 { cbase2; printf '%s\n' "$fcm1" "$fcm1m" "$fcm1s"; } > /tmp/census-fc4-ok.log
-want "fog cards: by material said" /tmp/census-fc4-ok.log fogcards "off by material: 5000 draw(s) of X4's nebula material removed, 9000 of other"
+want "fog cards: by material said" /tmp/census-fc4-ok.log fogcards "off by material: 5000 draw(s) of X4's nebula material handled, 9000 of other"
 want "fog cards: materials said" /tmp/census-fc4-ok.log fogcards "500..3000 m: 5000 (nebula); 0.1..400 m: 7000"
 absent "fog cards: by material -> no FAIL" /tmp/census-fc4-ok.log "FAIL .*fog cards"
 { cbase2; printf '%s\n' "$fcm2" "$fcm2s"; } > /tmp/census-fc4-stop.log
 want "fog cards: material never read, stopgap -> FAIL" /tmp/census-fc4-stop.log "FAIL|  - " "material was never read"
 { cbase2; printf '%s\n' "$fcm2" "$fcm3s"; } > /tmp/census-fc4-none.log
 want "fog cards: nothing removed either way -> FAIL" /tmp/census-fc4-none.log "FAIL|  - " "no card was removed"
+# After take 483: X4VR_FOG_CARDS=fix -- the cards kept and turned to face the eye.
+fcfx='[  99900.022] layer   fog cards final: fixed — 5000 draw(s) of X4'"'"'s nebula material turned to face the eye with the sector'"'"'s up, 3 refused — DIAGNOSTIC'
+fcfx0='[  99900.022] layer   fog cards final: fixed — 0 draw(s) of X4'"'"'s nebula material turned to face the eye with the sector'"'"'s up, 5000 refused — DIAGNOSTIC'
+fsfa='[  99830.100] layer   fog smoke: phase #3 — A, X4'"'"'s cards fixed to the world, no smoke (X4VR_FOG_AB=recentre)'
+{ cbase2; printf '%s\n' "$fcm1" "$fcm1m" "$fcfx" "$fsfa"; } > /tmp/census-fc5-ok.log
+want "fog cards: fixed said" /tmp/census-fc5-ok.log fogcards "fixed: 5000 draw(s) of X4's nebula material turned to face the eye, 3 refused"
+want "fog smoke: fixed-cards phase said" /tmp/census-fc5-ok.log fogsmoke "phases: #3 A"
+absent "fog cards: fixed -> no FAIL" /tmp/census-fc5-ok.log "FAIL .*fog cards"
+{ cbase2; printf '%s\n' "$fcm1" "$fcfx0"; } > /tmp/census-fc5-none.log
+want "fog cards: fix asked, none turned -> FAIL" /tmp/census-fc5-none.log "FAIL|  - " "no card was turned"
 flkh='[  99900.002] layer   facing look final: 10 headset frame(s) with the head-look undone, 2 with X4'"'"'s camera angles not valid (identity); DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4'"'"'s own, S (cards turned to the ship) and H (billboards to the eye, tilted cards to the ship)'
 fph='[  99870.000] layer   facing: phase #3 — H, billboards face the eye, tilted cards the ship (X4VR_FACING_AB=recentre)'
 { sed 's/env: run = /env: run = X4VR_FACING=1 X4VR_FACING_AB=recentre X4VR_FACING_DEBUG=compare /' "$BASE"; printf '%s\n' "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$farm" "$fcab0" "$flkh" "$fpa1" "$fps" "$fph" "$fxok"; } > /tmp/census-fx-sh.log

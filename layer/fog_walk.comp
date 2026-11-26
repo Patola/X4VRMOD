@@ -76,6 +76,7 @@ layout(set = 4, binding = 0, std140) uniform X4Dynamic {
 layout(set = 0, binding = 6, rgba16f) uniform restrict writeonly image3D U_output_rt_decl[53306];
 layout(set = 31, binding = 0, std140) uniform X4vrPose {
     layout(offset = 288) vec4 fog; // x4vr::kPoseFogOffset
+    layout(offset = 304) vec4 fog2; // x: where the smoke ends, m (0: kFar)
 } pose;
 
 // Chosen in an offline model of X4's grid (takes 480-481), against X4's own cards reduced
@@ -199,6 +200,7 @@ void main() {
     const vec3 a = cell_view(vec3(0.0, 0.5, 0.5)), b = cell_view(vec3(1.0, 0.5, 0.5));
     const float col = abs(b.x - a.x) / max(abs(a.z), 1e-6) / size.x;
     const vec4 knobs = pose.fog;
+    const float far = pose.fog2.x > 0.0 ? pose.fog2.x : kFar;
     const float shape = knobs.z > 0.0 ? knobs.z : 1.0; // the smoke's size
     // Its sharpest: columns times w, a cloud's edge softness times w squared (after take
     // 482, the column limit alone left the edges where kSoft put them).
@@ -214,7 +216,7 @@ void main() {
     float prev = length(cell_view(vec3(uv, 1.0)));
     for (int z = int(size.z) - 1; z >= 0; --z) {
         const float tz = length(cell_view(vec3(uv, (float(z) + 0.5) / size.z)));
-        if (knobs.x > 0.0 && prev < kFar && tz > prev) {
+        if (knobs.x > 0.0 && prev < far && tz > prev) {
             const float seg = tz - prev;
             const float s = max(kMinStep, kStepFrac * 0.5 * (prev + tz));
             const int n = int(clamp(ceil(seg / s), 1.0, kMaxSub));
@@ -222,7 +224,7 @@ void main() {
             for (int i = 0; i < n; ++i) {
                 const float t = prev + (float(i) + 0.5) * stp;
                 const float d = knobs.x * smoke(origin + ray * t, F_time, t, col * t, shape, res, edge) *
-                                (1.0 - smoothstep(0.6 * kFar, kFar, t));
+                                (1.0 - smoothstep(0.6 * far, far, t));
                 if (d > 0.0) {
                     const float slice = exp(-kSigma * d * stp);
                     light += trans * glow * (1.0 - slice);

@@ -6,6 +6,11 @@
 // -- from every head-look, ship and card position -- with WVP = VP * W'. Controls: the
 // card as X4 gave it moves with the head-look (so the check can fail), and ship_up is
 // column 1 of the look rows the shader patches read. Self-checking.
+//
+// And with the WORLD's up (after take 483, X4VR_FOG_CARDS=fix: the cards turned by
+// positions alone): the card must come out the same from every head-look AND every ship
+// attitude -- the frame whose z is the line from the eye to the card and whose up is the
+// world's +y, times X4's own K.
 #include "../common/x4vr_billboard.hpp"
 #include "../common/x4vr_view.hpp"
 
@@ -56,7 +61,8 @@ static void mul4(const float *a, const float *b, float *o) {
 
 int main() {
     int checked = 0, bad = 0, ctrl_seen = 0, ctrl_runs = 0, refused = 0, up_bad = 0,
-        ship_checked = 0, faces_bad = 0;
+        ship_checked = 0, faces_bad = 0, world_checked = 0, world_bad = 0;
+    double world_worst = 0.0;
     double worst = 0.0, worst_wvp = 0.0, ship_worst = 0.0;
     // X4's projection: row3 = [0 0 1 0], reversed-Z near 0.1.
     float P[16] = {};
@@ -89,6 +95,15 @@ int main() {
                                           zf[0] * xf[1] - zf[1] * xf[0]};
                     const M3 cam_s{xf[0], xf[1], xf[2], yf[0], yf[1], yf[2], zf[0], zf[1], zf[2]};
                     const M3 want = mul(cam_s, mul(K, S));
+                    // The same frame with the world's up.
+                    double xw[3] = {zf[2], 0.0, -zf[0]}; // (0,1,0) x zf
+                    const double xwl = sqrt(xw[0] * xw[0] + xw[2] * xw[2]);
+                    for (double &c : xw)
+                        c /= xwl;
+                    const double yw[3] = {zf[1] * xw[2] - zf[2] * xw[1], zf[2] * xw[0] - zf[0] * xw[2],
+                                          zf[0] * xw[1] - zf[1] * xw[0]};
+                    const M3 cam_w{xw[0], xw[1], xw[2], yw[0], yw[1], yw[2], zf[0], zf[1], zf[2]};
+                    const M3 want_w = mul(cam_w, mul(K, S));
                     float first_w[16] = {};
                     bool have_first = false;
                     for (const auto &lk : looks) {
@@ -148,6 +163,29 @@ int main() {
                             if (x4vr::billboard::faces_view(V, W) != facing)
                                 faces_bad++;
                         }
+                        // With the world's up: V's column 1 is the world's +y in the view's axes.
+                        {
+                            float Ww[16], WVPw[16];
+                            for (int i = 0; i < 16; i++) {
+                                Ww[i] = W[i];
+                                WVPw[i] = WVP[i];
+                            }
+                            const float upv[3] = {V[4], V[5], V[6]};
+                            if (!x4vr::billboard::face_eye(V, VP, Ww, WVPw, upv)) {
+                                refused++;
+                            } else {
+                                double e = 0.0, m = 0.0;
+                                for (int c = 0; c < 3; c++)
+                                    for (int r = 0; r < 3; r++) {
+                                        e = std::max(e, fabs(Ww[c * 4 + r] - want_w[c * 3 + r]));
+                                        m = std::max(m, fabs(want_w[c * 3 + r]));
+                                    }
+                                world_worst = std::max(world_worst, e / m);
+                                world_checked++;
+                                if (e / m > 2e-5)
+                                    world_bad++;
+                            }
+                        }
                         if (!x4vr::billboard::face_eye(V, VP, W, WVP, up)) {
                             refused++;
                             continue;
@@ -192,7 +230,10 @@ int main() {
            checked, bad, worst, worst_wvp, refused, up_bad, ctrl_seen, ctrl_runs);
     printf("SHIP_CHECKED=%d SHIP_WORST=%.2e FACES_VIEW_WRONG=%d\n", ship_checked, ship_worst,
            faces_bad);
+    printf("WORLD_UP_CHECKED=%d WORLD_UP_BAD=%d WORLD_UP_WORST=%.2e\n", world_checked, world_bad,
+           world_worst);
     const bool pass = bad == 0 && refused == 0 && up_bad == 0 && faces_bad == 0 &&
+                      world_bad == 0 && world_checked > 0 &&
                       ship_checked > 0 && ctrl_runs > 0 && ctrl_seen == ctrl_runs && checked > 0;
     printf(pass ? "all passed\n" : "FAIL\n");
     return pass ? 0 : 1;

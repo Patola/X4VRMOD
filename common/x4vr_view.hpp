@@ -456,9 +456,12 @@ struct PoseBlock {
     // (after take 482). (1, 1, 1, 1) is the smoke as built, and an A/B's phases switch it
     // here without a new pipeline.
     float fog[4];
+    // x: where the smoke ends, m (0: the walk's kFar) -- after take 483, the smoke near the
+    // ship alone, with X4's cards fixed beyond it. y, z, w are slack.
+    float fog2[4];
 };
-static_assert(sizeof(PoseBlock) == 304, "std140: three mat4 at 0, 64, 128, vec4s at 192 and "
-                                        "208, a mat4 at 224, a vec4 at 288");
+static_assert(sizeof(PoseBlock) == 320, "std140: three mat4 at 0, 64, 128, vec4s at 192 and "
+                                        "208, a mat4 at 224, vec4s at 288 and 304");
 // Where head_fwd sits, for the SPIR-V patch's second member.
 constexpr uint32_t kPoseHeadFwdOffset = 208;
 // Where look sits, for patch_vertex_facing_body.
@@ -466,6 +469,7 @@ constexpr uint32_t kPoseLookOffset = 224;
 // Where fog sits, for layer/fog_walk.comp (which writes the number itself).
 constexpr uint32_t kPoseFogOffset = 288;
 static_assert(offsetof(PoseBlock, fog) == kPoseFogOffset, "fog_walk.comp reads fog at 288");
+static_assert(offsetof(PoseBlock, fog2) == kPoseFogOffset + 16, "fog_walk.comp reads fog2 at 304");
 // The offset the SPIR-V patch decorates its one-member view with. Named here so
 // the shader-side constant and the struct cannot drift apart silently.
 constexpr uint32_t kPoseEyeOfsOffset = 192;

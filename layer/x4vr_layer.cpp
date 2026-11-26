@@ -2231,10 +2231,12 @@ static std::array<float, kSmokeParams> fog_smoke_params() {
     return v;
 }
 // X4VR_FOG_AB=recentre (after take 480, DIAGNOSTIC): each recentre moves to the next of
-// three phases -- V, X4's own cards and no smoke; A, the smoke and no cards; B, the smoke
-// sharper, down to kFogSharper of its sharpest (after take 482: "an exaggerated blur")
-// -- starting at one drawn at random, so X4's look and ours are compared within one run,
-// by a switch. Its phase, for the cards' removal and the frame times.
+// three phases, starting at one drawn at random, so X4's look and ours are compared
+// within one run, by a switch. With X4VR_FOG_CARDS=fix (after take 483): V, X4's cards as
+// it draws them; A, the cards fixed to the world, no smoke; B, the same with our smoke
+// near the ship only (out to kFogNearFar), for the sense of speed. Otherwise (takes
+// 482-483): V; A, the smoke and no cards; B, the smoke sharper (kFogSharper). Its phase,
+// for the cards and the frame times.
 static bool fog_ab() {
     static const bool ab = [] {
         const char *e = getenv("X4VR_FOG_AB");
@@ -2243,6 +2245,7 @@ static bool fog_ab() {
     return ab;
 }
 constexpr float kFogSharper = 1.f / 1.5f; // B: 1 column where A keeps 1.5, edges 0.44 as soft
+constexpr float kFogNearFar = 600.f;      // with the cards fixed, B's smoke ends here, m
 std::atomic<int> g_fog_arm{1}; // 0 V, 1 A, 2 B
 std::unordered_set<VkPipeline> &g_fog_probe_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
 std::unordered_map<VkCommandBuffer, bool> &g_fog_probe_cb =
@@ -2327,16 +2330,21 @@ bool facing_compare();
 bool facing_census() { return facing_collapse(); }
 bool facing_enabled(); // beside the other facing switches
 bool facing_ab();
-// X4VR_FOG_CARDS=off (after take 474, DIAGNOSTIC): X4's nebula cards removed, so our own
-// fog shows alone -- every card the CPU has learned X4 turns with its camera, farther
-// than 50 m (the radar, which X4 turns with the camera too, is a metre or two away).
-bool fog_cards_off() {
-    static const bool off = [] {
+// X4VR_FOG_CARDS (DIAGNOSTIC): what becomes of X4's nebula cards, known by their material
+// (after take 482). =off (after take 474): removed, so our own fog shows alone. =fix
+// (after take 483: our fog, held to X4's grid of about a degree a column, "still too
+// blurred"; Patola wants the original's look): kept, each turned to face the eye's
+// position with the sector's up, so a head turn moves nothing (fog_cards_fix()).
+// fog_cards_off() is true for either: the layer handles the cards.
+static int fog_cards_mode() {
+    static const int m = [] {
         const char *e = getenv("X4VR_FOG_CARDS");
-        return e && !strcmp(e, "off");
+        return !e ? 0 : !strcmp(e, "off") ? 1 : !strcmp(e, "fix") ? 2 : 0;
     }();
-    return off;
+    return m;
 }
+bool fog_cards_off() { return fog_cards_mode() != 0; }
+static bool fog_cards_fix() { return fog_cards_mode() == 2; }
 // The tracking of X4's near/far-faded draws: for the census, the fix on the CPU, or the
 // cards' removal.
 bool fade_tracking() { return facing_census() || facing_enabled() || fog_cards_off(); }
@@ -2564,6 +2572,9 @@ struct FixStats {
     // as a stopgap, or kept by it). The fade distances seen, with their draws.
     uint64_t cards_by_material = 0, cards_other_material = 0, cards_unread_material = 0,
              cards_by_distance = 0;
+    // X4VR_FOG_CARDS=fix: turned to face the eye, and refused (the view's turn no rotation,
+    // or the card on the up line).
+    uint64_t cards_fixed = 0, cards_fix_refused = 0;
     struct Mat {
         float near_start, far_end;
         uint64_t n;
@@ -2757,8 +2768,35 @@ static void fix_draw(float *o_dst, float *o, const float *c, int mode,
     const bool cards_off =
         fog_cards_off() && !(fog_ab() && g_fog_arm.load(std::memory_order_relaxed) == 0);
     if (cards_off && mat == 1) {
-        remove_draw(o_dst, o, c, done);
         g_fix_stats.cards_by_material++;
+        if (fog_cards_fix()) {
+            // Kept, and turned to face the eye's position with the sector's up (+y in the
+            // world; +z where the card sits on that line): Q' = F Q, F from the line to the
+            // card and that up in the view's axes -- W' = B K in the world, B from
+            // positions alone, K X4's own turn of the card against its camera. No
+            // head-look angle enters it.
+            const float up_y[3] = {c[4], c[5], c[6]}, up_z[3] = {c[8], c[9], c[10]};
+            float w[16], wvp[16];
+            std::memcpy(wvp, o, sizeof wvp);
+            std::memcpy(w, o + 16, sizeof w);
+            bool ok = x4vr::billboard::face_eye(c, c + 7 * 16, w, wvp, up_y);
+            if (!ok) {
+                std::memcpy(wvp, o, sizeof wvp);
+                std::memcpy(w, o + 16, sizeof w);
+                ok = x4vr::billboard::face_eye(c, c + 7 * 16, w, wvp, up_z);
+            }
+            if (ok) {
+                std::memcpy(o, wvp, sizeof wvp);
+                std::memcpy(o + 16, w, sizeof w);
+                std::memcpy(o_dst, o, 32 * sizeof(float));
+                done.insert(o_dst);
+                g_fix_stats.cards_fixed++;
+            } else {
+                g_fix_stats.cards_fix_refused++;
+            }
+            return;
+        }
+        remove_draw(o_dst, o, c, done);
         g_fix_stats.cards_removed++;
         return;
     }
@@ -2792,8 +2830,8 @@ static void fix_draw(float *o_dst, float *o, const float *c, int mode,
     }
     bool remove = g_fix_kill.load(std::memory_order_relaxed);
     // A STOPGAP where the material could not be read: the camera-turned draws at a card's
-    // distance and size.
-    if (cards_off && mat < 0 && !remove) {
+    // distance and size (removing only; =fix leaves what it can't read).
+    if (cards_off && !fog_cards_fix() && mat < 0 && !remove) {
         // Only what can be one of X4's nebula cards (after take 482, where the radar's
         // ellipse and axes went with them): X4 turns its radar with the camera too, and
         // draws it as its own scene from about 43 km (take 469's census: draws kept under
@@ -3281,7 +3319,9 @@ void frame_timing(uint64_t frame) {
     if (prev.tv_sec) {
         ms.push_back((float)(now.tv_sec - prev.tv_sec) * 1000.0f +
                      (float)(now.tv_nsec - prev.tv_nsec) / 1.0e6f);
-        if (fog_ab()) {
+        // In flight only (after take 483: loading the save landed in a phase and doubled
+        // its median).
+        if (fog_ab() && g_census_look_valid.load(std::memory_order_relaxed)) {
             auto &arm = g_fog_arm_ms[g_fog_arm.load(std::memory_order_relaxed) % 3];
             if (arm.size() < 500000)
                 arm.push_back(ms.back());
@@ -5506,10 +5546,11 @@ void shader_knob_report(const char *when) {
     if (fog_cards_off()) {
         std::lock_guard<std::mutex> lock(g_track.mu);
         const FixStats &fs = g_fix_stats;
-        X4VR_LOG("fog cards %s: off — %llu draw(s) of X4's nebula material removed (fading in "
+        X4VR_LOG("fog cards %s: off — %llu draw(s) of X4's nebula material %s (fading in "
                  "at 500 m, out by 3 km), %llu of other fading materials left alone, %llu with "
                  "the material unread (fade blocks: %u modules found, %u not) — DIAGNOSTIC",
                  when, (unsigned long long)fs.cards_by_material,
+                 fog_cards_fix() ? "fixed" : "removed",
                  (unsigned long long)fs.cards_other_material,
                  (unsigned long long)fs.cards_unread_material, g_fade_blocks_found.load(),
                  g_fade_blocks_missing.load());
@@ -5523,6 +5564,11 @@ void shader_knob_report(const char *when) {
                          : "");
             mats += t;
         }
+        if (fog_cards_fix())
+            X4VR_LOG("fog cards %s: fixed — %llu draw(s) of X4's nebula material turned to face "
+                     "the eye with the sector's up, %llu refused — DIAGNOSTIC",
+                     when, (unsigned long long)fs.cards_fixed,
+                     (unsigned long long)fs.cards_fix_refused);
         X4VR_LOG("fog cards %s: the fading materials drawn, by where they fade in and out "
                  "— %s",
                  when, mats.empty() ? "none read" : mats.c_str());
@@ -10352,14 +10398,22 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             const uint64_t phase = forward_latches();
             const int fa = (int)((phase + fdraw) % 3u);
             g_fog_arm.store(fa, std::memory_order_relaxed);
-            g_pose.value.fog[0] = fa == 0 ? 0.f : 1.f;
+            const bool fix = fog_cards_fix();
+            g_pose.value.fog[0] = fa == 0 || (fix && fa == 1) ? 0.f : 1.f;
             g_pose.value.fog[1] = 1.f;
             g_pose.value.fog[2] = 1.f;
-            g_pose.value.fog[3] = fa == 2 ? kFogSharper : 1.f;
+            g_pose.value.fog[3] = !fix && fa == 2 ? kFogSharper : 1.f;
+            g_pose.value.fog2[0] = fix && fa == 2 ? kFogNearFar : 0.f;
             static uint64_t fsaid = ~0ull;
             if (fsaid != phase) {
                 fsaid = phase;
-                if (fa == 0)
+                if (fix && fa != 0)
+                    X4VR_LOG("fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)",
+                             (unsigned long long)phase,
+                             fa == 1 ? "A, X4's cards fixed to the world, no smoke"
+                                     : "B, X4's cards fixed to the world, our smoke near the "
+                                       "ship");
+                else if (fa == 0)
                     X4VR_LOG("fog smoke: phase #%llu — V, X4's own cards, no smoke "
                              "(X4VR_FOG_AB=recentre)",
                              (unsigned long long)phase);
