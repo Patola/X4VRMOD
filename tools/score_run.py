@@ -5579,6 +5579,28 @@ def main(path):
                          + (f" ({ln} turn(s) learned)" if int(ln) else " (none learned: the head-look "
                             "never moved, or X4's cards never reached the census)"))
 
+    # The fog probe (after take 473): world-fixed puffs in X4's froxel fog.
+    fpm = re.findall(r"fog probe (?:first present|final): (\d+) froxel module\(s\) patched, (\d+) refused; "
+                     r"(\d+) dispatch\(es\), (\d+) read \((\d+) camera-relative\), (\d+) unreadable; last "
+                     r"grid (\S+), range (\S+) m", text)
+    if fpm:
+        pm, pr_, pdisp, pread, prel, punr, pgrid, prange = fpm[-1]
+        print(f"fogprobe {pm} froxel module(s) patched, {pr_} refused; {pdisp} dispatch(es), {pread} read "
+              f"({prel} camera-relative), {punr} unreadable; grid {pgrid}, range {prange} m")
+        for ln in re.findall(r"fog probe: (froxel dispatch .*)$", text, re.M)[:2]:
+            print(f"fogprobe {ln}")
+        if re.search(r"\bX4VR_FOG_PROBE=1\b", run or "") and "headlook write: ARMED" in text:
+            if int(pm) == 0:
+                fails.append("fog probe: asked for, and X4's froxel fog pass was not patched"
+                             + (f" ({pr_} refused — the log says why)" if int(pr_) else
+                                " (no module with M_offset and I_point_num was created)"))
+            elif int(pdisp) == 0:
+                fails.append("fog probe: the froxel pass was patched and never dispatched in "
+                             "flight: no fog volume, so no puffs")
+    elif re.search(r"\bX4VR_FOG_PROBE=1\b", run or ""):
+        fails.append("fog probe: asked for, and the layer printed no fog probe line (a build "
+                     "without it)")
+
     # X4's fog blobs (after take 466): the froxel pass, its blobs' frames turned.
     ff = re.findall(r"facing fog (?:periodic|final): (\d+) froxel module\(s\) turn X4's fog blobs to "
                     r"the ship \((\d+) product\(s\)\), (\d+) refused", text)

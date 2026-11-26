@@ -2349,6 +2349,28 @@ want "cpu fix: turns said" /tmp/census-fx-drift.log facing "cpu turns: 500 draw(
 fxs='[  99900.012] layer   facing cpu ship final (X4'"'"'s camera at the first pass): X4'"'"'s camera with the head-look undone, against the stretch'"'"'s first frame, by head-look moved — <2 deg: 100 frame(s), 0.05 (max 0.20)'
 { fbase; printf '%s\n' "$fxok" "$fxs"; } > /tmp/census-fx-ship.log
 want "cpu fix: the head-look check said" /tmp/census-fx-ship.log facing "cpu ship final (X4's camera at the first pass)"
+
+# The fog probe (after take 473).
+for f in '"fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(es), "' \
+         '"fog probe: froxel dispatch %ux%ux%u, grid %.0fx%.0fx%.0f, range "' \
+         '"fog probe: X4'"'"'s froxel fog pass (%zu bytes) patched — puffs every %.0f m, "'; do
+    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "fog probe: the layer still prints $f" \
+        || bad "fog probe: the layer's format moved: $f"
+done
+fpok='[  99900.020] layer   fog probe final: 1 froxel module(s) patched, 0 refused; 9000 dispatch(es), 9000 read (9000 camera-relative), 0 unreadable; last grid 160x90x128, range 0.1..5000.0 m'
+fpnone='[  99900.020] layer   fog probe final: 0 froxel module(s) patched, 0 refused; 0 dispatch(es), 0 read (0 camera-relative), 0 unreadable; last grid 0x0x0, range 0.0..0.0 m'
+fpnod='[  99900.020] layer   fog probe final: 1 froxel module(s) patched, 0 refused; 0 dispatch(es), 0 read (0 camera-relative), 0 unreadable; last grid 0x0x0, range 0.0..0.0 m'
+pbase() { sed 's/env: run = /env: run = X4VR_FOG_PROBE=1 /' "$BASE"; printf '%s\n' "$farm"; }
+{ pbase; printf '%s\n' "$fpok"; } > /tmp/census-fp-ok.log
+want "fog probe: counts said" /tmp/census-fp-ok.log fogprobe "1 froxel module(s) patched, 0 refused; 9000 dispatch(es)"
+absent "fog probe: patched and dispatched -> no FAIL" /tmp/census-fp-ok.log "FAIL .*fog probe"
+{ pbase; printf '%s\n' "$fpnone"; } > /tmp/census-fp-none.log
+want "fog probe: asked, none patched -> FAIL" /tmp/census-fp-none.log "FAIL|  - " "X4's froxel fog pass was not patched"
+{ pbase; printf '%s\n' "$fpnod"; } > /tmp/census-fp-nod.log
+want "fog probe: never dispatched -> FAIL" /tmp/census-fp-nod.log "FAIL|  - " "never dispatched in flight"
+{ pbase; } > /tmp/census-fp-silent.log
+want "fog probe: asked, no line -> FAIL" /tmp/census-fp-silent.log "FAIL|  - " "printed no fog probe line"
+absent "fog probe: not asked -> silent" "$BASE" fogprobe
 flkh='[  99900.002] layer   facing look final: 10 headset frame(s) with the head-look undone, 2 with X4'"'"'s camera angles not valid (identity); DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4'"'"'s own, S (cards turned to the ship) and H (billboards to the eye, tilted cards to the ship)'
 fph='[  99870.000] layer   facing: phase #3 — H, billboards face the eye, tilted cards the ship (X4VR_FACING_AB=recentre)'
 { sed 's/env: run = /env: run = X4VR_FACING=1 X4VR_FACING_AB=recentre X4VR_FACING_DEBUG=compare /' "$BASE"; printf '%s\n' "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$farm" "$fcab0" "$flkh" "$fpa1" "$fps" "$fph" "$fxok"; } > /tmp/census-fx-sh.log

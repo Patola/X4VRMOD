@@ -1960,6 +1960,395 @@ inline bool patch_fog_points_facing(std::vector<uint32_t> &code, uint32_t pose_s
     return true;
 }
 
+/// **The fog probe** (2026-11-26, after take 473): a lattice of fog puffs, fixed in the
+/// world, added to X4's own froxel fog.
+///
+/// Patola's call after takes 463-473: X4's nebula cards cannot be made to sit still in a
+/// headset, and flat cards never give volume; so the nebula becomes an effect of our own,
+/// built in X4's froxel fog -- the camera-space volume X4's volume_point.comp fills every
+/// frame and X4 then lights and composites. This first step only proves the channel: at
+/// each froxel, X4's view-space position is taken to the world, and a puff of density is
+/// added where it falls within `radius_out` of a lattice point every `cell` metres:
+///
+///     world = M_viewinverse * (view, 1) + (V_cameraposition if M_viewinverse has no
+///             translation -- camera-relative rendering -- else 0)
+///     d     = |fract(world / cell) - 0.5| * cell
+///     fog.r += strength * (1 - smoothstep(radius_in, radius_out, d))
+///
+/// Fixed in the world, the puffs cannot turn with the head; they pass the ship as it
+/// flies, and slide with it. Everything else -- X4's blobs, its lighting, its blend into
+/// the scene -- is X4's.
+///
+/// Recognised as patch_fog_points_facing recognises the pass (a Uniform block with
+/// M_offset and I_point_num); the view-space position is the one X4 multiplies by
+/// M_offset (its first such product's vector, built from a vec3 or a vec4's x, y, z);
+/// the camera block is the Uniform block with M_viewinverse and V_cameraposition; the
+/// density is added to the texel of the entry's one OpImageWrite. Refused at SPIR-V 1.4
+/// and later, and without GLSL.std.450.
+struct FogProbe {
+    float cell = 400.f, radius_in = 40.f, radius_out = 60.f, strength = 0.004f;
+};
+struct FogProbeReport {
+    const char *why = "";
+};
+inline bool patch_fog_probe(std::vector<uint32_t> &code, const FogProbe &pr,
+                            FogProbeReport *report = nullptr) {
+    FogProbeReport dummy;
+    FogProbeReport &rep = report ? *report : dummy;
+    rep = FogProbeReport{};
+    std::vector<Inst> insts;
+    if (!iterate(code, insts) || code[1] >= 0x00010400u)
+        return rep.why = "not SPIR-V below 1.4", false;
+    uint32_t bound = code[3];
+    auto new_id = [&bound] { return bound++; };
+    auto str_of = [&code](const Inst &in, uint32_t first) {
+        std::string s;
+        for (uint32_t i = first; i < in.len; i++)
+            for (int b = 0; b < 4; b++) {
+                const char c = (char)((code[in.start + i] >> (8 * b)) & 0xff);
+                if (!c)
+                    return s;
+                s.push_back(c);
+            }
+        return s;
+    };
+    enum : uint32_t {
+        kOpImageWrite = 99,
+        kOpDot = 148,
+        kOpFOrdLessThan = 184,
+        kOpLabel = 248,
+        kGlslFract = 10,
+        kGlslSmoothStep = 49,
+        kGlslLength = 66,
+    };
+
+    uint32_t entry_fn = 0, glsl = 0, t_float = 0, t_int = 0, t_bool = 0, t_v3 = 0, t_v4 = 0,
+             t_bv3 = 0, t_mat4 = 0;
+    std::map<std::pair<uint32_t, uint32_t>, std::string> member_names;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> struct_members;
+    std::unordered_map<uint32_t, uint32_t> array_elem, int_consts, def_type;
+    std::unordered_map<uint32_t, size_t> def_at; // result id -> its instruction
+    struct PtrType { uint32_t storage, pointee; };
+    std::unordered_map<uint32_t, PtrType> ptr_types;
+    struct Var { uint32_t ptr, storage; };
+    std::unordered_map<uint32_t, Var> vars;
+    size_t first_fn = 0, last_annotation_end = 0, first_global = 0;
+    bool have_first_fn = false, have_first_global = false;
+    for (size_t idx = 0; idx < insts.size(); idx++) {
+        const Inst &in = insts[idx];
+        const uint32_t *w = &code[in.start];
+        if (!have_first_global)
+            switch (in.op) {
+            case OpTypeInt: case OpTypeFloat: case OpTypeVector: case OpTypeBool:
+            case OpTypeMatrix: case OpTypeStruct: case OpTypePointer:
+            case OpConstant: case OpConstantComposite: case OpVariable:
+                first_global = in.start;
+                have_first_global = true;
+                break;
+            default:
+                break;
+            }
+        switch (in.op) {
+        case OpEntryPoint:
+            if (in.len >= 3 && !entry_fn)
+                entry_fn = w[2];
+            break;
+        case OpExtInstImport:
+            if (in.len >= 3 && str_of(in, 2) == "GLSL.std.450")
+                glsl = w[1];
+            break;
+        case OpMemberName:
+            if (in.len >= 4)
+                member_names[{w[1], w[2]}] = str_of(in, 3);
+            break;
+        case OpDecorate:
+        case OpMemberDecorate:
+            last_annotation_end = in.start + in.len;
+            break;
+        case OpTypeFloat:
+            if (in.len >= 3 && w[2] == 32)
+                t_float = w[1];
+            break;
+        case OpTypeInt:
+            if (in.len >= 4 && w[2] == 32 && w[3] == 1)
+                t_int = w[1];
+            break;
+        case OpTypeBool:
+            t_bool = w[1];
+            break;
+        case OpTypeVector:
+            if (in.len >= 4 && w[2] == t_float && t_float && w[3] == 3)
+                t_v3 = w[1];
+            if (in.len >= 4 && w[2] == t_float && t_float && w[3] == 4)
+                t_v4 = w[1];
+            if (in.len >= 4 && w[2] == t_bool && t_bool && w[3] == 3)
+                t_bv3 = w[1];
+            break;
+        case OpTypeMatrix:
+            if (in.len >= 4 && w[2] == t_v4 && t_v4 && w[3] == 4)
+                t_mat4 = w[1];
+            break;
+        case OpTypeArray:
+            if (in.len >= 4)
+                array_elem[w[1]] = w[2];
+            break;
+        case OpTypeStruct:
+            struct_members[w[1]].assign(w + 2, w + in.len);
+            break;
+        case OpTypePointer:
+            if (in.len >= 4)
+                ptr_types[w[1]] = {w[2], w[3]};
+            break;
+        case OpConstant:
+            if (in.len == 4)
+                int_consts[w[2]] = w[3];
+            break;
+        case OpVariable:
+            if (in.len >= 4)
+                vars[w[2]] = {w[1], w[3]};
+            break;
+        case OpFunction:
+            if (!have_first_fn) {
+                first_fn = in.start;
+                have_first_fn = true;
+            }
+            break;
+        default:
+            break;
+        }
+        // Every value a function computes: its type, and where (OpLoad, the
+        // composites, conversions and arithmetic, ExtInst, OpSelect, OpPhi).
+        if (in.len >= 3 && (in.op == 12 || in.op == OpLoad || (in.op >= 79 && in.op <= 83) ||
+                            (in.op >= 109 && in.op <= 149) || in.op == 169 || in.op == 245)) {
+            def_at[w[2]] = idx;
+            def_type[w[2]] = w[1];
+        }
+    }
+    if (!entry_fn || !have_first_fn)
+        return rep.why = "no entry point", false;
+    if (!glsl)
+        return rep.why = "GLSL.std.450 not imported", false;
+    if (!t_float || !t_v4 || !t_mat4)
+        return rep.why = "no vec4 or mat4", false;
+
+    // The blocks, by member names.
+    auto find_block = [&](const char *a, uint32_t ta, const char *b, uint32_t *var,
+                          uint32_t *ia, uint32_t *ib, bool a_array) {
+        for (auto &[id, v] : vars) {
+            if (v.storage != StorageClassUniform)
+                continue;
+            auto pt = ptr_types.find(v.ptr);
+            if (pt == ptr_types.end())
+                continue;
+            auto sm = struct_members.find(pt->second.pointee);
+            if (sm == struct_members.end())
+                continue;
+            int fa = -1, fb = -1;
+            for (uint32_t m = 0; m < sm->second.size(); m++) {
+                auto mn = member_names.find({pt->second.pointee, m});
+                if (mn == member_names.end())
+                    continue;
+                if (mn->second == a) {
+                    const uint32_t mt = sm->second[m];
+                    if (a_array ? (array_elem.count(mt) && array_elem[mt] == ta) : mt == ta)
+                        fa = (int)m;
+                }
+                if (mn->second == b)
+                    fb = (int)m;
+            }
+            if (fa >= 0 && fb >= 0) {
+                *var = id;
+                *ia = (uint32_t)fa;
+                *ib = (uint32_t)fb;
+                return true;
+            }
+        }
+        return false;
+    };
+    uint32_t dyn_var = 0, off_member = 0, num_member = 0;
+    if (!find_block("M_offset", t_mat4, "I_point_num", &dyn_var, &off_member, &num_member, true))
+        return rep.why = "no block with M_offset and I_point_num", false;
+    (void)num_member;
+    uint32_t cam_var = 0, vi_member = 0, cp_member = 0;
+    if (!find_block("M_viewinverse", t_mat4, "V_cameraposition", &cam_var, &vi_member,
+                    &cp_member, false))
+        return rep.why = "no camera block with M_viewinverse and V_cameraposition", false;
+
+    // The view-space position: the vector of the first M_offset[i] product.
+    std::unordered_set<uint32_t> mptrs, mloads;
+    uint32_t view4 = 0;
+    size_t write_at = 0;
+    int writes = 0;
+    bool in_entry = false;
+    for (size_t idx = 0; idx < insts.size(); idx++) {
+        const Inst &in = insts[idx];
+        const uint32_t *w = &code[in.start];
+        if (in.op == OpFunction && in.len >= 3)
+            in_entry = w[2] == entry_fn;
+        if (in.op == OpAccessChain && in.len >= 6 && w[3] == dyn_var) {
+            auto c = int_consts.find(w[4]);
+            if (c != int_consts.end() && c->second == off_member)
+                mptrs.insert(w[2]);
+        }
+        if (in.op == OpLoad && in.len >= 4 && w[1] == t_mat4 && mptrs.count(w[3]))
+            mloads.insert(w[2]);
+        if (in.op == OpMatrixTimesVector && in.len >= 5 && w[1] == t_v4 && mloads.count(w[3]) &&
+            !view4)
+            view4 = w[4];
+        if (in_entry && in.op == kOpImageWrite && in.len >= 4) {
+            writes++;
+            write_at = idx;
+        }
+    }
+    if (!view4)
+        return rep.why = "no M_offset[i] * vec4", false;
+    if (writes != 1)
+        return rep.why = "not one OpImageWrite in the entry", false;
+    // vec4(view, 1): from a vec3 and a scalar, or from x, y, z extracted from one vector.
+    uint32_t view_base = 0;
+    bool base_v4 = false;
+    {
+        auto d = def_at.find(view4);
+        if (d == def_at.end() || insts[d->second].op != OpCompositeConstruct)
+            return rep.why = "the product's vector is not a construct", false;
+        const Inst &cin = insts[d->second];
+        const uint32_t *w = &code[cin.start];
+        if (cin.len == 5 && def_type.count(w[3]) && def_type[w[3]] == t_v3) {
+            view_base = w[3];
+        } else if (cin.len == 7) {
+            for (uint32_t k = 0; k < 3; k++) {
+                auto e = def_at.find(w[3 + k]);
+                if (e == def_at.end() || insts[e->second].op != OpCompositeExtract ||
+                    insts[e->second].len != 5)
+                    return rep.why = "the product's vector is not view's x, y, z", false;
+                const uint32_t *ew = &code[insts[e->second].start];
+                if (ew[4] != k || (view_base && ew[3] != view_base))
+                    return rep.why = "the product's vector is not view's x, y, z", false;
+                view_base = ew[3];
+            }
+            auto bt = def_type.find(view_base);
+            if (bt == def_type.end() || (bt->second != t_v3 && bt->second != t_v4))
+                return rep.why = "view is neither a vec3 nor a vec4", false;
+            base_v4 = bt->second == t_v4;
+        } else {
+            return rep.why = "the product's vector is not view's x, y, z", false;
+        }
+    }
+
+    // --- declarations --------------------------------------------------
+    std::vector<uint32_t> decls;
+    if (!t_v3) {
+        t_v3 = new_id();
+        emit(decls, OpTypeVector, {t_v3, t_float, 3});
+    }
+    if (!t_int) {
+        t_int = new_id();
+        emit(decls, OpTypeInt, {t_int, 32, 1});
+    }
+    if (!t_bool) {
+        t_bool = new_id();
+        emit(decls, OpTypeBool, {t_bool});
+    }
+    if (!t_bv3) {
+        t_bv3 = new_id();
+        emit(decls, OpTypeVector, {t_bv3, t_bool, 3});
+    }
+    auto fconst = [&](float f) {
+        const uint32_t id = new_id();
+        uint32_t bits;
+        std::memcpy(&bits, &f, 4);
+        emit(decls, OpConstant, {t_float, id, bits});
+        return id;
+    };
+    const uint32_t f0 = fconst(0.f), f1 = fconst(1.f), f_half = fconst(0.5f),
+                   f_cell = fconst(pr.cell), f_inv = fconst(1.f / pr.cell),
+                   f_rin = fconst(pr.radius_in), f_rout = fconst(pr.radius_out),
+                   f_str = fconst(pr.strength);
+    const uint32_t zero3 = new_id(), half3 = new_id();
+    emit(decls, OpConstantComposite, {t_v3, zero3, f0, f0, f0});
+    emit(decls, OpConstantComposite, {t_v3, half3, f_half, f_half, f_half});
+    const uint32_t c_vi = new_id(), c_cp = new_id();
+    emit(decls, OpConstant, {t_int, c_vi, vi_member});
+    emit(decls, OpConstant, {t_int, c_cp, cp_member});
+    const uint32_t ptr_mat4 = new_id(), ptr_v4 = new_id();
+    emit(decls, OpTypePointer, {ptr_mat4, StorageClassUniform, t_mat4});
+    emit(decls, OpTypePointer, {ptr_v4, StorageClassUniform, t_v4});
+
+    // --- the density, before the write ----------------------------------
+    std::vector<uint32_t> calc;
+    auto op2 = [&](uint32_t op, uint32_t type, uint32_t a, uint32_t b) {
+        const uint32_t id = new_id();
+        emit(calc, op, {type, id, a, b});
+        return id;
+    };
+    uint32_t view3 = view_base;
+    if (base_v4) {
+        view3 = new_id();
+        emit(calc, OpVectorShuffle, {t_v3, view3, view_base, view_base, 0, 1, 2});
+    }
+    const uint32_t pvi = new_id(), vi = new_id();
+    emit(calc, OpAccessChain, {ptr_mat4, pvi, cam_var, c_vi});
+    emit(calc, OpLoad, {t_mat4, vi, pvi});
+    const uint32_t v4 = new_id();
+    emit(calc, OpCompositeConstruct, {t_v4, v4, view3, f1});
+    const uint32_t w4 = op2(OpMatrixTimesVector, t_v4, vi, v4);
+    const uint32_t w3 = new_id();
+    emit(calc, OpVectorShuffle, {t_v3, w3, w4, w4, 0, 1, 2});
+    const uint32_t t4 = new_id(), t3 = new_id();
+    emit(calc, OpCompositeExtract, {t_v4, t4, vi, 3});
+    emit(calc, OpVectorShuffle, {t_v3, t3, t4, t4, 0, 1, 2});
+    const uint32_t tt = op2(kOpDot, t_float, t3, t3);
+    const uint32_t rel = op2(kOpFOrdLessThan, t_bool, tt, f1);
+    const uint32_t rel3 = new_id();
+    emit(calc, OpCompositeConstruct, {t_bv3, rel3, rel, rel, rel});
+    const uint32_t pcp = new_id(), cp4 = new_id(), cp3 = new_id();
+    emit(calc, OpAccessChain, {ptr_v4, pcp, cam_var, c_cp});
+    emit(calc, OpLoad, {t_v4, cp4, pcp});
+    emit(calc, OpVectorShuffle, {t_v3, cp3, cp4, cp4, 0, 1, 2});
+    const uint32_t anchor = new_id();
+    emit(calc, OpSelect, {t_v3, anchor, rel3, cp3, zero3});
+    const uint32_t world = op2(OpFAdd, t_v3, w3, anchor);
+    const uint32_t q = op2(OpVectorTimesScalar, t_v3, world, f_inv);
+    const uint32_t fq = new_id();
+    emit(calc, OpExtInst, {t_v3, fq, glsl, kGlslFract, q});
+    const uint32_t fc = op2(OpFSub, t_v3, fq, half3);
+    const uint32_t loc = op2(OpVectorTimesScalar, t_v3, fc, f_cell);
+    const uint32_t d = new_id();
+    emit(calc, OpExtInst, {t_float, d, glsl, kGlslLength, loc});
+    const uint32_t ss = new_id();
+    emit(calc, OpExtInst, {t_float, ss, glsl, kGlslSmoothStep, f_rin, f_rout, d});
+    const uint32_t dens = op2(OpFMul, t_float, op2(OpFSub, t_float, f1, ss), f_str);
+
+    // --- rewrite -------------------------------------------------------
+    std::vector<uint32_t> out;
+    out.reserve(code.size() + decls.size() + calc.size() + 32);
+    out.insert(out.end(), code.begin(), code.begin() + 5);
+    (void)last_annotation_end;
+    (void)first_global;
+    for (size_t idx = 0; idx < insts.size(); idx++) {
+        const Inst &in = insts[idx];
+        const uint32_t *w = &code[in.start];
+        if (in.start == first_fn)
+            out.insert(out.end(), decls.begin(), decls.end());
+        if (idx == write_at) {
+            out.insert(out.end(), calc.begin(), calc.end());
+            const uint32_t tx = new_id(), nx = new_id(), t2 = new_id();
+            emit(out, OpCompositeExtract, {t_float, tx, w[3], 0});
+            emit(out, OpFAdd, {t_float, nx, tx, dens});
+            emit(out, OpCompositeInsert, {t_v4, t2, nx, w[3], 0});
+            std::vector<uint32_t> ops(w + 1, w + in.len);
+            ops[2] = t2;
+            emit_n(out, kOpImageWrite, ops);
+            continue;
+        }
+        out.insert(out.end(), code.begin() + in.start, code.begin() + in.start + in.len);
+    }
+    (void)kOpLabel;
+    out[3] = bound;
+    code.swap(out);
+    return true;
+}
+
 /// Task #33 — the head rotation, as the conjugation `P·R·P⁻¹`, emitted with
 /// the LIVE `sx`/`sy` instead of a baked matrix.
 ///

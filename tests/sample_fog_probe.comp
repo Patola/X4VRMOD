@@ -1,0 +1,45 @@
+#version 450
+// The part of X4's froxel fog pass (volume_point.comp) patch_fog_probe reads and
+// rewrites, as straight-line code the test interpreter can run: the camera block with
+// M_viewinverse and V_cameraposition at X4's offsets, the block with M_offset and
+// I_point_num, a view-space position multiplied by M_offset[i], and the froxel's texel
+// read and written back. X4's own module never enters this repository (it is
+// copyrighted); this one only has the same names, products and write. TEST_VIEW stands
+// for the position X4 computes from the invocation. Optimised to SSA (spirv-opt -O).
+layout(local_size_x = 1) in;
+layout(set = 1, binding = 0, std140) uniform CameraBlock {
+    mat4 M_view;
+    mat4 M_projection;
+    mat4 M_invprojection;
+    mat4 M_projection_uj;
+    mat4 M_invprojection_uj;
+    mat4 M_jitter;
+    mat4 M_prevjitter;
+    mat4 M_viewprojection;
+    mat4 M_viewinverse;
+    mat4 M_shadowCSM0Clip;
+    mat4 M_shadowCSM1Clip;
+    vec4 V_viewportpixelsize;
+    vec4 V_screenresolution;
+    vec4 V_cameraposition;
+};
+layout(set = 4, binding = 0, std140) uniform DynamicBlock {
+    mat4 M_offset[32];
+    vec4 V_scale[32];
+    int I_index[32];
+    int I_point_num;
+    vec4 TEST_VIEW;
+};
+layout(set = 0, binding = 6, rgba32f) uniform image3D U_output_rt;
+
+void main() {
+    vec3 view = TEST_VIEW.xyz;
+    vec3 off = (M_offset[0] * vec4(view, 1.0)).xyz;
+    float sum = off.x * V_scale[0].x;
+    vec4 old = imageLoad(U_output_rt, ivec3(0));
+    old.r += sum;
+    // X4's pass reads its camera block (volume2view); so must this one, or the
+    // optimiser drops the block the patch reads from. Zero in the test.
+    old.a += V_cameraposition.w * 0.0;
+    imageStore(U_output_rt, ivec3(0), old);
+}

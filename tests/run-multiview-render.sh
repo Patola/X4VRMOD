@@ -1357,6 +1357,18 @@ for fs in sample_billboard:0 sample_billboard_fade:1; do
     fi
 done
 
+# The fog probe (after take 473): world-fixed puffs added to X4's froxel fog, at each
+# froxel's world position whether X4 renders camera-relative or not; the patched
+# module must validate.
+fout="$PATCHDIR/fogprobe.spv"
+out=$("$PATCHER" fog-probe-check "$BUILD/tests/sample_fog_probe.comp.spv" "$fout" 2>&1)
+if grep -qx PASS <<<"$out" && spirv-val "$fout" >/dev/null 2>&1; then
+    printf 'ok   %-38s %s\n' "fog probe: world-fixed puffs" "$(grep CHECKED <<<"$out")"
+else
+    printf 'FAIL %-38s %s\n' "fog probe: world-fixed puffs" "$(tr '\n' ' ' <<<"$out")"
+    fails=$((fails + 1))
+fi
+
 # X4's fog blobs face the ship, not the head (after take 466): the froxel pass's
 # view-to-blob frame, built along the camera's axes, must come out along the ship's,
 # with X4's identity, the collapse diagnostic and the unpatched module as controls;

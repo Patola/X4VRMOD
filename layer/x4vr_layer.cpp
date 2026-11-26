@@ -2153,6 +2153,49 @@ float *slot_host_ptr(const ViewSlot &s) {
     return (float *)((uint8_t *)m->second.ptr + rel);
 }
 
+// The fog probe's state (X4VR_FOG_PROBE=1; its patch and hooks are further down).
+static bool fog_probe_on() {
+    static const bool on = x4vr::env_on("X4VR_FOG_PROBE", false);
+    return on;
+}
+static x4vr::spv::FogProbe fog_probe_params() {
+    x4vr::spv::FogProbe p;
+    auto num = [](const char *n, float dflt) {
+        const char *e = getenv(n);
+        const float v = e && *e ? strtof(e, nullptr) : dflt;
+        return v > 0.f ? v : dflt;
+    };
+    p.strength = num("X4VR_FOG_PROBE_DENSITY", p.strength);
+    p.cell = num("X4VR_FOG_PROBE_CELL", p.cell);
+    p.radius_out = num("X4VR_FOG_PROBE_RADIUS", p.radius_out);
+    p.radius_in = p.radius_out * (2.f / 3.f);
+    return p;
+}
+std::atomic<uint32_t> g_fog_probe_modules{0}, g_fog_probe_refused{0};
+std::mutex g_fog_probe_mu;
+std::unordered_set<VkShaderModule> &g_fog_probe_mods =
+    x4vr::immortal<std::unordered_set<VkShaderModule>>();
+std::unordered_set<VkPipeline> &g_fog_probe_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
+std::unordered_map<VkCommandBuffer, bool> &g_fog_probe_cb =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
+// Under g_track.mu: each recording's froxel dispatches, their camera block and size, read
+// at submit for the log.
+struct FogProbeDispatch {
+    ViewSlot cam;
+    uint32_t x, y, z;
+};
+std::unordered_map<VkCommandBuffer, std::vector<FogProbeDispatch>> &g_fog_probe_pending =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, std::vector<FogProbeDispatch>>>();
+struct FogProbeSeen {
+    uint64_t dispatches = 0, read = 0, unread = 0, relative = 0;
+    float vi_t[3] = {}, campos[4] = {}, range[4] = {}, size[4] = {}, ftime = 0.f, off = 0.f,
+          scale = 0.f;
+    uint32_t x = 0, y = 0, z = 0;
+};
+FogProbeSeen g_fog_probe_seen;
+// The last module creation's probe result, for the hook that records the handle.
+thread_local bool tl_fog_probe_patched = false;
+
 // **The census** (with X4VR_FACING_DEBUG=collapse, after take 467): X4's own matrices for
 // the draws of its near/far-faded effects (its fog cards among them), read at submit --
 // what the GPU is about to read -- and counted only where X4's world-view-projection is
@@ -5102,6 +5145,17 @@ void shader_knob_report(const char *when) {
                                          "own, S (cards turned to the ship) and H (billboards to "
                                          "the eye, tilted cards to the ship)")
                                 : "");
+    if (fog_probe_on()) {
+        std::lock_guard<std::mutex> lock(g_track.mu);
+        const FogProbeSeen &sn = g_fog_probe_seen;
+        X4VR_LOG("fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(es), "
+                 "%llu read (%llu camera-relative), %llu unreadable; last grid "
+                 "%.0fx%.0fx%.0f, range %.1f..%.1f m",
+                 when, g_fog_probe_modules.load(), g_fog_probe_refused.load(),
+                 (unsigned long long)sn.dispatches, (unsigned long long)sn.read,
+                 (unsigned long long)sn.relative, (unsigned long long)sn.unread, sn.size[0],
+                 sn.size[1], sn.size[2], sn.range[0], sn.range[1]);
+    }
     // Zero with the pose channel up: X4 created no froxel fog pass, or its module no
     // longer has M_offset and I_point_num by name.
     X4VR_LOG("facing fog %s: %u froxel module(s) turn X4's fog blobs to the ship (%u "
@@ -8455,7 +8509,52 @@ std::vector<uint32_t> fsr_patch_module(const VkShaderModuleCreateInfo *ci) {
 // X4's froxel fog pass (volume_point.comp), created with each fog blob's frame turned by
 // the head-look undone (patch_fog_points_facing, after take 466). Empty to create the
 // module as X4 wrote it. Only a module naming M_offset is tried: one of ~400.
+std::vector<uint32_t> fogpoint_patch_facing(const VkShaderModuleCreateInfo *ci);
+// **The fog probe** (X4VR_FOG_PROBE=1, after take 473; patch_fog_probe): a lattice of fog
+// puffs fixed in the world, added to X4's froxel fog -- the first step of the nebula
+// becoming an effect of our own. X4VR_FOG_PROBE_DENSITY (0.004), _CELL (400 m) and
+// _RADIUS (60 m) size it.
+
+static void fog_probe_apply(std::vector<uint32_t> &code, size_t bytes) {
+    x4vr::spv::FogProbeReport rep;
+    const x4vr::spv::FogProbe pr = fog_probe_params();
+    if (!x4vr::spv::patch_fog_probe(code, pr, &rep)) {
+        if (strcmp(rep.why, "no block with M_offset and I_point_num") != 0 &&
+            ++g_fog_probe_refused <= 3)
+            X4VR_LOG("fog probe: a module naming M_offset (%zu bytes) REFUSED: %s", bytes,
+                     rep.why);
+        return;
+    }
+    tl_fog_probe_patched = true;
+    if (++g_fog_probe_modules <= 3)
+        X4VR_LOG("fog probe: X4's froxel fog pass (%zu bytes) patched — puffs every %.0f m, "
+                 "%.0f..%.0f m across, density %.4f, fixed in the world — DIAGNOSTIC",
+                 bytes, pr.cell, 2.f * pr.radius_in, 2.f * pr.radius_out, pr.strength);
+}
+
 std::vector<uint32_t> fogpoint_patch_module(const VkShaderModuleCreateInfo *ci) {
+    std::vector<uint32_t> code;
+    tl_fog_probe_patched = false;
+    if (!g_active || !ci || ci->codeSize < 20)
+        return code;
+    static const char kName[] = "M_offset";
+    if (fog_probe_on() && memmem(ci->pCode, ci->codeSize, kName, sizeof kName - 1)) {
+        std::vector<uint32_t> base = fogpoint_patch_facing(ci);
+        if (base.empty()) {
+            base.resize(ci->codeSize / 4);
+            memcpy(base.data(), ci->pCode, ci->codeSize);
+            fog_probe_apply(base, ci->codeSize);
+            if (!tl_fog_probe_patched)
+                base.clear();
+        } else {
+            fog_probe_apply(base, ci->codeSize);
+        }
+        return base;
+    }
+    return fogpoint_patch_facing(ci);
+}
+
+std::vector<uint32_t> fogpoint_patch_facing(const VkShaderModuleCreateInfo *ci) {
     std::vector<uint32_t> code;
     if (!g_active || !facing_enabled() || !facing_gpu() || !pose_active() || !ci ||
         ci->codeSize < 20)
@@ -9173,6 +9272,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     if (r == VK_SUCCESS && is_fsr) {
         std::lock_guard<std::mutex> lock(g_fsr_mu);
         g_fsr_modules.insert(*out);
+    }
+    if (r == VK_SUCCESS && !is_fsr && tl_fog_probe_patched) {
+        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        g_fog_probe_mods.insert(*out);
     }
     // X4's bytes, not ours: the handle is whatever the game will bind, but the
     // code written out is what it supplied. A dump that quietly contained our
@@ -10346,6 +10449,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
             if (out[i] != VK_NULL_HANDLE && g_fsr_modules.count(ci[i].stage.module))
                 g_fsr_pipes.insert(out[i]);
     }
+    if (r == VK_SUCCESS && fog_probe_on()) {
+        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        for (uint32_t i = 0; i < count; i++)
+            if (out[i] != VK_NULL_HANDLE && g_fog_probe_mods.count(ci[i].stage.module))
+                g_fog_probe_pipes.insert(out[i]);
+    }
     if (r != VK_SUCCESS || !g_mv_inventory || !g_active)
         return r;
     for (uint32_t i = 0; i < count; i++) {
@@ -10365,6 +10474,71 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
     return r;
 }
 
+// The probe's froxel dispatches: the camera block they read, for the log at submit.
+static void fog_probe_dispatch(VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z) {
+    {
+        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        auto f = g_fog_probe_cb.find(cb);
+        if (f == g_fog_probe_cb.end() || !f->second)
+            return;
+    }
+    std::lock_guard<std::mutex> lock(g_track.mu);
+    g_fog_probe_seen.dispatches++;
+    auto vb = g_track.bound.find(cb);
+    auto &pend = g_fog_probe_pending[cb];
+    if (pend.size() < 16)
+        pend.push_back({vb != g_track.bound.end() && !vb->second.empty()
+                            ? vb->second.front()
+                            : ViewSlot{VK_NULL_HANDLE, 0},
+                        x, y, z});
+}
+// At submit: X4's froxel volume as the camera block gives it -- grid, depth range, the
+// camera's position and whether the view's inverse carries it (camera-relative or not).
+static void fog_probe_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) {
+    std::lock_guard<std::mutex> lock(g_track.mu);
+    FogProbeSeen &sn = g_fog_probe_seen;
+    for (uint32_t i = 0; i < submitCount; i++)
+        for (uint32_t j = 0; j < submits[i].commandBufferCount; j++) {
+            auto it = g_fog_probe_pending.find(submits[i].pCommandBuffers[j]);
+            if (it == g_fog_probe_pending.end())
+                continue;
+            for (const FogProbeDispatch &dp : it->second) {
+                const float *c = dp.cam.buffer ? slot_host_ptr(dp.cam) : nullptr;
+                if (!c) {
+                    sn.unread++;
+                    continue;
+                }
+                float cb[400];
+                std::memcpy(cb, c, sizeof cb); // through F_volume_scale (float 383)
+                for (int k = 0; k < 3; k++)
+                    sn.vi_t[k] = cb[128 + 12 + k];
+                for (int k = 0; k < 4; k++) {
+                    sn.campos[k] = cb[184 + k];
+                    sn.range[k] = cb[236 + k];
+                    sn.size[k] = cb[240 + k];
+                }
+                sn.ftime = cb[355];
+                sn.off = cb[382];
+                sn.scale = cb[383];
+                sn.x = dp.x;
+                sn.y = dp.y;
+                sn.z = dp.z;
+                const bool rel = sn.vi_t[0] * sn.vi_t[0] + sn.vi_t[1] * sn.vi_t[1] +
+                                     sn.vi_t[2] * sn.vi_t[2] < 1.f;
+                sn.relative += rel;
+                if (++sn.read <= 3 || (sn.read % 3000) == 0)
+                    X4VR_LOG("fog probe: froxel dispatch %ux%ux%u, grid %.0fx%.0fx%.0f, range "
+                             "%.1f..%.1f m, volume off %.4g scale %.4g; the view's inverse "
+                             "moves by (%.1f, %.1f, %.1f)%s, the camera at (%.1f, %.1f, %.1f); "
+                             "time %.2f",
+                             dp.x, dp.y, dp.z, sn.size[0], sn.size[1], sn.size[2], sn.range[0],
+                             sn.range[1], sn.off, sn.scale, sn.vi_t[0], sn.vi_t[1], sn.vi_t[2],
+                             rel ? " — camera-relative: the puffs take V_cameraposition" : "",
+                             sn.campos[0], sn.campos[1], sn.campos[2], sn.ftime);
+            }
+            it->second.clear();
+        }
+}
 void note_dispatch(VkCommandBuffer cb) {
     if (!g_mv_inventory || !g_active)
         return;
@@ -10386,6 +10560,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatch(VkCommandBuffer cb, uint32_t x,
     note_dispatch(cb);
     complog_dispatch(cb, x, y, z, "direct");
     d->CmdDispatch(cb, x, y, fsr_dispatch_z(cb, x, y, z));
+    if (fog_probe_on())
+        fog_probe_dispatch(cb, x, y, z);
     ffx_dispatch_right(d, cb, x, y, z);
 }
 
@@ -12066,6 +12242,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
     after_rp_headless_frame();
     if (fade_tracking())
         census_at_submit(submitCount, submits);
+    if (fog_probe_on())
+        fog_probe_at_submit(submitCount, submits);
     patch_view_before_submit();
     // Task #59: publish this frame's pose into the region each submitted
     // command buffer was given. Submit time is the latest moment that is still
@@ -14957,6 +15135,10 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
 VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
                                                 VkPipelineBindPoint bp,
                                                 VkPipeline p) {
+    if (bp == VK_PIPELINE_BIND_POINT_COMPUTE && fog_probe_on()) {
+        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        g_fog_probe_cb[cb] = g_fog_probe_pipes.count(p) != 0;
+    }
     if (bp == VK_PIPELINE_BIND_POINT_GRAPHICS && fade_tracking()) {
         std::lock_guard<std::mutex> lock(g_census_mu);
         const bool f = g_fade_pipes.count(p) != 0;

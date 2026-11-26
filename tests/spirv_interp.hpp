@@ -38,7 +38,8 @@ constexpr uint32_t ExtInst = 12, TypeVoid = 19, TypeBool = 20, TypeInt = 21,
                    FMul = 133, FDiv = 136, VectorTimesScalar = 142,
                    Transpose = 84, MatrixTimesVector = 145, MatrixTimesMatrix = 146,
                    Select = 169,
-                   LogicalAnd = 167, FOrdGreaterThan = 186, Label = 248, Return = 253,
+                   LogicalAnd = 167, FOrdLessThan = 184, FOrdGreaterThan = 186,
+                   ImageRead = 98, ImageWrite = 99, Dot = 148, Label = 248, Return = 253,
                    EntryPoint = 15;
 } // namespace op
 
@@ -77,6 +78,9 @@ struct Machine {
     // location for either stage.
     float position[4] = {0, 0, 0, 0};
     std::map<uint32_t, std::vector<float>> outputs;
+    // Images: every OpImageRead returns image_texel; the last OpImageWrite's texel is
+    // image_written (straight-line code, so one texel is all a test needs).
+    std::vector<float> image_texel = {0, 0, 0, 0}, image_written;
 
     bool run(const std::vector<uint32_t> &code, uint32_t model) {
         if (code.size() < 5 || code[0] != 0x07230203u)
@@ -530,6 +534,23 @@ private:
         case op::FOrdGreaterThan:
             put(w[1], w[2], {in(w[3])[0] > in(w[4])[0] ? 1.f : 0.f});
             return true;
+        case op::FOrdLessThan:
+            put(w[1], w[2], {in(w[3])[0] < in(w[4])[0] ? 1.f : 0.f});
+            return true;
+        case op::ImageRead:
+            put(w[1], w[2], image_texel);
+            return true;
+        case op::ImageWrite:
+            image_written = in(w[3]);
+            return true;
+        case op::Dot: {
+            const std::vector<float> &a = in(w[3]), &b = in(w[4]);
+            double acc = 0.0;
+            for (size_t k = 0; k < a.size() && k < b.size(); k++)
+                acc += (double)a[k] * b[k];
+            put(w[1], w[2], {(float)acc});
+            return true;
+        }
         case op::LogicalAnd:
             put(w[1], w[2], {in(w[3])[0] != 0.f && in(w[4])[0] != 0.f ? 1.f : 0.f});
             return true;
@@ -583,6 +604,25 @@ private:
                 put(w[1], w[2], {std::sqrt(x[0])});
                 return true;
             }
+            if (w[4] == 10 /* Fract */) {
+                std::vector<float> v(x.size());
+                for (size_t k = 0; k < x.size(); k++)
+                    v[k] = x[k] - std::floor(x[k]);
+                put(w[1], w[2], v);
+                return true;
+            }
+            if (w[4] == 49 /* SmoothStep */ && len >= 8) {
+                const std::vector<float> &e0 = x, &e1 = in(w[6]), &xx = in(w[7]);
+                std::vector<float> v(xx.size());
+                for (size_t k = 0; k < xx.size(); k++) {
+                    const float a = e0[e0.size() == 1 ? 0 : k], b = e1[e1.size() == 1 ? 0 : k];
+                    float t = (xx[k] - a) / (b - a);
+                    t = t < 0.f ? 0.f : t > 1.f ? 1.f : t;
+                    v[k] = t * t * (3.f - 2.f * t);
+                }
+                put(w[1], w[2], v);
+                return true;
+            }
             if (w[4] == 66 /* Length */ || w[4] == 69 /* Normalize */) {
                 double l = 0.0;
                 for (float c : x)
@@ -625,7 +665,7 @@ private:
                 put(w[1], w[2], v);
                 return true;
             }
-            return fail("ExtInst other than Sqrt, Length, Normalize, Cross, Determinant or MatrixInverse of a mat3");
+            return fail("ExtInst other than Sqrt, Fract, SmoothStep, Length, Normalize, Cross, Determinant or MatrixInverse of a mat3");
         }
         default:
             return fail("unsupported opcode " + std::to_string(o));
