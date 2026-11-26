@@ -4310,6 +4310,20 @@ bool facing_ab() {
 }
 static uint64_t forward_latches(); // defined beside the latch
 std::atomic<uint32_t> g_facing_modules{0}, g_facing_inputs{0}, g_facing_partial{0};
+// X4VR_FACING_DEBUG=collapse, DIAGNOSTIC: in the fix's phases the look slot is zero, so
+// every card the patch takes for a billboard collapses to its centre and vanishes,
+// whatever head-look does (take 465: the fix ran in 326 modules and changed nothing
+// Patola could see). Which clouds vanish is which clouds are those cards.
+bool facing_collapse() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_FACING_DEBUG");
+        return e && !strcmp(e, "collapse");
+    }();
+    return on;
+}
+// Headset frames whose look slot was the head-look undone, and those left at identity
+// because X4's camera angles weren't valid.
+std::atomic<uint64_t> g_facing_driven{0}, g_facing_idle{0};
 
 void shader_knob_report(const char *when) {
     // Zeros included. A line that only appears when the knob fired cannot tell
@@ -4323,6 +4337,13 @@ void shader_knob_report(const char *when) {
              "read(s) turned, %u partial left",
              when, facing_enabled() ? (facing_ab() ? "A/B by recentre" : "ON") : "OFF (X4VR_FACING=0)",
              g_facing_modules.load(), g_facing_inputs.load(), g_facing_partial.load());
+    X4VR_LOG("facing look %s: %llu headset frame(s) with the head-look undone, %llu with X4's "
+             "camera angles not valid (identity)%s",
+             when, (unsigned long long)g_facing_driven.load(),
+             (unsigned long long)g_facing_idle.load(),
+             facing_collapse() ? "; DIAGNOSTIC X4VR_FACING_DEBUG=collapse: the fix's phases "
+                                 "collapse every billboard the patch finds"
+                               : "");
     // The FSR fix (take 380), same rule: a log without this line predates the
     // fix, and "armed" with 0 patched means X4 created no FSR pass (no FSR
     // upscaler) or the signature no longer matches. X4 creates the passes
@@ -8875,23 +8896,28 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
         // X4's camera angles, which head-look set, undone for its billboards. Only
         // with a valid read of them; and in an A/B's A phases, X4's own.
         bool face = cmd_valid && facing_enabled();
-        if (face && facing_ab()) {
+        (cmd_valid ? g_facing_driven : g_facing_idle)++;
+        bool phase_b = true;
+        if (facing_enabled() && facing_ab()) {
             // Blind: which phase is the fix is drawn at random, once a run, and only
             // the log knows.
             static const uint64_t draw = (uint64_t)std::chrono::steady_clock::now()
                                              .time_since_epoch().count() >> 10 & 1;
             const uint64_t phase = forward_latches();
-            face = ((phase + draw) & 1) != 0;
+            phase_b = ((phase + draw) & 1) != 0;
+            face = face && phase_b;
             static uint64_t said = ~0ull;
             if (said != phase) {
                 said = phase;
                 X4VR_LOG("facing: phase #%llu — %s (X4VR_FACING_AB=recentre)",
                          (unsigned long long)phase,
-                         face ? "B, the billboards face the ship"
-                              : "A, the billboards turn with the head, as X4 draws them");
+                         phase_b ? "B, the billboards face the ship"
+                                 : "A, the billboards turn with the head, as X4 draws them");
             }
         }
         x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face);
+        if (facing_collapse() && facing_enabled() && phase_b)
+            std::memset(g_pose.value.look, 0, sizeof g_pose.value.look);
         g_pose.res_yaw = cy;
         g_pose.res_pitch = cp;
         // **Task #77, and it is NOT the same rotation as the line above.**

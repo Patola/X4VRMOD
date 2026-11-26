@@ -5488,6 +5488,12 @@ def main(path):
             fails.append("facing: on, and no vertex module took the patch — X4's modules lack "
                          "IN_VERTEXLOCATION_POSITION, M_view or M_world by name, so the clouds still "
                          "turn with the head")
+    fl = re.findall(r"facing look (?:periodic|final): (\d+) headset frame\(s\) with the head-look "
+                    r"undone, (\d+) with X4's camera angles not valid", text)
+    if fl:
+        print(f"facing  look slot: {fl[-1][0]} headset frame(s) with the head-look undone, {fl[-1][1]} "
+              f"left at identity" + (" — DIAGNOSTIC collapse" if "X4VR_FACING_DEBUG=collapse" in text
+                                     else ""))
     if fphases:
         print("facing  phases: " + ", ".join(f"#{n} {k}" for n, k in fphases[:16])
               + (" ..." if len(fphases) > 16 else ""))
