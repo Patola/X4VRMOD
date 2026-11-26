@@ -5476,7 +5476,8 @@ def main(path):
     # turns, so in VR every cloud swivelled with the head. A final line with no
     # module patched while the switch is on means X4's modules lack the names
     # the patch reads: the clouds still turn.
-    fc = re.findall(r"facing (?:periodic|final): (ON|A/B by recentre|OFF \(X4VR_FACING=0\)) — (\d+) "
+    fc = re.findall(r"facing (?:periodic|final): (ON|A/B by recentre|OFF \(X4VR_FACING=0\)|"
+                    r"OFF \(X4VR_FACING=1 turns it on\)) — (\d+) "
                     r"vertex module\(s\) turn X4's billboards to the ship, (\d+) input read\(s\) "
                     r"turned, (\d+) partial left", text)
     fphases = re.findall(r"facing: phase #(\d+) — ([ABK])\b", text)
@@ -5484,7 +5485,7 @@ def main(path):
         mode, nmod, ninp, npart = fc[-1]
         print(f"facing  {mode}: {nmod} vertex module(s) turn X4's billboards to the ship, {ninp} "
               f"input read(s), {npart} partial")
-        if mode != "OFF (X4VR_FACING=0)" and int(nmod) == 0 and "pose: " in text:
+        if not mode.startswith("OFF") and int(nmod) == 0 and "pose: " in text:
             fails.append("facing: on, and no vertex module took the patch — X4's modules lack "
                          "IN_VERTEXLOCATION_POSITION, M_view or M_world by name, so the clouds still "
                          "turn with the head")
@@ -5515,7 +5516,7 @@ def main(path):
         nfm, nfp, nfr = map(int, ff[-1])
         print(f"facing  fog blobs: {nfm} froxel module(s) patched, {nfp} product(s), {nfr} refused")
         flying = "inject  headlook write: ARMED" in text or "headlook write: ARMED" in text
-        if fc and fc[-1][0] != "OFF (X4VR_FACING=0)" and nfm == 0 and "pose: " in text and flying:
+        if fc and not fc[-1][0].startswith("OFF") and nfm == 0 and "pose: " in text and flying:
             fails.append("facing: on, and X4's froxel fog pass was not patched"
                          + (f" ({nfr} refused — the log says why)" if nfr else
                             " (none created, or its module lost M_offset / I_point_num)")

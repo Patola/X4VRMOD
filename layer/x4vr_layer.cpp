@@ -4294,11 +4294,13 @@ void canvas_report(const char *when) {
 // This is the take-173 failure once more: two unrelated features on one gate,
 // with no log line saying so. The comment three functions down says exactly
 // that about X4VR_BINDLESS_PATCH silently disabling X4VR_PROJ_INVPROJ.
-// X4's billboards face the ship, not the head (patch_vertex_facing_body, 2026-11-26).
-// X4VR_FACING=0 leaves them as X4 turns them; X4VR_FACING_AB=recentre alternates, by
-// the mod's forward latches (the panel's and each recentre's), B being the fix.
+// X4's billboards and fog blobs face the ship, not the head (patch_vertex_facing_body,
+// patch_fog_points_facing, 2026-11-26). OFF by default: takes 465-467 ran both, the
+// nebula still turned with the head, so they fix nothing yet seen; X4VR_FACING=1 turns
+// them on, X4VR_FACING_AB=recentre alternates by the mod's forward latches (the panel's
+// and each recentre's), B being the fix.
 bool facing_enabled() {
-    static const bool on = x4vr::env_on("X4VR_FACING", true);
+    static const bool on = x4vr::env_on("X4VR_FACING", false);
     return on;
 }
 bool facing_ab() {
@@ -4340,7 +4342,7 @@ void shader_knob_report(const char *when) {
     // modules don't carry the names the patch looks for: the clouds still turn.
     X4VR_LOG("facing %s: %s — %u vertex module(s) turn X4's billboards to the ship, %u input "
              "read(s) turned, %u partial left",
-             when, facing_enabled() ? (facing_ab() ? "A/B by recentre" : "ON") : "OFF (X4VR_FACING=0)",
+             when, facing_enabled() ? (facing_ab() ? "A/B by recentre" : "ON") : "OFF (X4VR_FACING=1 turns it on)",
              g_facing_modules.load(), g_facing_inputs.load(), g_facing_partial.load());
     X4VR_LOG("facing look %s: %llu headset frame(s) with the head-look undone, %llu with X4's "
              "camera angles not valid (identity)%s",

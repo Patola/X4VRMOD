@@ -2219,6 +2219,10 @@ want "facing: patched modules said" /tmp/census-fc-ok.log facing "ON: 12 vertex 
 absent "facing: patched -> no FAIL" /tmp/census-fc-ok.log "FAIL .*lack IN_VERTEXLOCATION_POSITION"
 plant /tmp/census-fc-none.log "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$fnone"
 want "facing: on, none patched -> FAIL" /tmp/census-fc-none.log "FAIL|  - " "lack IN_VERTEXLOCATION_POSITION"
+foff='[  99900.000] layer   facing final: OFF (X4VR_FACING=1 turns it on) — 0 vertex module(s) turn X4'"'"'s billboards to the ship, 0 input read(s) turned, 0 partial left'
+plant /tmp/census-fc-off.log "[  99700.000] layer   pose: 3 module(s) read the pose block (set 31)" "$foff"
+want "facing: off by default said" /tmp/census-fc-off.log facing "OFF (X4VR_FACING=1 turns it on): 0 vertex module(s)"
+absent "facing: off, none patched -> no FAIL" /tmp/census-fc-off.log "FAIL .*lack IN_VERTEXLOCATION_POSITION"
 { sed 's/env: run = /env: run = X4VR_FACING_AB=recentre /' "$BASE"; printf '%s\n' "$fcon" "$fpa" "$fpb"; } > /tmp/census-fc-ab.log
 want "facing: A/B phases said" /tmp/census-fc-ab.log facing "phases: #1 B, #2 A"
 absent "facing: both phases -> no FAIL" /tmp/census-fc-ab.log "FAIL .*the two phases did not both run"
