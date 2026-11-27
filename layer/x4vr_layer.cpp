@@ -2158,7 +2158,11 @@ float *slot_host_ptr(const ViewSlot &s) {
 
 // **The nebulae, a player's choice** (X4VR_NEBULA, after take 493; the launcher's
 // Advanced): `volumetric` -- our own clouds, marched per pixel, fixed in the world -- or
-// `vanilla`, X4's own fog and cards. launch/defaults.conf sets volumetric; unset (an old
+// `vanilla`, X4's own fog and cards. With volumetric, X4's own volumetric fog setting
+// means: Off, no nebula clouds at all (X4 runs no fog walk, so no march; its cards are
+// removed); Low, Medium and High, our clouds, the same at all three (the march ignores X4's
+// grid, and X4's depth mapping was the same at each in take 494). launch/defaults.conf
+// sets volumetric; unset (an old
 // take replayed with X4VR_DEFAULTS=0, or a test), X4's own. Where X4VR_FOG_PROBE or
 // X4VR_FOG_CARDS is set, it is that, not this, that counts: they are the measurement
 // knobs the takes ran with, and volumetric is exactly X4VR_FOG_PROBE=march with
@@ -2264,16 +2268,7 @@ std::atomic<uint64_t> g_march_dispatches{0}, g_march_x4_dispatches{0};
 // for a clear (pending), put in front of X4's next submission on the setup's family.
 std::atomic<bool> g_march_dirty{false}, g_march_clear_pending{false};
 std::atomic<uint64_t> g_march_clears{0};
-// Presents so far, and the last one with a march of ours since the one before (0: never).
-std::atomic<uint64_t> g_march_presents{0}, g_march_seen_at{0};
-// Our march ran within the last 3 s or so (270 presents): X4's nebula cards are removed only
-// then (the release's safeguard, after take 493). With X4's own volumetric fog switched off
-// in its settings X4 never runs its fog walk, so ours never runs, and removing its cards
-// would leave no nebula at all; there X4's cards stay, as X4 draws them.
-static bool march_recent() {
-    const uint64_t at = g_march_seen_at.load(std::memory_order_relaxed);
-    return at != 0 && g_march_presents.load(std::memory_order_relaxed) - at <= 270;
-}
+
 std::atomic<uint32_t> g_march_modules{0}, g_march_apply_patched{0}, g_march_apply_refused{0},
     g_march_x4pipes{0}, g_march_x4pipe_failed{0};
 thread_local bool tl_fog_march = false;
@@ -2665,8 +2660,6 @@ struct FixStats {
     // X4VR_FOG_CARDS=fix: turned to face the eye, and refused (the view's turn no rotation,
     // or the card on the up line).
     uint64_t cards_fixed = 0, cards_fix_refused = 0;
-    // Kept, with our march not run in the last 3 s (march_recent; the release's safeguard).
-    uint64_t cards_kept_nomarch = 0;
     struct Mat {
         float near_start, far_end;
         uint64_t n;
@@ -2857,19 +2850,12 @@ static void fix_draw(float *o_dst, float *o, const float *c, int mode,
     // The cards off, by their material: every draw of X4's nebula material, whether or not
     // its turn was learned and however far; nothing of any other material (X4's radar,
     // light glows, engine flares...). In the smoke's A/B, X4's cards stay in its V phase.
-    // And only while our march runs (march_recent): where it hasn't for 3 s -- X4's own
-    // volumetric fog off in its settings, or no fog walk here -- X4's draws are left as X4
-    // made them, the stopgap by distance too.
-    const bool cards_asked =
-        fog_cards_off() && !(fog_ab() && g_fog_arm.load(std::memory_order_relaxed) == 0);
-    if (cards_asked && !fog_cards_fix() && fog_march_on() && !march_recent()) {
-        if (mat == 1)
-            g_fix_stats.cards_kept_nomarch++;
-        if (!facing_enabled())
-            return;
-    }
+    // Whether or not our march runs (Patola, after take 494): with X4's volumetric fog off
+    // in its settings, X4 runs no fog walk and so ours doesn't run either, and its cards are
+    // removed all the same -- Off means no nebula clouds at all, the cheapest and clearest,
+    // which is why a player picks it. X4's own, cards and all, are Advanced's vanilla.
     const bool cards_off =
-        cards_asked && (fog_cards_fix() || !fog_march_on() || march_recent());
+        fog_cards_off() && !(fog_ab() && g_fog_arm.load(std::memory_order_relaxed) == 0);
     if (cards_off && mat == 1) {
         g_fix_stats.cards_by_material++;
         if (fog_cards_fix()) {
@@ -5704,11 +5690,6 @@ void shader_knob_report(const char *when) {
                  (unsigned long long)fs.cards_other_material,
                  (unsigned long long)fs.cards_unread_material, g_fade_blocks_found.load(),
                  g_fade_blocks_missing.load());
-        if (fog_march_on() && !fog_cards_fix())
-            X4VR_LOG("fog cards %s: %llu draw(s) of X4's nebula material KEPT as X4 drew them, "
-                     "our march not run in the 3 s before (X4's own volumetric fog off in its "
-                     "settings, or no fog walk there)",
-                     when, (unsigned long long)fs.cards_kept_nomarch);
         std::string mats;
         for (int k = 0; k < fs.nmats; k++) {
             char t[80];
@@ -16769,9 +16750,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
         const uint64_t n = g_march_dispatches.load(std::memory_order_relaxed);
         if (n == seen && g_march_dirty.exchange(false, std::memory_order_relaxed))
             g_march_clear_pending.store(true, std::memory_order_relaxed);
-        const uint64_t pn = g_march_presents.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (n != seen)
-            g_march_seen_at.store(pn, std::memory_order_relaxed);
         seen = n;
     }
     // #36: everything below that touches the queue -- the SBS composite, the

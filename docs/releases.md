@@ -25,9 +25,11 @@ on the remote beside their `take-NNN-name` twins.
 * **Nebulae fixed in space.** In the headset, X4's nebula clouds turned with your head: they are
   flat pictures that X4 keeps facing its camera, and in VR the camera follows your head. The mod
   now draws its own clouds there instead, in depth and fixed in space: you fly through them, and
-  they drift and slowly change shape. They need X4's volumetric fog switched on in its graphics
-  settings; with it off, X4's own nebulae are drawn as before. To keep X4's own, choose
-  **Nebulae: vanilla** in the launcher's Advanced (`X4VR_NEBULA=vanilla`). They take about 0.4 ms
+  they drift and slowly change shape. With them, X4's own Volumetric Fog setting means: Off, no
+  nebula clouds at all (X4's are removed too), for the most speed and the clearest view; Low,
+  Medium and High, the mod's clouds, which look the same at all three. To keep X4's own, choose
+  **Nebulae: vanilla** in the launcher's Advanced (`X4VR_NEBULA=vanilla`); X4's setting then
+  means what it always has. They take about 0.4 ms
   of the graphics card's time a frame on an RX 7900 XTX (around 1 ms inside dense clouds); in the
   tests, frames in nebulae came no slower than with X4's own clouds, which cost more to draw.
 * **The mod asks the VR runtime whether it accepts the mod's field of view (issue #3).** Where a
