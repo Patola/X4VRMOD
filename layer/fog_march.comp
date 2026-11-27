@@ -29,7 +29,8 @@
 // nothing of X4's: in our phases X4's blend reads our volume instead.
 //
 // The layer's block, x4vr::PoseBlock, at set 31 (renumbered by the layer): fog.x scales
-// the density (0: none), fog.y the glow, fog.w the wisps' thinness (kFootPx times it).
+// the density (0: none), fog.y the glow, fog.w the wisps' thinness (kFootPx times it);
+// fog2.x where the smoke ends, fog2.z its clock (s), fog2.w its haze (0: kHaze).
 #extension GL_ARB_enhanced_layouts : require
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
@@ -54,20 +55,20 @@ layout(set = CAM_SET, binding = CAM_BINDING, std140) uniform X4Camera {
 };
 layout(set = POSE_SET, binding = 0, std140) uniform X4vrPose {
     layout(offset = 288) vec4 fog;  // x4vr::kPoseFogOffset
-    layout(offset = 304) vec4 fog2; // x: where the smoke ends, m (0: kFar)
+    layout(offset = 304) vec4 fog2; // x: where the smoke ends, m (0: kFar); z: its clock, s; w: haze
 } pose;
 layout(set = POSE_SET, binding = 1, rgba16f) uniform restrict writeonly image3D march_out;
 layout(set = POSE_SET, binding = 3) uniform sampler3D noise4;
 
 layout(constant_id = 0) const float kCloud = 670.0;    // a cloud, m
 layout(constant_id = 1) const float kCover = 0.70;     // where a cloud starts: sparse
-layout(constant_id = 2) const float kSoft = 0.08;      // its edge
+layout(constant_id = 2) const float kSoft = 0.03;      // its edge (0.08 to take 488)
 layout(constant_id = 3) const float kWarp = 400.0;     // the clouds' curl, m
 layout(constant_id = 4) const float kMottle = 200.0;   // the mottling, m (and half)
 layout(constant_id = 5) const float kStr = 40.0;       // the finest wisps, m
 layout(constant_id = 6) const float kGain = 7.0;       // how thin a wisp is
 layout(constant_id = 7) const float kSharp = 3.0;      // and how sharp
-layout(constant_id = 8) const float kMix = 0.8;        // wisps against the soft body
+layout(constant_id = 8) const float kMix = 0.95;       // wisps against the soft body (0.8)
 layout(constant_id = 9) const float kStretch = 1.5;    // wisps drawn out along x
 layout(constant_id = 10) const float kCurl = 3.0;      // how much the wisps curl
 layout(constant_id = 11) const float kFootPx = 3.0;    // no wisp thinner than this many pixels
@@ -75,14 +76,17 @@ layout(constant_id = 12) const float kSigma = 0.003;   // extinction at full den
 layout(constant_id = 13) const float kBright = 0.3;    // the glow of an opaque cloud
 layout(constant_id = 14) const float kFar = 2500.0;    // everything fades by here, m
 layout(constant_id = 15) const float kDrift = 4.0;     // the clouds drift, m/s
-layout(constant_id = 16) const float kMorph = 12.0;    // their outlines slide, m/s
-layout(constant_id = 17) const float kChurn = 0.02;    // their curl churns, a second
+layout(constant_id = 16) const float kMorph = 48.0;    // their outlines slide, m/s (12 to 488)
+layout(constant_id = 17) const float kChurn = 0.08;    // their curl churns, a second (0.02)
 layout(constant_id = 18) const float kTint = 3.0;      // the light colour, deepened
 layout(constant_id = 19) const int kW = 704;           // the march's pixels across
 layout(constant_id = 20) const int kH = 704;           // and down
 layout(constant_id = 21) const int kK = 16;            // its depths
 layout(constant_id = 22) const float kStepFrac = 0.03; // steps at most this of the distance
 layout(constant_id = 23) const int kSkip = 1;          // skip space proven cloud-free
+// What a wisp too thin to draw at its distance leaves behind (0.12 to take 488): X4's cards
+// blur their unresolved strands into a dim average, and a bright one was the fuzz.
+layout(constant_id = 24) const float kHaze = 0.05;
 
 // Four smooth noises at once: the texture's lattice, interpolated with smoothstep.
 vec4 n4(vec3 x) {
@@ -91,53 +95,65 @@ vec4 n4(vec3 x) {
 }
 float n1(vec3 x) { return n4(x).r; }
 
-// The smoke's density at a world point p (already drifted), `dist` metres away, where a
-// low-res pixel covers `foot` metres and X4's grid would have covered `cell`. `clear`:
+// A world point in a noise's lattice of `L` metres, drifted by the smoke's clock. The drift
+// is added in lattice units modulo the texture's 64-cell period, where the noise repeats
+// exactly: so no time is a seam, and no clock grows large enough to lose precision (take
+// 488: the world-space wrap at 65536 m was a seam that sweeps through the scene, and X4's
+// clock is the save's game time, 91786 s in his).
+float g_drift = 0.0; // metres, the clock times kDrift
+float g_haze = kHaze; // the haze, or the layer's fog2.w (an A/B's phase) where set
+vec3 at(vec3 p, float L) { return p / L + vec3(0.0, 0.0, mod(g_drift / L, 64.0)); }
+
+// The smoke's density at a world point p, `dist` metres away, at the clock `t`, where a
+// low-res pixel covers `cell` metres (X4's grid column to take 488: four times coarser, it
+// faded the mottling out beyond ~800 m) and `foot` is the thinnest wisp drawn. `clear`:
 // where it is 0 because no cloud can be there, how far on along any line none can start
 // (the cloud test's noise changes by at most 1.5 a lattice cell: 0.65 x 1.5 / kCloud a
 // metre).
-float smoke(vec3 p, vec3 p2, float t, float dist, float cell, float foot, out float clear) {
+float smoke(vec3 p, float t, float dist, float cell, float foot, out float clear) {
     // Clouds: the cloud test first; its second octave slides against the first (kMorph).
-    const float c1 = n1(p / kCloud + vec3(3.3, 7.1, 1.9));
+    const float c1 = n1(at(p, kCloud) + vec3(3.3, 7.1, 1.9));
     const float soft = max(kSoft, 0.45 * 2.5 * cell / kCloud);
+    // Its second octave slides against the first: the outlines change (kMorph).
+    const vec3 morph = mod(vec3(0.6, 0.5, -0.6) * (t * kMorph / (0.4 * kCloud)), 64.0);
     clear = 0.0;
     if (0.65 * c1 + 0.35 <= kCover - soft) {
         clear = ((kCover - soft) - (0.65 * c1 + 0.35)) * kCloud / (0.65 * 1.5);
         return 0.0;
     }
     const float cloud = smoothstep(kCover - soft, kCover + soft,
-                                   0.65 * c1 + 0.35 * n1(p2 / (0.4 * kCloud) + vec3(9.1, 2.2, 5.5)));
+                                   0.65 * c1 + 0.35 * n1(at(p, 0.4 * kCloud) + morph + vec3(9.1, 2.2, 5.5)));
     if (cloud <= 0.001)
         return 0.0;
     // Mottling, curled by the clouds' warp.
-    const vec3 w = n4(p / kWarp + vec3(5.2, 1.3, 7.7 + t * kChurn)).rgb - 0.5;
+    const vec3 w = n4(at(p, kWarp) + vec3(5.2, 1.3, 7.7 + mod(t * kChurn, 64.0))).rgb - 0.5;
     float mot = 0.0;
     for (int k = 0; k < 2; ++k) {
         const float lam = kMottle / float(1 << k);
         const float f = smoothstep(1.0, 2.0, lam / (4.0 * 2.5 * cell));
-        const float n = f > 0.0 ? n1(p / lam + w * (0.8 * kWarp / lam) + float(k) * vec3(13.7, 5.1, 8.9)) : 0.5;
+        const float n = f > 0.0 ? n1(at(p, lam) + w * (0.8 * kWarp / lam) + float(k) * vec3(13.7, 5.1, 8.9)) : 0.5;
         mot += (k == 0 ? 0.65 : 0.35) * mix(0.5, n, f);
     }
     mot = clamp((mot - 0.5) * 2.0 + 0.5, 0.0, 1.0);
     // Wisps at four sizes, curled by their own warp, each only where it is thick enough.
     const float ws = 6.0 * kStr;
-    const vec3 w2 = n4(p / ws + vec3(1.7, 9.2, 3.4 - t * kChurn)).rgb - 0.5;
+    const vec3 w2 = n4(at(p, ws) + vec3(1.7, 9.2, 3.4 + mod(-t * kChurn, 64.0))).rgb - 0.5;
     float acc = 0.0, norm = 0.0, amp = 1.0;
     for (int k = 0; k < 4; ++k) {
         const float lam = kStr * float(1 << k);
         const float fit = smoothstep(1.0, 2.0, (lam / kGain) / foot);
         float ridge = 0.0;
         if (fit > 0.0) {
-            vec3 r = p / lam + w2 * (kCurl * ws / lam) + float(k) * vec3(13.7, 5.1, 8.9);
+            vec3 r = at(p, lam) + w2 * (kCurl * ws / lam) + float(k) * vec3(13.7, 5.1, 8.9);
             r.x /= kStretch;
             ridge = pow(clamp(1.0 - abs(n1(r) - 0.5) * kGain, 0.0, 1.0), kSharp);
         }
-        acc += amp * (fit * ridge + (1.0 - fit) * 0.12);
+        acc += amp * (fit * ridge + (1.0 - fit) * g_haze);
         norm += amp;
         amp *= 0.9;
     }
     float m = acc / norm;
-    m *= 0.4 + 0.6 * smoothstep(0.35, 0.65, n1(p / (3.0 * kStr) + vec3(3.1, 4.1, 5.9)));
+    m *= 0.4 + 0.6 * smoothstep(0.35, 0.65, n1(at(p, 3.0 * kStr) + vec3(3.1, 4.1, 5.9)));
     const float detail = (1.0 - kMix) + kMix * m / 0.15;
     const float near = 0.3 + 0.7 * smoothstep(40.0, 400.0, dist);
     return max(cloud * mot * near * detail, 0.0);
@@ -148,7 +164,6 @@ vec3 cell_view(vec3 uv) {
     const vec4 p = M_invprojection * vec4(cs, 1.0);
     return p.xyz / p.w;
 }
-vec3 wrap(vec3 p) { return p - floor(p / 65536.0) * 65536.0; }
 
 void main() {
     const ivec2 id = ivec2(gl_GlobalInvocationID.xy);
@@ -159,18 +174,19 @@ void main() {
     const vec3 anchor = dot(t4, t4) < 1.0 ? V_cameraposition.xyz : vec3(0.0);
     const vec3 origin = t4 + anchor;
     const vec3 ray = normalize(mat3(M_viewinverse) * normalize(cell_view(vec3(uv, 0.5))));
-    // A low-res pixel's width at a metre, across the middle; X4's grid column's.
+    // A low-res pixel's width at a metre, across the middle.
     const vec3 a = cell_view(vec3(0.0, 0.5, 0.5)), b = cell_view(vec3(1.0, 0.5, 0.5));
     const float span = abs(b.x - a.x) / max(abs(a.z), 1e-6);
-    const float px = span / float(kW), gridcol = span / 176.0;
+    const float px = span / float(kW);
     const vec4 knobs = pose.fog;
     const float far = pose.fog2.x > 0.0 ? pose.fog2.x : kFar;
     const float footpx = kFootPx * (knobs.w > 0.0 ? knobs.w : 1.0);
     const vec3 lc = max(V_lightcolor1.rgb, vec3(1e-4));
     const vec3 glow = kBright * knobs.y * pow(lc / max(max(lc.r, lc.g), lc.b), vec3(kTint));
-    const float t_ = F_time;
-    const vec3 drift = vec3(0.0, 0.0, t_ * kDrift);
-    const vec3 morph = vec3(0.6, 0.5, -0.6) * (t_ * kMorph);
+    // The smoke's own clock (the layer's seconds, fog2.z), not X4's game time.
+    const float t_ = pose.fog2.z;
+    g_drift = t_ * kDrift;
+    g_haze = pose.fog2.w > 0.0 ? pose.fog2.w : kHaze;
 
     vec3 light = vec3(0.0);
     float trans = 1.0;
@@ -197,8 +213,8 @@ void main() {
         const float tm = t + 0.5 * stp;
         const vec3 pw = origin + ray * tm;
         float clear;
-        const float d = knobs.x * smoke(wrap(pw + drift), wrap(pw + drift + morph), t_, tm,
-                                        gridcol * tm, px * footpx * tm, clear) *
+        const float d = knobs.x * smoke(pw, t_, tm,
+                                        px * tm, px * footpx * tm, clear) *
                         (1.0 - smoothstep(0.6 * far, far, tm));
         if (d > 0.0) {
             const float slice = exp(-kSigma * d * stp);

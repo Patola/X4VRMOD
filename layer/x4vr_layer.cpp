@@ -2239,7 +2239,7 @@ thread_local bool tl_march_blend = false; // this thread's last module got the b
 // Under g_fog_probe_mu: the modules made from X4's fog blend with the march's edit.
 std::unordered_set<VkShaderModule> &g_march_blend_mods =
     x4vr::immortal<std::unordered_set<VkShaderModule>>();
-constexpr float kMarchSharper = 0.5f; // B: wisps down to 1.5 low-res pixels where A keeps 3
+constexpr float kMarchHazeB = 0.03f; // B's haze where A keeps the march's 0.05 (after take 488)
 
 constexpr int kSmokeParams = 27;
 struct SmokeParam {
@@ -2289,7 +2289,7 @@ constexpr float kFogNearFar = 600.f;      // with the cards fixed, B's smoke end
 std::atomic<int> g_fog_arm{1}; // 0 V, 1 A, 2 B
 // The smoke's knobs as last published to the GPU (fog x..w, fog2 x), for the log (after
 // take 485: zeroed every frame, the smoke was invisible and nothing said so).
-std::atomic<float> g_fog_pub[5] = {};
+std::atomic<float> g_fog_pub[7] = {}; // fog x..w, fog2 x, z (the clock), w (the haze)
 std::atomic<bool> g_fog_pub_seen{false};
 std::unordered_set<VkPipeline> &g_fog_probe_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
 std::unordered_map<VkCommandBuffer, bool> &g_fog_probe_cb =
@@ -5564,10 +5564,12 @@ void shader_knob_report(const char *when) {
                      g_march_setup_sent.load() ? "sent" : "NOT sent");
         if (fog_smoke_on() || fog_march_on())
             X4VR_LOG("fog smoke %s: its knobs as last published — %s density %.2f, glow %.2f, "
-                     "size %.2f, sharpness %.2f, ends at %.0f m (0: %.0f)",
+                     "size %.2f, sharpness %.2f, ends at %.0f m (0: %.0f); clock %.1f s, "
+                     "haze %.3f (0: the march's own)",
                      when, g_fog_pub_seen.load() ? "" : "(none published yet)",
                      g_fog_pub[0].load(), g_fog_pub[1].load(), g_fog_pub[2].load(),
-                     g_fog_pub[3].load(), g_fog_pub[4].load(), fog_smoke_params()[18]);
+                     g_fog_pub[3].load(), g_fog_pub[4].load(), fog_smoke_params()[18],
+                     g_fog_pub[5].load(), g_fog_pub[6].load());
         if (fog_ab()) {
             // What the smoke costs against X4's cards: each phase's frame times.
             std::string row;
@@ -9918,8 +9920,24 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         (fog_smoke_on() ? g_fog_walk_mods : g_fog_vol_mods).insert(*out);
     }
     if (r == VK_SUCCESS && tl_march_blend) {
+        // Its twins too, built from the bytes after every fragment edit, ours included
+        // (frag_only): a pipeline given the no-shear or the canvas twin draws our blend
+        // as much as one given the module itself. Take 488 drew our smoke in A and B and
+        // its log called the twin "the patched one NOT", because only this handle was
+        // here. Read apart from g_fog_probe_mu, so the two locks never nest.
+        VkShaderModule twins[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+        {
+            std::lock_guard<std::mutex> lock(g_variants.mu);
+            if (auto o = g_variants.original.find(*out); o != g_variants.original.end())
+                twins[0] = o->second;
+            if (auto c = g_variants.canvas.find(*out); c != g_variants.canvas.end())
+                twins[1] = c->second;
+        }
         std::lock_guard<std::mutex> lock(g_fog_probe_mu);
         g_march_blend_mods.insert(*out);
+        for (VkShaderModule t : twins)
+            if (t != VK_NULL_HANDLE)
+                g_march_blend_mods.insert(t);
     }
     if (r == VK_SUCCESS && is_march) {
         // X4's own walk too, for the vanilla phase: its bytes as X4 gave them.
@@ -10597,22 +10615,26 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             const bool fix = fog_cards_fix();
             if (fog_march_on()) {
                 // V: X4's own fog (its walk, its grid) and cards; A and B: our march, the
-                // cards off, wisps down to 3 (A) or 1.5 (B) low-res pixels.
+                // cards off, its unresolved wisps leaving a haze of 0.05 (A, the march's
+                // own) or 0.03 (B: the clouds' bodies dimmer, the strands carrying them) --
+                // after take 488, "too bright and fuzzy". B's 0.03, not lower: over eight
+                // views a 10 deg head turn changed it as much as take 488's B (3.9% of the
+                // bright clouds at p99), which he saw as stable; 0.02 changed more.
                 g_pose.value.fog[0] = fa == 0 ? 0.f : 1.f;
                 g_pose.value.fog[1] = 1.f;
                 g_pose.value.fog[2] = 1.f;
-                g_pose.value.fog[3] = fa == 2 ? kMarchSharper : 1.f;
+                g_pose.value.fog[3] = 1.f;
                 g_pose.value.fog2[0] = 0.f;
                 g_pose.value.fog2[1] = fa == 0 ? 0.f : 1.f;
+                g_pose.value.fog2[3] = fa == 2 ? kMarchHazeB : 0.f;
                 static uint64_t msaid = ~0ull;
                 if (msaid != phase) {
                     msaid = phase;
                     X4VR_LOG("fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)",
                              (unsigned long long)phase,
                              fa == 0 ? "V, X4's own fog and cards"
-                             : fa == 1 ? "A, our march, wisps no thinner than 3 pixels, no cards"
-                                       : "B, our march, wisps no thinner than 1.5 pixels, no "
-                                         "cards");
+                             : fa == 1 ? "A, our march, haze 0.05, no cards"
+                                       : "B, our march, haze 0.03 (dimmer bodies), no cards");
                 }
             } else {
             g_pose.value.fog[0] = fa == 0 || (fix && fa == 1) ? 0.f : 1.f;
@@ -10641,6 +10663,14 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                              (fa == 2 ? kFogSharper * kFogSharper : 1.f) * fog_smoke_params()[2]);
             }
             } // not the march
+        }
+        // The march's clock (after take 488): seconds since the layer started, published every
+        // VR frame. X4's own F_time is the save's game time -- 91786 s in his -- whose float
+        // steps grow with the hours played, and the smoke's motion runs on this.
+        if (fog_march_on()) {
+            static const auto t0 = std::chrono::steady_clock::now();
+            g_pose.value.fog2[2] =
+                std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
         }
         x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face, arm == 4);
         // K only in flight (X4's camera angles valid): a start menu stays a menu.
@@ -10787,6 +10817,8 @@ void pose_publish(VkCommandBuffer cb) {
     for (int k = 0; k < 4; k++)
         g_fog_pub[k].store(src->fog[k], std::memory_order_relaxed);
     g_fog_pub[4].store(src->fog2[0], std::memory_order_relaxed);
+    g_fog_pub[5].store(src->fog2[2], std::memory_order_relaxed);
+    g_fog_pub[6].store(src->fog2[3], std::memory_order_relaxed);
     g_fog_pub_seen.store(true, std::memory_order_relaxed);
     g_pose.region_frame[it->second] = now;
 }

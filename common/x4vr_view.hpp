@@ -457,7 +457,10 @@ struct PoseBlock {
     // here without a new pipeline.
     float fog[4];
     // x: where the smoke ends, m (0: the walk's kFar) -- after take 483, the smoke near the
-    // ship alone, with X4's cards fixed beyond it. y, z, w are slack.
+    // ship alone, with X4's cards fixed beyond it. y: X4's fog blend reads our march (1) or
+    // X4's grid (0) -- after take 486. z: the march's clock, seconds since the layer
+    // started (after take 488: X4's own is the save's game time). w: the march's haze,
+    // what an unresolved wisp leaves behind (0: its kHaze) -- after take 488.
     float fog2[4];
 };
 static_assert(sizeof(PoseBlock) == 320, "std140: three mat4 at 0, 64, 128, vec4s at 192 and "

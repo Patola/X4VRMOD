@@ -5743,6 +5743,15 @@ def main(path):
                 and "headlook write: ARMED" in text and float(kn[1]) == 0.0):
             fails.append("fog smoke: installed, and its density as published was 0 -- the smoke "
                          "was invisible")
+    # After take 488: the march's motion runs on the layer's clock (fog2.z), not X4's game
+    # time; a clock at 0 in flight is the smoke standing still -- "static puffs".
+    clk = re.findall(r"fog smoke final: its knobs as last published — .*?; clock ([\d.]+) s, "
+                     r"haze ([\d.]+)", text)
+    if clk:
+        print(f"fogsmoke clock {clk[-1][0]} s, haze {clk[-1][1]} (0: the march's own)")
+        if (re.search(r"\bX4VR_FOG_PROBE=march\b", run or "") and "headlook write: ARMED" in text
+                and float(clk[-1][0]) == 0.0):
+            fails.append("fog march: its clock never ran (0 s at the end): the smoke stood still")
     grids = re.findall(r"fog probe: X4's grid is (\d+x\d+x\d+) \(was", text)
     if grids:
         print("fogprobe grids: " + " -> ".join(grids[:8]) + (" ..." if len(grids) > 8 else ""))

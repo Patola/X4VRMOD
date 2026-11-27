@@ -2450,12 +2450,23 @@ want "fog march: never dispatched -> FAIL" /tmp/census-march-nodisp.log "FAIL|  
 want "fog march: V without X4's walk -> FAIL" /tmp/census-march-nov.log "FAIL|  - " "vanilla phase never ran X4's own walk"
 { mbase; printf '%s\n' "$mrep" "$mpipe_no" "$mv" "$ma" "$(mfin 5000 4000 3 made sent)"; } > /tmp/census-march-swap.log
 want "fog march: unpatched blend drawn -> FAIL" /tmp/census-march-swap.log "FAIL|  - " "draws an unpatched module"
+# Take 488: the no-shear twin, which carries our edit, is not "unpatched".
+mpipe_twin='[  99800.040] layer   fog march: a pipeline with X4'"'"'s fog blend gets fragment module SWAPPED (the patched one or its twin)'
+{ mbase; printf '%s\n' "$mrep" "$mpipe_twin" "$mv" "$ma" "$(mfin 5000 4000 3 made sent)"; } > /tmp/census-march-twin.log
+absent "fog march: its twin drawn -> no FAIL" /tmp/census-march-twin.log "FAIL .*fog march"
 { mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma"; } > /tmp/census-march-silent.log
 want "fog march: no final line -> FAIL" /tmp/census-march-silent.log "FAIL|  - " "printed no fog march line"
 # Take 487: the phases asked for and never switched -- no phase line at all.
 { mbase; printf '%s\n' "$mrep" "$mpipe" "$(mfin 5000 0 3 made sent)"; } > /tmp/census-march-nophase.log
 want "fog march: A/B with no phase -> FAIL" /tmp/census-march-nophase.log "FAIL|  - " "no phase was drawn (the phases never switched)"
 absent "fog march: phases drawn -> no phase FAIL" /tmp/census-march-ok.log "no phase was drawn"
+# After take 488: the march's own clock -- at 0 in flight, the smoke stood still.
+mknobs() { echo "[  99900.060] layer   fog smoke final: its knobs as last published —  density 1.00, glow 1.00, size 1.00, sharpness 1.00, ends at 0 m (0: 2500); clock $1 s, haze 0.000 (0: the march's own)"; }
+{ mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma" "$(mfin 5000 4000 3 made sent)" "$(mknobs 0.0)"; } > /tmp/census-march-noclock.log
+want "fog march: clock at 0 -> FAIL" /tmp/census-march-noclock.log "FAIL|  - " "its clock never ran"
+{ mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma" "$(mfin 5000 4000 3 made sent)" "$(mknobs 312.4)"; } > /tmp/census-march-clock.log
+want "fog march: clock said" /tmp/census-march-clock.log fogsmoke "clock 312.4 s"
+absent "fog march: clock running -> no FAIL" /tmp/census-march-clock.log "FAIL .*fog march"
 absent "fog march: not asked -> silent" "$BASE" fogmarch
 
 # After take 485: the smoke installed with density 0 (no A/B) -> FAIL; density 1 -> none.
