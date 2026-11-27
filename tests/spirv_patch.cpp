@@ -1941,6 +1941,24 @@ int main(int argc, char **argv) {
         printf("IS=%d MEDIA=%d WHY=%s\n", is ? 1 : 0, rep.media, is ? "" : rep.why);
         return 0;
     }
+    // fog-apply <in.spv> <out.spv>: X4's fog blend made to read our march too (after take
+    // 486), and why not where it refuses (the module then unchanged).
+    if (strcmp(argv[1], "fog-apply") == 0 && argc >= 4) {
+        std::vector<uint32_t> code = load_spv(argv[2]);
+        const std::vector<uint32_t> before = code;
+        x4vr::spv::FogApplyReport rep;
+        const bool ok = !code.empty() && x4vr::spv::patch_fog_apply_march(code, 31, 0, 2, &rep);
+        if (!ok && code != before) {
+            printf("FAIL=refusal_modified_code\n");
+            return 1;
+        }
+        FILE *f = fopen(argv[3], "wb");
+        if (!f) { printf("FAIL=open_out\n"); return 1; }
+        fwrite(code.data(), 4, code.size(), f);
+        fclose(f);
+        printf("PATCHED=%d WHY=%s\n", ok ? 1 : 0, ok ? "" : rep.why);
+        return 0;
+    }
     // fade-block <in.spv>: where a fade module keeps its material's fade distances; and the
     // nebula rule on X4's materials (after take 482).
     if (strcmp(argv[1], "fade-block") == 0 && argc >= 3) {

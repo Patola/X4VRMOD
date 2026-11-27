@@ -1400,6 +1400,22 @@ else
     fails=$((fails + 1))
 fi
 
+# After take 486: X4's fog blend reads our march's volume beside its own grid -- the
+# stand-in's one lookup of element 39 gains a second, and the module validates; X4's
+# tonemap (a 3D lookup at element 51) is left alone, byte for byte.
+fa=$("$PATCHER" fog-apply "$BUILD/tests/sample_fog_apply.frag.spv" "$PATCHDIR/fa.spv" 2>&1)
+ft=$("$PATCHER" fog-apply "$BUILD/tests/sample_tonemap_lut.frag.spv" "$PATCHDIR/ft.spv" 2>&1)
+fadis=$(spirv-dis "$PATCHDIR/fa.spv" 2>/dev/null)
+if [[ $fa == "PATCHED=1 WHY=" ]] && grep -q '^PATCHED=0' <<<"$ft" && \
+    spirv-val --target-env vulkan1.0 "$PATCHDIR/fa.spv" >/dev/null 2>&1 && \
+    [[ $(grep -c OpImageSampleExplicitLod <<<"$fadis") == 2 ]] && \
+    grep -q 'Decorate .* Binding 2' <<<"$fadis" && cmp -s "$BUILD/tests/sample_tonemap_lut.frag.spv" "$PATCHDIR/ft.spv"; then
+    printf 'ok   %-38s %s\n' "fog march: X4's blend reads ours" "tonemap: $(sed 's/.*WHY=//' <<<"$ft")"
+else
+    printf 'FAIL %-38s %s | %s\n' "fog march: X4's blend reads ours" "$fa" "$ft"
+    fails=$((fails + 1))
+fi
+
 # After take 482: X4's nebula cards are known by their material's fade distances, read
 # from the block the module keeps them in; a module without them has none.
 fb=$("$PATCHER" fade-block "$BUILD/tests/sample_fade_block.vert.spv" 2>&1)

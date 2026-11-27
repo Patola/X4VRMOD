@@ -5682,6 +5682,51 @@ def main(path):
               + (" ..." if len(sphases) > 16 else ""))
     for ln in re.findall(r"fog smoke final: (frame time by phase .*)$", text, re.M)[-1:]:
         print(f"fogsmoke {ln}")
+    # The march (X4VR_FOG_PROBE=march, after take 486): our walk marching one ray per pixel of
+    # a quarter-resolution view, X4's blend patched to read it, X4's own walk kept for V.
+    if re.search(r"\bX4VR_FOG_PROBE=march\b", run or ""):
+        for ln in re.findall(r"fog march: (X4's volume_walk .*replaced by our march.*)$", text, re.M)[:1]:
+            print(f"fogmarch {ln[:160]}")
+        mfin = re.findall(r"fog march (?:periodic|final|first present): (\d+) dispatch\(es\) of our march "
+                          r"\((\d+)x(\d+) rays, (\d+) depths\), (\d+) of X4's own walk \(the vanilla "
+                          r"phase\); X4's fog blend patched in (\d+) module\(s\), (\d+) refused; X4's "
+                          r"own walk pipelines (\d+) made beside ours, (\d+) failed; our objects (made|NOT "
+                          r"made); setup (sent|NOT sent)", text)
+        flying = "headlook write: ARMED" in text
+        if not mfin:
+            fails.append("fog march: asked for, and the layer printed no fog march line (a build "
+                         "without it)")
+        else:
+            md, mw, mh, mk, mx4, mpat, mref, mpipes, mpfail, mobj, msetup = mfin[-1]
+            print(f"fogmarch {md} march dispatch(es) ({mw}x{mh} rays, {mk} depths), {mx4} of X4's own "
+                  f"walk; blend patched in {mpat} module(s), {mref} refused; X4's own walk "
+                  f"pipelines {mpipes} made, {mpfail} failed; objects {mobj}; setup {msetup}")
+            ab = bool(re.search(r"\bX4VR_FOG_AB=recentre\b", run or ""))
+            ours_phases = {k for _, k in re.findall(r"fog smoke: phase #(\d+) — (V|A|B)(?=[ ,])", text)}
+            if mobj != "made":
+                fails.append("fog march: our objects were not made (the log says why): X4's own "
+                             "fog ran")
+            elif msetup != "sent":
+                fails.append("fog march: its one-time setup was never submitted: X4's blend read "
+                             "an uninitialised volume")
+            if not re.search(r"fog march: X4's volume_walk .*replaced by our march", text):
+                fails.append("fog march: X4's volume_walk was not replaced (the log says why)")
+            if int(mpat) == 0:
+                fails.append("fog march: X4's fog blend was never patched: our march ran, and "
+                             "nothing showed it")
+            if flying and int(md) == 0 and (not ab or ours_phases & {"A", "B"}):
+                fails.append("fog march: in flight, and our march was never dispatched")
+            if flying and ab and "V" in ours_phases and int(mpipes) > 0 and int(mx4) == 0:
+                fails.append("fog march: the vanilla phase never ran X4's own walk")
+        for used, patched in re.findall(r"fog march: a pipeline with X4's fog blend gets fragment "
+                                        r"module (as made|SWAPPED) \(the patched one (or its twin|NOT)\)",
+                                        text):
+            if patched == "NOT":
+                fails.append("fog march: a pipeline with X4's fog blend draws an unpatched module")
+                break
+        if "fog march: WARNING" in text:
+            fails.append("fog march: " + re.findall(r"fog march: WARNING — (.*)$", text, re.M)[0][:140])
+
     # After take 485 (the smoke's knobs zeroed every frame: installed, and invisible).
     knobs = re.findall(r"fog smoke final: its knobs as last published — (.*?)density ([\d.]+), glow "
                        r"([\d.]+), size ([\d.]+), sharpness ([\d.]+), ends at (\d+) m", text)

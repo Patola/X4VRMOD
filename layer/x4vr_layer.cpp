@@ -55,6 +55,7 @@
 #include "x4vr_sbs.hpp"
 #include "x4vr_loading_panel.hpp"
 #include "x4vr_copy_ring.hpp"
+#include "x4vr_fog_march.hpp"
 #include "vr_loading_assets.hpp"
 #include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
@@ -2203,6 +2204,43 @@ static bool fog_smoke_on() {
     }();
     return on;
 }
+// **The march** (X4VR_FOG_PROBE=march, after take 486): X4's volume_walk replaced by
+// layer/fog_march.comp, which marches one ray per pixel of a quarter-resolution view
+// into a volume of ours (x4vr_fog_march.hpp); X4's fog blend, patched, reads it by X4's
+// own lookup (x4vr::spv::patch_fog_apply_march), or X4's own grid where the pose block's
+// fog2.y is 0 (the A/B's vanilla phase, in which X4's own walk runs again).
+static bool fog_march_on() {
+    static const bool on = [] {
+        const char *e = getenv("X4VR_FOG_PROBE");
+        return e && !strcmp(e, "march");
+    }();
+    return on;
+}
+x4vr::FogMarch &g_march = x4vr::immortal<x4vr::FogMarch>();
+std::atomic<bool> g_march_ready{false};      // its objects made, in the pose block's sets
+std::atomic<bool> g_march_setup_sent{false}; // its one-time setup submitted
+std::atomic<uint32_t> g_march_graphics_families{0}; // queue families with graphics, a bitmask
+std::string &g_march_why = x4vr::immortal<std::string>();
+// Under g_fog_probe_mu: our march modules and X4's own walk module for each; our march
+// pipelines and X4's own walk pipeline for each; per recording, which is bound (1 ours,
+// 2 X4's own in the vanilla phase).
+std::unordered_set<VkShaderModule> &g_march_mods = x4vr::immortal<std::unordered_set<VkShaderModule>>();
+std::unordered_map<VkShaderModule, VkShaderModule> &g_march_x4mod =
+    x4vr::immortal<std::unordered_map<VkShaderModule, VkShaderModule>>();
+std::unordered_map<VkPipeline, VkPipeline> &g_march_x4pipe =
+    x4vr::immortal<std::unordered_map<VkPipeline, VkPipeline>>();
+std::unordered_map<VkCommandBuffer, int> &g_march_cb =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, int>>();
+std::atomic<uint64_t> g_march_dispatches{0}, g_march_x4_dispatches{0};
+std::atomic<uint32_t> g_march_modules{0}, g_march_apply_patched{0}, g_march_apply_refused{0},
+    g_march_x4pipes{0}, g_march_x4pipe_failed{0};
+thread_local bool tl_fog_march = false;
+thread_local bool tl_march_blend = false; // this thread's last module got the blend patch
+// Under g_fog_probe_mu: the modules made from X4's fog blend with the march's edit.
+std::unordered_set<VkShaderModule> &g_march_blend_mods =
+    x4vr::immortal<std::unordered_set<VkShaderModule>>();
+constexpr float kMarchSharper = 0.5f; // B: wisps down to 1.5 low-res pixels where A keeps 3
+
 constexpr int kSmokeParams = 27;
 struct SmokeParam {
     const char *env; // nullptr: fixed
@@ -5510,7 +5548,19 @@ void shader_knob_report(const char *when) {
                  "buffer: %s; an earlier one of its submit: %s; an earlier submit: %s; %llu "
                  "blend(s) recorded before a dispatch of their own buffer",
                  when, w0, w1, w2, (unsigned long long)fs.after);
-        if (fog_smoke_on())
+        if (fog_march_on())
+            X4VR_LOG("fog march %s: %llu dispatch(es) of our march (%ux%u rays, %u depths), %llu "
+                     "of X4's own walk (the vanilla phase); X4's fog blend patched in %u "
+                     "module(s), %u refused; X4's own walk pipelines %u made beside ours, %u "
+                     "failed; our objects %s; setup %s — DIAGNOSTIC",
+                     when, (unsigned long long)g_march_dispatches.load(), x4vr::FogMarch::kW,
+                     x4vr::FogMarch::kH, x4vr::FogMarch::kK,
+                     (unsigned long long)g_march_x4_dispatches.load(),
+                     g_march_apply_patched.load(), g_march_apply_refused.load(),
+                     g_march_x4pipes.load(), g_march_x4pipe_failed.load(),
+                     g_march_ready.load() ? "made" : "NOT made",
+                     g_march_setup_sent.load() ? "sent" : "NOT sent");
+        if (fog_smoke_on() || fog_march_on())
             X4VR_LOG("fog smoke %s: its knobs as last published — %s density %.2f, glow %.2f, "
                      "size %.2f, sharpness %.2f, ends at %.0f m (0: %.0f)",
                      when, g_fog_pub_seen.load() ? "" : "(none published yet)",
@@ -8178,6 +8228,11 @@ VkResult create_shader_module_inner(
     // published as g_mod_frag_patched and printed as "index-offset APPLIED".
     // They mean different things and must not merge.
     bool hudless_patched = false;
+    // The march's edit of X4's fog blend (after take 486): it alone may touch a module, so
+    // it counts wherever hudless_patched does -- the edited bytes, the twin's bytes, the
+    // canvas twin's -- or the edit is computed and thrown away (the march's smoke test
+    // caught exactly that: the drawn twin was X4's pristine blend).
+    bool march_patched = false;
     // Named, because it gates TWO unrelated things below and used to gate
     // them as one. See the hoist under "Task #22".
     const bool bindless_ok = g_bindless_patch && g_bindless_mirror;
@@ -8363,6 +8418,22 @@ VkResult create_shader_module_inner(
     // Placed before the twin snapshot below on purpose: the unsheared twin must
     // carry the same fog treatment, or the passes that take the twin would keep
     // the fog while the rest lost it, and the measurement would be unreadable.
+    // The march (after take 486): X4's fog blend reads our volume too, by its own lookup,
+    // and mixes the two by the pose block's fog2.y (1 ours, 0 X4's: the vanilla phase).
+    if (fog_march_on() && g_march_ready.load() && pose_active()) {
+        x4vr::spv::FogApplyReport frep;
+        if (x4vr::spv::patch_fog_apply_march(code, pose_set_index(), kPoseBinding,
+                                             x4vr::FogMarch::kBindVolume, &frep)) {
+            march_patched = true;
+            tl_march_blend = true;
+            if (++g_march_apply_patched <= 4)
+                X4VR_LOG("fog march: X4's fog blend (fragment module, %zu words) now reads our "
+                         "march's volume by its own lookup, X4's grid where fog2.y is 0",
+                         code.size());
+        } else if (strstr(frep.why, "more than one") && ++g_march_apply_refused <= 3) {
+            X4VR_LOG("fog march: a fragment module like X4's fog blend REFUSED: %s", frep.why);
+        }
+    }
     if (const char *fg = getenv("X4VR_DISABLE_FOG"); fg && *fg && *fg != '0') {
         if (x4vr::spv::patch_fragment_disable_fog(code)) {
             const uint64_t n = ++g_fog_disabled;
@@ -8461,7 +8532,7 @@ VkResult create_shader_module_inner(
     // practice because the fog modules all sample the bindless heap, and left
     // alone here rather than fixed in a commit about something else.
     std::vector<uint32_t> frag_only;
-    if (frag_patched || hudless_patched)
+    if (frag_patched || hudless_patched || march_patched)
         frag_only = code;
     // Set here and cleared on every driver-rejection fallback below, so the
     // flag names what the game actually got rather than what we attempted.
@@ -8525,7 +8596,9 @@ VkResult create_shader_module_inner(
         kind != x4vr::spv::Kind::World &&
         x4vr::spv::classify(x4_words, true) == x4vr::spv::Kind::World;
     if (kind == x4vr::spv::Kind::NotVertex) {
-        if (!frag_patched)
+        // The march's edit counts too (a module with only a fragment entry point, edited by
+        // nothing else, was otherwise made from X4's bytes: the smoke test's blend).
+        if (!frag_patched && !march_patched)
             return d->CreateShaderModule(device, ci, ac, out);
         VkShaderModuleCreateInfo mod = *ci;
         mod.codeSize = code.size() * 4;
@@ -8689,7 +8762,7 @@ VkResult create_shader_module_inner(
     // present-pass module needs no vertex edit and, with the bindless knobs
     // off, no fragment one either, so without this #76's patch would be
     // computed and thrown away.
-    if (vert_patched || frag_patched || hudless_patched) {
+    if (vert_patched || frag_patched || hudless_patched || march_patched) {
         VkShaderModuleCreateInfo mod = *ci;
         mod.codeSize = code.size() * 4;
         mod.pCode = code.data();
@@ -8702,7 +8775,7 @@ VkResult create_shader_module_inner(
             // still has to sample per view.
             VkShaderModule orig = VK_NULL_HANDLE;
             VkShaderModuleCreateInfo oci = *ci;
-            if (frag_patched || hudless_patched) {
+            if (frag_patched || hudless_patched || march_patched) {
                 oci.codeSize = frag_only.size() * 4;
                 oci.pCode = frag_only.data();
             }
@@ -8728,7 +8801,7 @@ VkResult create_shader_module_inner(
             // nothing that used to get a canvas loses one.
             if (have_canvas && !x4vr::spv::is_procedural_fullscreen(code)) {
                 std::vector<uint32_t> cv;
-                if (frag_patched || hudless_patched) {
+                if (frag_patched || hudless_patched || march_patched) {
                     cv = frag_only;
                 } else {
                     cv.resize(ci->codeSize / 4);
@@ -8971,6 +9044,47 @@ std::vector<uint32_t> fog_volume_module(const VkShaderModuleCreateInfo *ci) {
     if (!memmem(ci->pCode, ci->codeSize, kName, sizeof kName - 1))
         return code;
     std::vector<uint32_t> x4(ci->pCode, ci->pCode + ci->codeSize / 4);
+    tl_fog_march = false;
+    if (fog_march_on()) {
+        x4vr::spv::VolumeWalkReport wr;
+        if (!x4vr::spv::is_x4_volume_walk(x4, &wr)) {
+            if (strstr(wr.why, "offsets") || strstr(wr.why, "S_output_rt_idx is not") ||
+                strstr(wr.why, "media"))
+                if (++g_fog_vol_refused <= 3)
+                    X4VR_LOG("fog march: a module like X4's volume_walk (%zu bytes) REFUSED: "
+                             "%s — X4's own stays", (size_t)ci->codeSize, wr.why);
+            return code;
+        }
+        if (!g_march_ready.load() || !pose_active()) {
+            if (++g_fog_vol_refused <= 3)
+                X4VR_LOG("fog march: X4's volume_walk (%zu bytes) left as X4's — %s",
+                         (size_t)ci->codeSize,
+                         !pose_active() ? "the pose channel is off" : "our objects weren't made");
+            return code;
+        }
+        code.assign(x4vr::kFogMarchComp,
+                    x4vr::kFogMarchComp + sizeof x4vr::kFogMarchComp / sizeof(uint32_t));
+        // Its block, volume and noise: written at set 31, moved to the channel's set.
+        if (x4vr::spv::retarget_descriptor_set(code, 31, pose_set_index()) != 3) {
+            if (++g_fog_vol_refused <= 3)
+                X4VR_LOG("fog march: our march has not three variables at set 31 to move to "
+                         "set %u — X4's own stays (a build fault)", pose_set_index());
+            code.clear();
+            return code;
+        }
+        tl_fog_vol = true;
+        tl_fog_march = true;
+        if (++g_march_modules <= 3)
+            X4VR_LOG("fog march: X4's volume_walk for %d medium(s) (%zu bytes) replaced by our "
+                     "march — one ray per pixel of %ux%u across X4's field, %u depths, wisps "
+                     "no thinner than 3 of its pixels, steps on world planes, empty space "
+                     "skipped where no cloud can be; X4's own walk kept for the vanilla "
+                     "phase%s — DIAGNOSTIC",
+                     wr.media, (size_t)ci->codeSize, x4vr::FogMarch::kW, x4vr::FogMarch::kH,
+                     x4vr::FogMarch::kK,
+                     fog_ab() ? "; phases V, A and B by recentre (X4VR_FOG_AB)" : "");
+        return code;
+    }
     if (fog_smoke_on()) {
         x4vr::spv::VolumeWalkReport wr;
         if (!x4vr::spv::is_x4_volume_walk(x4, &wr)) {
@@ -9756,6 +9870,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     }
     count_module_stage(ci);
     bool frag_patched = false;
+    tl_march_blend = false;
     // X4's FSR pass, created with per-eye table access (take 380); X4's froxel fog
     // pass, with its fog blobs turned to the ship (after take 466).
     std::vector<uint32_t> fsr_code = fsr_patch_module(ci);
@@ -9777,9 +9892,28 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         std::lock_guard<std::mutex> lock(g_fsr_mu);
         g_fsr_modules.insert(*out);
     }
-    if (r == VK_SUCCESS && is_fog_vol) {
+    const bool is_march = is_fog_vol && tl_fog_march;
+    if (r == VK_SUCCESS && is_fog_vol && !is_march) {
         std::lock_guard<std::mutex> lock(g_fog_probe_mu);
         (fog_smoke_on() ? g_fog_walk_mods : g_fog_vol_mods).insert(*out);
+    }
+    if (r == VK_SUCCESS && tl_march_blend) {
+        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        g_march_blend_mods.insert(*out);
+    }
+    if (r == VK_SUCCESS && is_march) {
+        // X4's own walk too, for the vanilla phase: its bytes as X4 gave them.
+        DeviceData *dd;
+        {
+            std::lock_guard<std::mutex> lock(g_mu);
+            dd = &g_devices.at(dispatch_key(device));
+        }
+        VkShaderModule x4mod = VK_NULL_HANDLE;
+        const bool own = dd->CreateShaderModule(device, ci, ac, &x4mod) == VK_SUCCESS;
+        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        g_march_mods.insert(*out);
+        if (own)
+            g_march_x4mod[*out] = x4mod;
     }
     // X4's bytes, not ours: the handle is whatever the game will bind, but the
     // code written out is what it supplied. A dump that quietly contained our
@@ -10118,16 +10252,34 @@ bool pose_init(DeviceData *d, VkDevice dev) {
         return false;
     }
 
-    VkDescriptorSetLayoutBinding b{};
-    b.binding = kPoseBinding;
-    b.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    b.descriptorCount = 1;
-    b.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
-                   VK_SHADER_STAGE_COMPUTE_BIT;
+    // The march's objects (X4VR_FOG_PROBE=march): made with the channel and carried by
+    // its sets at bindings 1-3, or the sets carry the block alone.
+    bool march = false;
+    if (fog_march_on()) {
+        std::string why = "its entry points weren't all found";
+        march = g_march.configured() && g_march.create(&why);
+        if (!march) {
+            g_march_why = why;
+            X4VR_LOG("fog march: OFF — its objects weren't made: %s. X4's own fog stays",
+                     why.c_str());
+        }
+    }
+    VkDescriptorSetLayoutBinding bs[4]{};
+    bs[0].binding = kPoseBinding;
+    bs[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    bs[0].descriptorCount = 1;
+    bs[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
+                       VK_SHADER_STAGE_COMPUTE_BIT;
+    bs[1] = {x4vr::FogMarch::kBindStorage, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1,
+             VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    bs[2] = {x4vr::FogMarch::kBindVolume, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+             VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    bs[3] = {x4vr::FogMarch::kBindNoise, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+             VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     VkDescriptorSetLayoutCreateInfo lci{};
     lci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    lci.bindingCount = 1;
-    lci.pBindings = &b;
+    lci.bindingCount = march ? 4 : 1;
+    lci.pBindings = bs;
     if (d->CreateDescriptorSetLayout(dev, &lci, nullptr, &g_pose.dsl) !=
         VK_SUCCESS)
         return false;
@@ -10137,14 +10289,15 @@ bool pose_init(DeviceData *d, VkDevice dev) {
         VK_SUCCESS)
         return false;
 
-    VkDescriptorPoolSize ps{};
-    ps.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    ps.descriptorCount = kPoseRegions;
+    const VkDescriptorPoolSize ps[3] = {
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kPoseRegions},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kPoseRegions},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2 * kPoseRegions}};
     VkDescriptorPoolCreateInfo pci{};
     pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pci.maxSets = kPoseRegions;
-    pci.poolSizeCount = 1;
-    pci.pPoolSizes = &ps;
+    pci.poolSizeCount = march ? 3 : 1;
+    pci.pPoolSizes = ps;
     if (d->CreateDescriptorPool(dev, &pci, nullptr, &g_pose.pool) != VK_SUCCESS)
         return false;
 
@@ -10207,6 +10360,19 @@ bool pose_init(DeviceData *d, VkDevice dev) {
         w[i].pBufferInfo = &dbi[i];
     }
     d->UpdateDescriptorSets(dev, kPoseRegions, w.data(), 0, nullptr);
+    if (march) {
+        for (uint32_t i = 0; i < kPoseRegions; i++)
+            g_march.write_set(g_pose.set[i]);
+        // The blend reads ours from the first frame (fog2.y), once the setup is in.
+        g_pose.value.fog2[1] = 1.f;
+        g_pose.frame_value.fog2[1] = 1.f;
+        g_march_ready = true;
+        X4VR_LOG("fog march: our volume (%ux%ux%u RGBA16F) and noise (%u^3 RGBA8) made, "
+                 "%.1f MB, in the pose block's sets at bindings %u-%u",
+                 x4vr::FogMarch::kW, x4vr::FogMarch::kH, x4vr::FogMarch::kK,
+                 x4vr::FogMarch::kNoise, (double)g_march.bytes() / 1048576.0,
+                 x4vr::FogMarch::kBindStorage, x4vr::FogMarch::kBindNoise);
+    }
     // X4VR_POSE_TEST_DX exists so the channel can be PROVEN, not just built.
     // Identity is indistinguishable from a channel that never arrives -- the
     // frame looks right either way -- so the acceptance test needs a value
@@ -10409,6 +10575,26 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             const int fa = (int)((phase + fdraw) % 3u);
             g_fog_arm.store(fa, std::memory_order_relaxed);
             const bool fix = fog_cards_fix();
+            if (fog_march_on()) {
+                // V: X4's own fog (its walk, its grid) and cards; A and B: our march, the
+                // cards off, wisps down to 3 (A) or 1.5 (B) low-res pixels.
+                g_pose.value.fog[0] = fa == 0 ? 0.f : 1.f;
+                g_pose.value.fog[1] = 1.f;
+                g_pose.value.fog[2] = 1.f;
+                g_pose.value.fog[3] = fa == 2 ? kMarchSharper : 1.f;
+                g_pose.value.fog2[0] = 0.f;
+                g_pose.value.fog2[1] = fa == 0 ? 0.f : 1.f;
+                static uint64_t msaid = ~0ull;
+                if (msaid != phase) {
+                    msaid = phase;
+                    X4VR_LOG("fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)",
+                             (unsigned long long)phase,
+                             fa == 0 ? "V, X4's own fog and cards"
+                             : fa == 1 ? "A, our march, wisps no thinner than 3 pixels, no cards"
+                                       : "B, our march, wisps no thinner than 1.5 pixels, no "
+                                         "cards");
+                }
+            } else {
             g_pose.value.fog[0] = fa == 0 || (fix && fa == 1) ? 0.f : 1.f;
             g_pose.value.fog[1] = 1.f;
             g_pose.value.fog[2] = 1.f;
@@ -10434,6 +10620,7 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                              (fa == 2 ? kFogSharper : 1.f) * fog_smoke_params()[3],
                              (fa == 2 ? kFogSharper * kFogSharper : 1.f) * fog_smoke_params()[2]);
             }
+            } // not the march
         }
         x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face, arm == 4);
         // K only in flight (X4's camera angles valid): a start menu stays a menu.
@@ -11019,6 +11206,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
                 any = any || g_fog_vol_mods.count(ci[i].stage.module) ||
                       g_fog_walk_mods.count(ci[i].stage.module);
         }
+        {
+            std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+            for (uint32_t i = 0; i < count; i++)
+                if (g_march_mods.count(ci[i].stage.module))
+                    walk_at.push_back(i); // the layout check below covers ours too
+        }
         if (any) {
             fsubs.assign(ci, ci + count);
             std::lock_guard<std::mutex> lock(g_fog_probe_mu);
@@ -11073,8 +11266,46 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
         std::lock_guard<std::mutex> lock(g_fog_probe_mu);
         for (uint32_t i = 0; i < count; i++)
             if (out[i] != VK_NULL_HANDLE && (g_fog_vol_mods.count(ci[i].stage.module) ||
-                                             g_fog_walk_mods.count(ci[i].stage.module)))
+                                             g_fog_walk_mods.count(ci[i].stage.module) ||
+                                             g_march_mods.count(ci[i].stage.module)))
                 g_fog_probe_pipes.insert(out[i]);
+    }
+    // The march: X4's own walk pipeline beside each of ours, with the same (extended)
+    // layout and X4's own specialisation, for the vanilla phase.
+    if (r == VK_SUCCESS && fog_march_on()) {
+        for (uint32_t i = 0; i < count; i++) {
+            VkShaderModule x4mod = VK_NULL_HANDLE;
+            {
+                std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+                auto m = g_march_x4mod.find(ci[i].stage.module);
+                if (out[i] == VK_NULL_HANDLE || m == g_march_x4mod.end())
+                    continue;
+                x4mod = m->second;
+            }
+            VkComputePipelineCreateInfo own = ci_app[i];
+            own.stage.module = x4mod;
+            own.layout = ci[i].layout;
+            own.basePipelineHandle = VK_NULL_HANDLE;
+            own.basePipelineIndex = -1;
+            own.flags &= ~(VkPipelineCreateFlags)VK_PIPELINE_CREATE_DERIVATIVE_BIT;
+            VkPipeline x4pipe = VK_NULL_HANDLE;
+            if (d->CreateComputePipelines(device, cache, 1, &own, ac, &x4pipe) != VK_SUCCESS) {
+                if (++g_march_x4pipe_failed <= 3)
+                    X4VR_LOG("fog march: X4's own walk pipeline could not be made beside ours — "
+                             "the vanilla phase keeps our march");
+                continue;
+            }
+            g_march_x4pipes++;
+            {
+                std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+                g_march_x4pipe[out[i]] = x4pipe;
+                g_fog_probe_pipes.insert(x4pipe);
+            }
+            if (pose_active()) {
+                std::lock_guard<std::mutex> lock(g_pose.mu);
+                g_pose.pipe_layout[x4pipe] = ci[i].layout;
+            }
+        }
     }
     if (r != VK_SUCCESS || !g_mv_inventory || !g_active)
         return r;
@@ -11282,6 +11513,26 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatch(VkCommandBuffer cb, uint32_t x,
     }
     note_dispatch(cb);
     complog_dispatch(cb, x, y, z, "direct");
+    if (fog_march_on()) {
+        int march = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+            auto m = g_march_cb.find(cb);
+            march = m == g_march_cb.end() ? 0 : m->second;
+        }
+        if (march == 1) {
+            // Our march: its own size, between barriers for its volume.
+            g_march.barrier_before(cb);
+            d->CmdDispatch(cb, (x4vr::FogMarch::kW + 7) / 8, (x4vr::FogMarch::kH + 7) / 8, 1);
+            g_march.barrier_after(cb);
+            g_march_dispatches++;
+            if (fog_probe_on())
+                fog_probe_dispatch(cb, x, y, z);
+            return;
+        }
+        if (march == 2)
+            g_march_x4_dispatches++;
+    }
     d->CmdDispatch(cb, x, y, fsr_dispatch_z(cb, x, y, z));
     if (fog_probe_on())
         fog_probe_dispatch(cb, x, y, z);
@@ -11726,6 +11977,23 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         X4VR_LOG("unsheared pipeline: binding the no-shear twin (shadow + UI "
                  "exclusion active) — vertex edit dropped, fragment edits "
                  "KEPT: bindless offset and per-eye M_invprojection");
+    }
+    if (fog_march_on()) {
+        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        for (uint32_t i = 0; i < count; i++)
+            for (uint32_t k = 0; k < ci_app[i].stageCount; k++)
+                if (g_march_blend_mods.count(ci_app[i].pStages[k].module)) {
+                    VkShaderModule used = VK_NULL_HANDLE;
+                    for (uint32_t j = 0; j < infos[i].stageCount; j++)
+                        if (infos[i].pStages[j].stage == VK_SHADER_STAGE_FRAGMENT_BIT)
+                            used = infos[i].pStages[j].module;
+                    static uint32_t said = 0;
+                    if (said++ < 4)
+                        X4VR_LOG("fog march: a pipeline with X4's fog blend gets fragment module "
+                                 "%s (the patched one %s)",
+                                 used == ci_app[i].pStages[k].module ? "as made" : "SWAPPED",
+                                 g_march_blend_mods.count(used) ? "or its twin" : "NOT");
+                }
     }
     VkResult r =
         d->CreateGraphicsPipelines(device, cache, count, infos.data(), ac, out);
@@ -12987,6 +13255,42 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
         for (uint32_t i = 0; i < submitCount; i++)
             for (uint32_t j = 0; j < submits[i].commandBufferCount; j++)
                 pose_publish(submits[i].pCommandBuffers[j]);
+    // The march's one-time setup (its images to GENERAL, the noise uploaded, the volume
+    // cleared), in front of X4's first submission on a graphics queue after it exists --
+    // before anything of X4's can sample the volume.
+    std::vector<VkSubmitInfo> msub;
+    std::vector<VkCommandBuffer> mcbs;
+    if (g_march_ready.load() && !g_march_setup_sent.load()) {
+        uint32_t fam = 0;
+        if (queue_family_of(queue, fam) && fam < 32 &&
+            ((g_march_graphics_families.load() >> fam) & 1u) &&
+            !g_march_setup_sent.exchange(true)) {
+            std::string why;
+            const VkCommandBuffer scb = g_march.setup_cb(fam, &why);
+            if (scb) {
+                VkSubmitInfo one{};
+                one.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                if (submitCount)
+                    msub.assign(submits, submits + submitCount);
+                else
+                    msub.push_back(one);
+                mcbs.push_back(scb);
+                mcbs.insert(mcbs.end(), msub[0].pCommandBuffers,
+                            msub[0].pCommandBuffers + msub[0].commandBufferCount);
+                msub[0].commandBufferCount = (uint32_t)mcbs.size();
+                msub[0].pCommandBuffers = mcbs.data();
+                submits = msub.data();
+                submitCount = (uint32_t)msub.size();
+                X4VR_LOG("fog march: its one-time setup goes in front of X4's submission "
+                         "(queue family %u)",
+                         fam);
+            } else {
+                X4VR_LOG("fog march: WARNING — its one-time setup could not be recorded "
+                         "(%s): X4's blend reads an uninitialised volume",
+                         why.c_str());
+            }
+        }
+    }
     // #36: the runtime shares this queue on any device with one graphics
     // queue. Uncontended when it does not, and inert until the XR thread
     // starts submitting.
@@ -15869,6 +16173,22 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_BeginCommandBuffer(
 VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
                                                 VkPipelineBindPoint bp,
                                                 VkPipeline p) {
+    // The march (after take 486): our walk, or X4's own in the vanilla phase -- swapped
+    // here, before anything below sees which pipeline this is.
+    if (bp == VK_PIPELINE_BIND_POINT_COMPUTE && fog_march_on()) {
+        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        auto m = g_march_x4pipe.find(p);
+        int which = 0;
+        if (m != g_march_x4pipe.end()) {
+            const bool vanilla = fog_ab() && g_fog_arm.load(std::memory_order_relaxed) == 0;
+            which = vanilla ? 2 : 1;
+            if (vanilla)
+                p = m->second;
+        } else if (g_march_mods.size() && g_fog_probe_pipes.count(p)) {
+            which = 1; // ours, with X4's own pipeline not made
+        }
+        g_march_cb[cb] = which;
+    }
     if (fog_probe_on()) {
         std::lock_guard<std::mutex> lock(g_fog_probe_mu);
         if (bp == VK_PIPELINE_BIND_POINT_COMPUTE)
@@ -21355,6 +21675,28 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
         if (auto gpmp = (PFN_vkGetPhysicalDeviceMemoryProperties)gipa(
                 inst, "vkGetPhysicalDeviceMemoryProperties"))
             gpmp(phys, &d.memprops);
+        // The march's objects (X4VR_FOG_PROBE=march): its entry points, and which queue
+        // families can take its one-time setup.
+        if (g_active && fog_march_on()) {
+            x4vr::MarchFns mf;
+#define MARCH_RESOLVE(name) mf.name = (PFN_vk##name)gdpa(*out, "vk" #name);
+            X4VR_MARCH_FNS(MARCH_RESOLVE)
+#undef MARCH_RESOLVE
+            g_march.configure(*out, mf, d.memprops);
+            uint32_t nq = 0, gm = 0;
+            if (auto gqf = (PFN_vkGetPhysicalDeviceQueueFamilyProperties)gipa(
+                    inst, "vkGetPhysicalDeviceQueueFamilyProperties")) {
+                gqf(phys, &nq, nullptr);
+                std::vector<VkQueueFamilyProperties> qp(nq);
+                gqf(phys, &nq, qp.data());
+                for (uint32_t i = 0; i < nq && i < 32; i++)
+                    if (qp[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+                        gm |= 1u << i;
+            }
+            g_march_graphics_families = gm;
+            if (!g_march.configured())
+                X4VR_LOG("fog march: not every entry point it needs was found");
+        }
         if (g_active && g_mv)
             X4VR_LOG("mv: X4's memory block on this card is %.1f MiB: what it would need "
                      "more for, doubled, keeps one layer",

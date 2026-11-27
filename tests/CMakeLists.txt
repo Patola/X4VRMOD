@@ -14,6 +14,8 @@ target_link_libraries(x4vr_test_multiview_pool PRIVATE Vulkan::Vulkan)
 
 add_executable(x4vr_test_multiview_render multiview_render.cpp)
 target_link_libraries(x4vr_test_multiview_render PRIVATE Vulkan::Vulkan)
+add_executable(x4vr_test_march_smoke march_smoke.cpp)
+target_link_libraries(x4vr_test_march_smoke PRIVATE Vulkan::Vulkan)
 
 # The shader patches, exercised without a GPU. Needs no Vulkan library at all --
 # it only ever rewrites words in a buffer, which is the point.
@@ -152,6 +154,8 @@ configure_file(sample_camera_block.vert.spv sample_camera_block.vert.spv COPYONL
 configure_file(sample_billboard.vert.spv sample_billboard.vert.spv COPYONLY)
 configure_file(sample_billboard_fade.vert.spv sample_billboard_fade.vert.spv COPYONLY)
 configure_file(sample_fade_block.vert.spv sample_fade_block.vert.spv COPYONLY)
+configure_file(sample_fog_apply.frag.spv sample_fog_apply.frag.spv COPYONLY)
+configure_file(sample_tonemap_lut.frag.spv sample_tonemap_lut.frag.spv COPYONLY)
 configure_file(sample_fog_points.vert.spv sample_fog_points.vert.spv COPYONLY)
 configure_file(sample_fog_probe.comp.spv sample_fog_probe.comp.spv COPYONLY)
 configure_file(sample_volume_walk.comp.spv sample_volume_walk.comp.spv COPYONLY)

@@ -2370,6 +2370,10 @@ for f in '"fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(
          '"fog probe: X4'"'"'s grid is %.0fx%.0fx%.0f (was %.0fx%.0fx%.0f)"' \
          '"fog smoke %s: frame time by phase — %s"' \
          '"fog smoke %s: its knobs as last published — %s density %.2f, glow %.2f, "' \
+         '"fog march %s: %llu dispatch(es) of our march (%ux%u rays, %u depths), %llu "' \
+         '"fog march: X4'"'"'s volume_walk for %d medium(s) (%zu bytes) replaced by our "' \
+         '"fog march: a pipeline with X4'"'"'s fog blend gets fragment module "' \
+         '"fog march: its one-time setup goes in front of X4'"'"'s submission "' \
          '"fog probe %s: where each blend'"'"'s volume was built — its own command "' \
          '"fog smoke: WARNING — the walk'"'"'s pipeline layout has no set of the "' \
          '"fog smoke: X4'"'"'s volume_walk (%zu bytes) left as X4'"'"'s — the smoke "'; do
@@ -2422,6 +2426,34 @@ want "fog smoke: A/B asked, no phase -> FAIL" /tmp/census-fs-ab-none.log "FAIL| 
 { abase; printf '%s\n' "$fsp0" '[  99800.040] layer   fog smoke: WARNING — the walk'"'"'s pipeline layout has no set of the layer'"'"'s (not extended): its block is unbound'; } > /tmp/census-fs-ab-unbound.log
 want "fog smoke: walk layout not extended -> FAIL" /tmp/census-fs-ab-unbound.log "FAIL|  - " "without the layer's set"
 absent "fog smoke: no A/B asked -> no phase FAIL" /tmp/census-fs-ok.log "FAIL .*no phase was drawn"
+# After take 486: the march -- its walk, its blend patch, its objects and setup, its
+# dispatches, and X4's own walk in the vanilla phase.
+mrep='[  99800.030] layer   fog march: X4'"'"'s volume_walk for 1 medium(s) (14548 bytes) replaced by our march — one ray per pixel of 704x704'
+mfin() { echo "[  99900.050] layer   fog march final: $1 dispatch(es) of our march (704x704 rays, 16 depths), $2 of X4's own walk (the vanilla phase); X4's fog blend patched in $3 module(s), 0 refused; X4's own walk pipelines 1 made beside ours, 0 failed; our objects $4; setup $5 — DIAGNOSTIC"; }
+mpipe='[  99800.040] layer   fog march: a pipeline with X4'"'"'s fog blend gets fragment module as made (the patched one or its twin)'
+mpipe_no='[  99800.040] layer   fog march: a pipeline with X4'"'"'s fog blend gets fragment module SWAPPED (the patched one NOT)'
+mv='[  99810.100] layer   fog smoke: phase #1 — V, X4'"'"'s own fog and cards (X4VR_FOG_AB=recentre)'
+ma='[  99820.100] layer   fog smoke: phase #2 — A, our march, wisps no thinner than 3 pixels, no cards (X4VR_FOG_AB=recentre)'
+mbase() { sed 's/env: run = /env: run = X4VR_FOG_PROBE=march X4VR_FOG_AB=recentre /' "$BASE"; printf '%s\n' "$farm"; }
+{ mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma" "$(mfin 5000 4000 3 made sent)"; } > /tmp/census-march-ok.log
+want "fog march: counts said" /tmp/census-march-ok.log fogmarch "5000 march dispatch(es) (704x704 rays, 16 depths), 4000 of X4's own walk"
+absent "fog march: healthy -> no FAIL" /tmp/census-march-ok.log "FAIL .*fog march"
+{ mbase; printf '%s\n' "$mpipe" "$mv" "$ma" "$(mfin 5000 4000 3 made sent)"; } > /tmp/census-march-norep.log
+want "fog march: walk not replaced -> FAIL" /tmp/census-march-norep.log "FAIL|  - " "volume_walk was not replaced"
+{ mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma" "$(mfin 5000 4000 0 made sent)"; } > /tmp/census-march-nopatch.log
+want "fog march: blend never patched -> FAIL" /tmp/census-march-nopatch.log "FAIL|  - " "blend was never patched"
+{ mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma" "$(mfin 5000 4000 3 made 'NOT sent')"; } > /tmp/census-march-nosetup.log
+want "fog march: setup not sent -> FAIL" /tmp/census-march-nosetup.log "FAIL|  - " "one-time setup was never submitted"
+{ mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma" "$(mfin 0 4000 3 made sent)"; } > /tmp/census-march-nodisp.log
+want "fog march: never dispatched -> FAIL" /tmp/census-march-nodisp.log "FAIL|  - " "our march was never dispatched"
+{ mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma" "$(mfin 5000 0 3 made sent)"; } > /tmp/census-march-nov.log
+want "fog march: V without X4's walk -> FAIL" /tmp/census-march-nov.log "FAIL|  - " "vanilla phase never ran X4's own walk"
+{ mbase; printf '%s\n' "$mrep" "$mpipe_no" "$mv" "$ma" "$(mfin 5000 4000 3 made sent)"; } > /tmp/census-march-swap.log
+want "fog march: unpatched blend drawn -> FAIL" /tmp/census-march-swap.log "FAIL|  - " "draws an unpatched module"
+{ mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma"; } > /tmp/census-march-silent.log
+want "fog march: no final line -> FAIL" /tmp/census-march-silent.log "FAIL|  - " "printed no fog march line"
+absent "fog march: not asked -> silent" "$BASE" fogmarch
+
 # After take 485: the smoke installed with density 0 (no A/B) -> FAIL; density 1 -> none.
 fskn0='[  99900.040] layer   fog smoke final: its knobs as last published —  density 0.00, glow 0.00, size 0.00, sharpness 0.00, ends at 0 m (0: 2500)'
 fskn1='[  99900.040] layer   fog smoke final: its knobs as last published —  density 1.00, glow 1.00, size 1.00, sharpness 1.00, ends at 0 m (0: 2500)'

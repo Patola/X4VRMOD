@@ -35,7 +35,7 @@ for t in "$BUILD"/tests/x4vr_test_*; do
         x4vr_test_cursor_render | x4vr_test_menu_warp_render | x4vr_test_sbs_menu_warp | \
             x4vr_test_exit_teardown | x4vr_test_multiview_* | \
             x4vr_test_readback_speed | x4vr_test_spirv_patch | x4vr_test_wgate_patch | \
-            x4vr_test_xr_probe | x4vr_test_xr_bundled) continue ;;
+            x4vr_test_xr_probe | x4vr_test_xr_bundled | x4vr_test_march_smoke) continue ;;
     esac
     run "${t##*/}" timeout 120 "$t"
 done
@@ -60,7 +60,7 @@ lvp=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -1)
 if [ -n "$lvp" ]; then
     export VK_DRIVER_FILES="$lvp" VK_ICD_FILENAMES="$lvp"
     for s in multiview-enable multiview-double multiview-render cursor menu-warp wgate \
-        dump-format no-exit-destructors offaxis-bringup; do
+        dump-format no-exit-destructors offaxis-bringup march-smoke; do
         run "$s (lavapipe)" timeout 600 bash "tests/run-$s.sh"
     done
 else

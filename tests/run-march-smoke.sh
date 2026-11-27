@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
+#
+# The march through the layer (after take 486): tests/march_smoke.cpp plays X4 -- its fog
+# walk dispatched, its fog blend drawn, in one submission -- with X4VR_FOG_PROBE=march, and
+# the validation layer below ours when it is installed. Wanted: the layer swapped in its
+# march, dispatched it at its own size, patched the blend, put its one-time setup first;
+# the blended picture finite and not X4's grid alone; and no validation error.
+# Control: without X4VR_FOG_PROBE=march the picture is X4's grid alone (OURS=0).
+set -uo pipefail
+ROOT="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BUILD="${X4VR_BUILD:-$ROOT/build}"
+BIN="$BUILD/tests/x4vr_test_march_smoke"
+[[ -x "$BIN" ]] || { echo "build first: cmake --build $BUILD" >&2; exit 1; }
+ARGS=("$BUILD/tests/sample_volume_walk.comp.spv" "$BUILD/tests/fullscreen.vert.spv" "$BUILD/tests/sample_fog_apply.frag.spv")
+LAYERS=VK_LAYER_X4VR_core
+VAL=0
+if ls /usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json >/dev/null 2>&1; then
+    LAYERS=VK_LAYER_X4VR_core:VK_LAYER_KHRONOS_validation
+    VAL=1
+fi
+LOG="$(mktemp)"
+fails=0
+out=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS="$LAYERS" X4VR_POSE=1 X4VR_STEREO=1 \
+      X4VR_FOG_PROBE=march X4VR_LOG="$LOG" "$BIN" "${ARGS[@]}" 2>&1)
+dev=$(sed -n 's/^DEVICE=//p' <<<"$out")
+check() { # label, condition-command
+    if eval "$2"; then printf 'ok   %-38s %s\n' "$1" "$dev"; else
+        printf 'FAIL %-38s %s\n' "$1" "$dev"; fails=$((fails + 1)); fi
+}
+check "march: the walk replaced" "grep -q 'replaced by our march' '$LOG'"
+check "march: the blend patched" "grep -q \"now reads our march's volume\" '$LOG'"
+check "march: setup in front" "grep -q 'one-time setup goes in front' '$LOG'"
+check "march: no setup warning" "! grep -q 'fog march: WARNING' '$LOG'"
+check "march: picture finite" "grep -q '^FINITE=1' <<<\"\$out\""
+check "march: the blend reads ours" "grep -q '^OURS=1' <<<\"\$out\""
+if [[ $VAL == 1 ]]; then
+    check "march: no validation error" "! grep -qiE 'Validation Error|VUID-' <<<\"\$out\""
+fi
+grep -iE 'Validation Error' <<<"$out" | head -5 | sed 's/^/       | /'
+# Control: X4's grid alone.
+out0=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS=VK_LAYER_X4VR_core X4VR_POSE=1 X4VR_STEREO=1 \
+       X4VR_LOG= "$BIN" "${ARGS[@]}" 2>&1)
+check "march off: X4's grid alone" "grep -q '^OURS=0' <<<\"\$out0\""
+grep -E '^(MEAN|FAIL)' <<<"$out0" | sed 's/^/       off | /'
+sed -n 's/^\(MEAN\|SPREAD\)=/       \1=/p' <<<"$out"
+rm -f "$LOG"
+exit $((fails > 0))

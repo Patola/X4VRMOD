@@ -7258,6 +7258,199 @@ inline bool is_nebula_fade(float near_start, float far_end) {
     return std::fabs(near_start - 500.f) < 1.f && far_end > 2800.f && far_end < 3100.f;
 }
 
+// **X4's fog blend, reading our march** (after take 486: X4's grid, about a degree a
+// column, shows as a grid when anything in it is sharp; layer/fog_march.comp marches our
+// own rays at a quarter of the screen's resolution into a volume of ours). X4's blend
+// (volume_apply) looks its grid up as `textureLod(sampler3D(S_sampler3D[39],
+// S_sampler[9]), uvw, 0)` -- 39 its froxel volume, uvw from the pixel's screen position
+// and depth by X4's own mapping -- and composites `colour * v.a + v.rgb`. This adds a
+// second lookup with the same coordinates in our volume (a combined image sampler at
+// (pose_set, march_binding)) and makes the result X4's + (ours - X4's) * fog2.y, fog2.y
+// read from the layer's block at (pose_set, pose_binding), offset 304: 0 X4's own (the
+// A/B's vanilla phase), 1 ours. Every later use of X4's result sees the blend; nothing
+// else changes.
+//
+// Only X4's blend: the module must name U_pass (the blend's dynamic switch) and sample a
+// 3D image loaded from a constant element 39 of an image array -- X4's tonemap also
+// samples a 3D image after a subpass input (its colour table, element 51), which the
+// older fog recogniser (patch_fragment_disable_fog) took too. Exactly one such sample, or
+// nothing is changed.
+struct FogApplyReport {
+    const char *why = "";
+};
+inline bool patch_fog_apply_march(std::vector<uint32_t> &code, uint32_t pose_set,
+                                  uint32_t pose_binding, uint32_t march_binding,
+                                  FogApplyReport *rep = nullptr) {
+    FogApplyReport local;
+    FogApplyReport &r = rep ? *rep : local;
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return r.why = "not SPIR-V", false;
+    bool has_pass = false;
+    uint32_t t_float = 0, t_v4 = 0, t_int = 0;
+    std::unordered_map<uint32_t, uint32_t> int_const; // id -> value (32-bit int constants)
+    std::unordered_set<uint32_t> img3d, arr3d, ptr_arr3d, var_arr3d;
+    std::unordered_map<uint32_t, uint32_t> chain39, load39, si39; // result -> source
+    std::unordered_map<uint32_t, uint32_t> si_type;                 // OpSampledImage result -> type
+    size_t first_fn = 0, anno_end = 0;
+    bool have_fn = false;
+    for (const Inst &in : insts) {
+        const uint32_t *w = &code[in.start];
+        switch (in.op) {
+        case OpMemberName:
+            if (in.len >= 4 && !strncmp((const char *)(w + 3), "U_pass", (in.len - 3) * 4) &&
+                strlen("U_pass") == strnlen((const char *)(w + 3), (in.len - 3) * 4))
+                has_pass = true;
+            break;
+        case OpDecorate:
+        case OpMemberDecorate:
+            anno_end = in.start + in.len;
+            break;
+        case OpTypeFloat:
+            if (in.len >= 3 && w[2] == 32)
+                t_float = w[1];
+            break;
+        case OpTypeInt:
+            if (in.len >= 4 && w[2] == 32 && w[3] == 1)
+                t_int = w[1];
+            break;
+        case OpTypeVector:
+            if (in.len >= 4 && w[2] == t_float && t_float && w[3] == 4)
+                t_v4 = w[1];
+            break;
+        case OpTypeImage:
+            if (in.len >= 4 && w[3] == 2u) // Dim3D
+                img3d.insert(w[1]);
+            break;
+        case OpTypeArray:
+        case OpTypeRuntimeArray:
+            if (in.len >= 3 && img3d.count(w[2]))
+                arr3d.insert(w[1]);
+            break;
+        case OpTypePointer:
+            if (in.len >= 4 && arr3d.count(w[3]))
+                ptr_arr3d.insert(w[1]);
+            break;
+        case OpConstant:
+            if (in.len >= 4)
+                int_const[w[2]] = w[3];
+            break;
+        case OpVariable:
+            if (in.len >= 4 && ptr_arr3d.count(w[1]))
+                var_arr3d.insert(w[2]);
+            break;
+        case OpFunction:
+            if (!have_fn) {
+                first_fn = in.start;
+                have_fn = true;
+            }
+            break;
+        case OpAccessChain:
+        case 66: // OpInBoundsAccessChain
+            if (in.len == 5 && var_arr3d.count(w[3])) {
+                auto c = int_const.find(w[4]);
+                if (c != int_const.end() && c->second == 39u)
+                    chain39[w[2]] = w[3];
+            }
+            break;
+        case OpLoad:
+            if (in.len >= 4 && chain39.count(w[3]))
+                load39[w[2]] = w[3];
+            break;
+        case OpSampledImage:
+            if (in.len >= 5 && load39.count(w[3])) {
+                si39[w[2]] = w[3];
+                si_type[w[2]] = w[1];
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    if (!has_pass)
+        return r.why = "no U_pass: not X4's fog blend", false;
+    if (!t_float || !t_v4 || !have_fn)
+        return r.why = "no float vec4 or no function", false;
+    size_t target = SIZE_MAX;
+    int found = 0;
+    for (size_t i = 0; i < insts.size(); i++) {
+        const uint32_t *w = &code[insts[i].start];
+        if (insts[i].op == OpImageSampleExplicitLod && insts[i].len >= 5 && si39.count(w[3]) &&
+            w[1] == t_v4) {
+            target = i;
+            found++;
+        }
+    }
+    if (found != 1)
+        return r.why = found ? "more than one sample of element 39" : "no sample of a 3D image at element 39", false;
+    const uint32_t *tw = &code[insts[target].start];
+    const uint32_t t_si = si_type[tw[3]];
+
+    uint32_t bound = code[3];
+    auto new_id = [&bound]() { return bound++; };
+    std::vector<uint32_t> decls, annos;
+    if (!t_int) {
+        t_int = new_id();
+        emit(decls, OpTypeInt, {t_int, 32, 1});
+    }
+    const uint32_t ptr_si = new_id(), var_m = new_id();
+    emit(decls, OpTypePointer, {ptr_si, StorageClassUniformConstant, t_si});
+    emit(decls, OpVariable, {ptr_si, var_m, StorageClassUniformConstant});
+    const uint32_t t_blk = new_id(), ptr_blk = new_id(), ptr_v4 = new_id(), var_p = new_id(),
+                   c0 = new_id();
+    emit(decls, OpTypeStruct, {t_blk, t_v4});
+    emit(decls, OpTypePointer, {ptr_blk, StorageClassUniform, t_blk});
+    emit(decls, OpTypePointer, {ptr_v4, StorageClassUniform, t_v4});
+    emit(decls, OpVariable, {ptr_blk, var_p, StorageClassUniform});
+    emit(decls, OpConstant, {t_int, c0, 0});
+    emit(annos, OpDecorate, {var_m, DecorationDescriptorSet, pose_set});
+    emit(annos, OpDecorate, {var_m, DecorationBinding, march_binding});
+    emit(annos, OpDecorate, {t_blk, DecorationBlock});
+    emit(annos, OpMemberDecorate, {t_blk, 0u, DecorationOffset, x4vr::kPoseFogOffset + 16});
+    emit(annos, OpDecorate, {var_p, DecorationDescriptorSet, pose_set});
+    emit(annos, OpDecorate, {var_p, DecorationBinding, pose_binding});
+
+    std::vector<uint32_t> out(code.begin(), code.begin() + 5);
+    for (size_t i = 0; i < insts.size(); i++) {
+        const Inst &in = insts[i];
+        if (in.start == first_fn)
+            out.insert(out.end(), decls.begin(), decls.end());
+        if (i == target) {
+            const uint32_t *w = &code[in.start];
+            const uint32_t result = w[2], x4 = new_id();
+            // X4's own lookup, under a fresh id.
+            auto emit_words = [&out](uint32_t op, const std::vector<uint32_t> &ws) {
+                out.push_back(((uint32_t)(ws.size() + 1) << 16) | op);
+                out.insert(out.end(), ws.begin(), ws.end());
+            };
+            std::vector<uint32_t> x4s(w + 1, w + in.len);
+            x4s[1] = x4;
+            emit_words(OpImageSampleExplicitLod, x4s);
+            // Ours, with the same coordinate and operands.
+            const uint32_t msi = new_id(), mv = new_id(), pp = new_id(), f2 = new_id(),
+                           k = new_id(), d = new_id(), sc = new_id();
+            emit(out, OpLoad, {t_si, msi, var_m});
+            std::vector<uint32_t> ours(w + 1, w + in.len);
+            ours[1] = mv;
+            ours[2] = msi;
+            emit_words(OpImageSampleExplicitLod, ours);
+            emit(out, OpAccessChain, {ptr_v4, pp, var_p, c0});
+            emit(out, OpLoad, {t_v4, f2, pp});
+            emit(out, OpCompositeExtract, {t_float, k, f2, 1});
+            emit(out, OpFSub, {t_v4, d, mv, x4});
+            emit(out, OpVectorTimesScalar, {t_v4, sc, d, k});
+            emit(out, OpFAdd, {t_v4, result, x4, sc});
+        } else {
+            out.insert(out.end(), code.begin() + in.start, code.begin() + in.start + in.len);
+        }
+        if (in.start + in.len == anno_end)
+            out.insert(out.end(), annos.begin(), annos.end());
+    }
+    out[3] = bound;
+    code.swap(out);
+    return true;
+}
+
 // Our own modules that read the layer's block (layer/fog_walk.comp, after take 480): they
 // are written with `set = from`, a placeholder, and moved here to the set the layer binds
 // its block at, which follows the device (pose_set_index()). Every DescriptorSet
