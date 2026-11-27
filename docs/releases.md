@@ -20,7 +20,13 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
-## Unreleased
+## v1.0.0-rc11 — 2026-11-27 — Eleventh release candidate: nebulae fixed in space
+
+The eleventh release candidate for 1.0. Packages call it `1.0.0~rc11` (Arch: `1.0.0rc11`), which
+installs over rc1 to rc10 as an upgrade and sorts before 1.0.0.
+
+Take the package named for your system: Arch, Ubuntu 24.04, Ubuntu 26.04, Debian 13 or Fedora,
+or the zip for anything else.
 
 * **Nebulae fixed in space.** In the headset, X4's nebula clouds turned with your head: they are
   flat pictures that X4 keeps facing its camera, and in VR the camera follows your head. The mod
@@ -29,9 +35,9 @@ on the remote beside their `take-NNN-name` twins.
   nebula clouds at all (X4's are removed too), for the most speed and the clearest view; Low,
   Medium and High, the mod's clouds, which look the same at all three. To keep X4's own, choose
   **Nebulae: vanilla** in the launcher's Advanced (`X4VR_NEBULA=vanilla`); X4's setting then
-  means what it always has. They take about 0.4 ms
-  of the graphics card's time a frame on an RX 7900 XTX (around 1 ms inside dense clouds); in the
-  tests, frames in nebulae came no slower than with X4's own clouds, which cost more to draw.
+  means what it always has. They take about 0.4 ms of the graphics card's time a frame on an
+  RX 7900 XTX (around 1 ms inside dense clouds); in the tests, frames in nebulae came no slower
+  than with X4's own clouds, which cost more to draw.
 * **The mod asks the VR runtime whether it accepts the mod's field of view (issue #3).** Where a
   runtime refuses it, the frame is now declared with the runtime's own field. Every log also
   records the answer and how the runtime's two eyes stand to each other. Issue #3's double vision

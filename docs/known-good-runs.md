@@ -1453,3 +1453,18 @@ only:** X4's images 2907 MB before the first texture (3235 without the upscaler,
 2310: an upscaler saves about a tenth, not a quarter. The launcher's own reading there was 6409 MB
 free through WiVRn and 5061 through SteamVR, and its warning appeared at 4000 with no upscaler, as
 it should. No save loaded, so the scorer's head-look FAILs don't apply.
+
+**Takes 488-495 (codes ad836dd .. 312074c), the Radeon RX 7900 XTX desktop, SteamVR, 2816, no upscaler:**
+the nebulae fixed in space, our own clouds marched per pixel. 488: "stable in space (not affected by
+headlook), volumetric, strafe works perfectly". 489-493 tuned the look with Patola in V/A/B phases
+(each take's chosen phase became the march's own: extinction 0.0012, the clouds at 0.8 of their
+first size) and fixed the last march's fog left on the screen in fogless space (The Void, 492; 18
+clears in 493). In game, our march takes 0.41-0.44 ms of GPU time at the median (X4's own walk,
+which it replaces, 0.06). **494/495, the release check (312074c), the launcher's defaults and no fog
+knob:** our clouds; X4's Volumetric Fog Off, no clouds at all; Low, Medium and High, our clouds, the
+same at each (X4's grid 117x117x64, 176x176x128, 352x352x128). Through the launcher's Advanced,
+`X4VR_NEBULA=vanilla` X4's own and unset ours, both as expected. PASS.
+
+```
+X4VR_TAKE=495 X4VR_LOG=/tmp/x4vr-take495.log X4VR_H=2816 X4VR_UPSCALE=none build/launcher/x4vrmod run
+```
