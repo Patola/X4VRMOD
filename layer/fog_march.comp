@@ -76,7 +76,8 @@ layout(constant_id = 8) const float kMix = 0.95;       // wisps against the soft
 layout(constant_id = 9) const float kStretch = 1.5;    // wisps drawn out along x
 layout(constant_id = 10) const float kCurl = 3.0;      // how much the wisps curl
 layout(constant_id = 11) const float kFootPx = 3.0;    // no wisp thinner than this many pixels
-layout(constant_id = 12) const float kSigma = 0.00175; // extinction at full density, 1/m (0.003 to 489, 0.005 to 491, 0.0025 to 492: its B chosen)
+layout(constant_id = 12) const float kSigma = 0.0012;  // extinction at full density, 1/m (0.003 to 489, 0.005 to 491,
+                                                       // 0.0025 to 492, 0.00175 to 493: each take's B chosen)
 layout(constant_id = 13) const float kBright = 0.22;   // the glow of an opaque cloud (0.3 to 489)
 layout(constant_id = 14) const float kFar = 2500.0;    // everything fades by here, m
 layout(constant_id = 15) const float kDrift = 3.2;     // the clouds drift, m/s (4 to 491: with their size)

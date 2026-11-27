@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-25 17:27+0100\n"
+"POT-Creation-Date: 2026-11-27 05:38+0100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -884,6 +884,21 @@ msgstr ""
 #: launcher/gui/dialogs.cpp
 #, qt-format
 msgid "the views stay where X4 points them"
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "Nebulae"
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "the mod's own clouds, fixed in space, which drift and change shape"
+msgstr ""
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "X4's own, whose cloud shapes turn with your head"
 msgstr ""
 
 #: launcher/gui/dialogs.cpp

@@ -55,6 +55,16 @@ LAYER1_MIN_RATIO = 0.60
 QUIET_MIN = 10.0
 
 
+
+def march_asked(run):
+    """Our volumetric nebula asked for: X4VR_FOG_PROBE=march, or -- the probe unset -- the
+    player's choice X4VR_NEBULA=volumetric (the launcher's default since rc11)."""
+    run = run or ""
+    if re.search(r"\bX4VR_FOG_PROBE=march\b", run):
+        return True
+    return (not re.search(r"\bX4VR_FOG_PROBE=", run)
+            and bool(re.search(r"\bX4VR_NEBULA=volumetric\b", run)))
+
 def wrap180(d):
     """A yaw difference the short way round. Since take 318 the extension lets
     the cockpit camera turn a full circle and X4 wraps at +-180, so an
@@ -5684,7 +5694,7 @@ def main(path):
         print(f"fogsmoke {ln}")
     # The march (X4VR_FOG_PROBE=march, after take 486): our walk marching one ray per pixel of
     # a quarter-resolution view, X4's blend patched to read it, X4's own walk kept for V.
-    if re.search(r"\bX4VR_FOG_PROBE=march\b", run or ""):
+    if march_asked(run):
         for ln in re.findall(r"fog march: (X4's volume_walk .*replaced by our march.*)$", text, re.M)[:1]:
             print(f"fogmarch {ln[:160]}")
         mfin = re.findall(r"fog march (?:periodic|final|first present): (\d+) dispatch\(es\) of our march "
@@ -5765,7 +5775,7 @@ def main(path):
                      r"haze ([\d.]+)", text)
     if clk:
         print(f"fogsmoke clock {clk[-1][0]} s, haze {clk[-1][1]} (0: the march's own)")
-        if (re.search(r"\bX4VR_FOG_PROBE=march\b", run or "") and "headlook write: ARMED" in text
+        if (march_asked(run) and "headlook write: ARMED" in text
                 and float(clk[-1][0]) == 0.0):
             fails.append("fog march: its clock never ran (0 s at the end): the smoke stood still")
     grids = re.findall(r"fog probe: X4's grid is (\d+x\d+x\d+) \(was", text)

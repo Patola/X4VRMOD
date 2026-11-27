@@ -145,6 +145,7 @@ blocks every frame.
 | The start menu as the whole scene (menu at its size in front, the 3D scene all around) | optional, future — not scheduled | — |
 | The desktop view optional while in the headset (est. 3–5% fps; [DESIGN.md](DESIGN.md#late-features-postponed-not-scheduled)) | late feature, postponed | — |
 | Volumetric nebula in stereo (Matrix #79B, CEO's Doubt) | done | **`v0.9.1`** |
+| Nebulae fixed in space: the mod's own clouds in depth, as X4's turned with the head (`X4VR_NEBULA`) | done | **`v1.0.0-rc11`** |
 | The numpad orbits the external (F2) and target (F3) views again | done | **`v0.9.2`** |
 | F2/F3/F4 as the whole scene: the head turns X4's camera inside them | done | **`v0.9.3`** |
 | Frame pacing at 2816² per eye (a 90 Hz display is starved) | open | — |

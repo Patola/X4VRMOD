@@ -352,6 +352,10 @@ const EnvChoice kChoices[] = {
     {"X4VR_HEADLOOK_EXTERNAL", N_("Head tracking in the external views (F2, F3, F4)"), true,
      {{"1", N_("turning your head turns the view")},
       {"0", N_("the views stay where X4 points them")}}},
+    // After take 493 (Patola): our clouds by default, X4's own one choice away.
+    {"X4VR_NEBULA", N_("Nebulae"), false,
+     {{"volumetric", N_("the mod's own clouds, fixed in space, which drift and change shape")},
+      {"vanilla", N_("X4's own, whose cloud shapes turn with your head")}}},
 };
 
 // Which of a choice's values a line's value is, as the mod would read it.

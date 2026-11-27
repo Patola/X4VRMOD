@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: x4vrmod\n"
 "Report-Msgid-Bugs-To: https://github.com/Patola/X4VRMOD/issues\n"
-"POT-Creation-Date: 2026-11-25 17:27+0100\n"
+"POT-Creation-Date: 2026-11-27 05:38+0100\n"
 "PO-Revision-Date: 2026-11-08 17:00+0100\n"
 "Last-Translator: first draft, to be reviewed\n"
 "Language-Team: none\n"
@@ -854,6 +854,11 @@ msgstr "Création du rapport..."
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
+msgid "Nebulae"
+msgstr "Nébuleuses"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
 msgid "No VR settings were found."
 msgstr "Aucun réglage VR trouvé."
 
@@ -952,6 +957,11 @@ msgstr "Aide de X4 VR Mod"
 
 #: launcher/gui/dialogs.cpp
 #, qt-format
+msgid "X4's own, whose cloud shapes turn with your head"
+msgstr "celles de X4, dont les formes de nuages tournent avec la tête"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
 msgid "X4's saves and its own settings are never touched."
 msgstr "Les sauvegardes de X4 et ses propres réglages ne sont jamais touchés."
 
@@ -979,6 +989,11 @@ msgstr "affiché pendant le démarrage de X4"
 #, qt-format
 msgid "the headset's seated forward, which its recentre moves"
 msgstr "l'avant assis du casque, que son recentrage déplace"
+
+#: launcher/gui/dialogs.cpp
+#, qt-format
+msgid "the mod's own clouds, fixed in space, which drift and change shape"
+msgstr "les nuages du mod, fixes dans l'espace, qui dérivent et changent de forme"
 
 #: launcher/gui/dialogs.cpp
 #, qt-format

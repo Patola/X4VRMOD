@@ -2477,6 +2477,14 @@ want "fog march: none of ours timed -> FAIL" /tmp/census-march-nogpu.log "FAIL| 
 { mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma" "$(mfin 5000 4000 3 made sent)" "[  99900.055] layer   fog march final: GPU time — OFF: X4's queue family keeps no timestamps"; } > /tmp/census-march-gpuoff.log
 want "fog march: stopwatch off -> said" /tmp/census-march-gpuoff.log fogmarch "GPU time OFF: X4's queue family keeps no timestamps"
 absent "fog march: stopwatch off -> no FAIL" /tmp/census-march-gpuoff.log "FAIL .*fog march"
+# rc11: the player's choice X4VR_NEBULA=volumetric is the march asked for, without the probe.
+nbase() { sed "s/env: run = /env: run = X4VR_NEBULA=$1 /" "$BASE"; printf '%s\n' "$farm"; }
+{ nbase volumetric; printf '%s\n' "$mrep" "$mpipe" "$(mfin 5000 0 0 made sent)"; } > /tmp/census-nebula-nopatch.log
+want "nebula volumetric: blend never patched -> FAIL" /tmp/census-nebula-nopatch.log "FAIL|  - " "blend was never patched"
+{ nbase volumetric; printf '%s\n' "$mrep" "$mpipe" "$(mfin 5000 0 3 made sent)"; } > /tmp/census-nebula-ok.log
+absent "nebula volumetric: healthy -> no FAIL" /tmp/census-nebula-ok.log "FAIL .*fog march"
+{ nbase vanilla; } > /tmp/census-nebula-vanilla.log
+absent "nebula vanilla -> silent" /tmp/census-nebula-vanilla.log fogmarch
 absent "fog march: not asked -> silent" "$BASE" fogmarch
 
 # After take 485: the smoke installed with density 0 (no A/B) -> FAIL; density 1 -> none.

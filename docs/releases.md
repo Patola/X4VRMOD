@@ -22,6 +22,18 @@ on the remote beside their `take-NNN-name` twins.
 
 ## Unreleased
 
+* **Nebulae fixed in space.** In the headset, X4's nebula clouds turned with your head: they are
+  flat pictures that X4 keeps facing its camera, and in VR the camera follows your head. The mod
+  now draws its own clouds there instead, in depth and fixed in space: you fly through them, and
+  they drift and slowly change shape. They need X4's volumetric fog switched on in its graphics
+  settings; with it off, X4's own nebulae are drawn as before. To keep X4's own, choose
+  **Nebulae: vanilla** in the launcher's Advanced (`X4VR_NEBULA=vanilla`). They take about 0.4 ms
+  of the graphics card's time a frame on an RX 7900 XTX (around 1 ms inside dense clouds); in the
+  tests, frames in nebulae came no slower than with X4's own clouds, which cost more to draw.
+* **The mod asks the VR runtime whether it accepts the mod's field of view (issue #3).** Where a
+  runtime refuses it, the frame is now declared with the runtime's own field. Every log also
+  records the answer and how the runtime's two eyes stand to each other. Issue #3's double vision
+  on a Reverb G2 through SteamVR may come from this; that isn't confirmed yet.
 * **The launcher warns when an eye size won't fit your graphics card's memory.** With the headset
   connected, it compares what X4's images need at that size with the memory your card has free, and
   says so under the list, with the largest size that fits. If X4 ran out of graphics memory in an

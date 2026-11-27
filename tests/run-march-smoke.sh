@@ -65,6 +65,17 @@ if [[ $VAL == 1 ]]; then
 fi
 grep -E '^F3_(MEAN|SPREAD)|^FAIL' <<<"$out3" | sed 's/^/       3 frames | /'
 rm -f "$LOG3"
+# The player's choice (rc11): X4VR_NEBULA=volumetric alone -- no measurement knob -- is the
+# march; =vanilla is X4's own.
+LOGN="$(mktemp)"
+outn1=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS="$LAYERS" X4VR_POSE=1 X4VR_STEREO=1 \
+        "${BL[@]}" X4VR_NEBULA=volumetric X4VR_LOG="$LOGN" "$BIN" "${ARGS[@]}" 2>&1)
+check "nebula volumetric: the walk replaced" "grep -q 'replaced by our march' '$LOGN'"
+check "nebula volumetric: the blend reads ours" "grep -q '^OURS=1' <<<\"\$outn1\""
+outn0=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS=VK_LAYER_X4VR_core X4VR_POSE=1 X4VR_STEREO=1 \
+        "${BL[@]}" X4VR_NEBULA=vanilla X4VR_LOG= "$BIN" "${ARGS[@]}" 2>&1)
+check "nebula vanilla: X4's grid alone" "grep -q '^OURS=0' <<<\"\$outn0\""
+rm -f "$LOGN"
 # Control: X4's grid alone.
 out0=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS=VK_LAYER_X4VR_core X4VR_POSE=1 X4VR_STEREO=1 \
        "${BL[@]}" X4VR_LOG= "$BIN" "${ARGS[@]}" 2>&1)

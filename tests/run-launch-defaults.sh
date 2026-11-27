@@ -14,7 +14,7 @@ bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
 
 # run <assignments...> -- prints "VAR=value" for the queried variables, and
 # DEFAULTED=<list>, after applying the defaults in a clean environment.
-q='X4VR_H X4VR_W X4VR_RES X4VR_UPSCALE X4VR_MV X4VR_POSE X4VR_OFFAXIS X4VR_FOV X4VR_POSELOG X4VR_FOOTLOG'
+q='X4VR_H X4VR_W X4VR_RES X4VR_UPSCALE X4VR_MV X4VR_POSE X4VR_OFFAXIS X4VR_FOV X4VR_POSELOG X4VR_FOOTLOG X4VR_NEBULA'
 run() {
     env -i HOME="$HOME" PATH="$PATH" "$@" bash -c '
         source "$0/launch/x4vr-defaults.sh"
@@ -39,16 +39,16 @@ want() { # want <label> <output> <line>...
 out=$(run)
 want "nothing set: the shipping line at 2816², native" "$out" \
     X4VR_H=2816 X4VR_W=5632 X4VR_RES=2816x2816 X4VR_UPSCALE=none \
-    X4VR_MV=1 X4VR_POSE=1 X4VR_OFFAXIS=off X4VR_FOV=1.4917 N=47
+    X4VR_MV=1 X4VR_POSE=1 X4VR_OFFAXIS=off X4VR_FOV=1.4917 X4VR_NEBULA=volumetric N=48
 out=$(run X4VR_H=4224)
 want "X4VR_H=4224: W, RES follow; native" "$out" \
-    X4VR_H=4224 X4VR_W=8448 X4VR_RES=4224x4224 X4VR_UPSCALE=none N=46
+    X4VR_H=4224 X4VR_W=8448 X4VR_RES=4224x4224 X4VR_UPSCALE=none N=47
 out=$(run X4VR_H=3072)
 want "3072 (above 2816): native, no automatic upscaler" "$out" X4VR_RES=3072x3072 X4VR_UPSCALE=none
 out=$(run X4VR_H=2560)
 want "...below 2816: native" "$out" X4VR_W=5120 X4VR_RES=2560x2560 X4VR_UPSCALE=none
 out=$(run X4VR_H=4224 X4VR_UPSCALE=fsr_quality)
-want "an explicit upscaler wins" "$out" X4VR_UPSCALE=fsr_quality N=45
+want "an explicit upscaler wins" "$out" X4VR_UPSCALE=fsr_quality N=46
 if grep -q "X4VR_UPSCALE" <<<"$(grep '^DEFAULTED=' <<<"$out")"; then
     bad "...and is not listed as defaulted"
 else
@@ -57,7 +57,7 @@ fi
 out=$(run X4VR_H=2816 X4VR_UPSCALE=fsr3_balanced)
 want "an explicit FSR 3 at 2816 wins" "$out" X4VR_UPSCALE=fsr3_balanced
 out=$(run X4VR_MV=0 X4VR_OFFAXIS=)
-want "explicit 0 and explicit empty both win" "$out" X4VR_MV=0 X4VR_OFFAXIS= N=45
+want "explicit 0 and explicit empty both win" "$out" X4VR_MV=0 X4VR_OFFAXIS= N=46
 out=$(run X4VR_W=6000)
 want "an explicit X4VR_W wins, RES still follows H" "$out" X4VR_W=6000 X4VR_RES=2816x2816
 out=$(run X4VR_DEFAULTS=0)
