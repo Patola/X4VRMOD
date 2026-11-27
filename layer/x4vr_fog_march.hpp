@@ -15,6 +15,7 @@
 #pragma once
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <random>
 #include <string>
 #include <vulkan/vulkan.h>
@@ -133,7 +134,10 @@ public:
 
     // The one-time setup, recorded into a command buffer of ours for queue family `family`
     // (VK_NULL_HANDLE, with `why`, on failure). The caller submits it once, before X4's.
-    VkCommandBuffer setup_cb(uint32_t family, std::string *why) {
+    // `extra`, when given, records more one-time setup (the march's stopwatch resets its
+    // queries) into the same buffer, before it ends.
+    VkCommandBuffer setup_cb(uint32_t family, std::string *why,
+                             const std::function<void(VkCommandBuffer)> &extra = nullptr) {
         if (!created_) {
             *why = "nothing created";
             return VK_NULL_HANDLE;
@@ -186,6 +190,8 @@ public:
         fns_.CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &mb, 0, nullptr, 0,
                                 nullptr);
+        if (extra)
+            extra(cb);
         if (fns_.EndCommandBuffer(cb) != VK_SUCCESS) {
             *why = "ending its command buffer";
             return VK_NULL_HANDLE;

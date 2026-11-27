@@ -2467,6 +2467,16 @@ want "fog march: clock at 0 -> FAIL" /tmp/census-march-noclock.log "FAIL|  - " "
 { mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma" "$(mfin 5000 4000 3 made sent)" "$(mknobs 312.4)"; } > /tmp/census-march-clock.log
 want "fog march: clock said" /tmp/census-march-clock.log fogsmoke "clock 312.4 s"
 absent "fog march: clock running -> no FAIL" /tmp/census-march-clock.log "FAIL .*fog march"
+# After take 490: the march's GPU stopwatch -- its times said; none of ours read, FAIL.
+mgpu() { echo "[  99900.055] layer   fog march final: GPU time a dispatch — V (X4's own walk): $1; A (our march): $2; B (our march): $3; 0 not timed (ring full), 0 never came back, 0 stale"; }
+{ mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma" "$(mfin 5000 4000 3 made sent)" "$(mgpu 'median 0.210 ms, p90 0.240, max 0.400, 4000 timed' 'median 0.610 ms, p90 0.900, max 1.500, 2500 timed' 'median 0.580 ms, p90 0.850, max 1.400, 2500 timed')"; } > /tmp/census-march-gpu.log
+want "fog march: GPU time said" /tmp/census-march-gpu.log fogmarch "GPU time: V (X4's own walk): median 0.210 ms"
+absent "fog march: GPU times read -> no FAIL" /tmp/census-march-gpu.log "FAIL .*fog march"
+{ mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma" "$(mfin 5000 4000 3 made sent)" "$(mgpu 'median 0.210 ms, p90 0.240, max 0.400, 4000 timed' 'none timed' 'none timed')"; } > /tmp/census-march-nogpu.log
+want "fog march: none of ours timed -> FAIL" /tmp/census-march-nogpu.log "FAIL|  - " "stopwatch read no time of our march"
+{ mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma" "$(mfin 5000 4000 3 made sent)" "[  99900.055] layer   fog march final: GPU time — OFF: X4's queue family keeps no timestamps"; } > /tmp/census-march-gpuoff.log
+want "fog march: stopwatch off -> said" /tmp/census-march-gpuoff.log fogmarch "GPU time OFF: X4's queue family keeps no timestamps"
+absent "fog march: stopwatch off -> no FAIL" /tmp/census-march-gpuoff.log "FAIL .*fog march"
 absent "fog march: not asked -> silent" "$BASE" fogmarch
 
 # After take 485: the smoke installed with density 0 (no A/B) -> FAIL; density 1 -> none.

@@ -16,6 +16,9 @@ add_executable(x4vr_test_multiview_render multiview_render.cpp)
 target_link_libraries(x4vr_test_multiview_render PRIVATE Vulkan::Vulkan)
 add_executable(x4vr_test_march_smoke march_smoke.cpp)
 target_link_libraries(x4vr_test_march_smoke PRIVATE Vulkan::Vulkan)
+# The march's GPU stopwatch (layer/x4vr_gpu_timer.hpp) on a GPU: tests/run-gpu-timer.sh.
+add_executable(x4vr_test_gpu_timer gpu_timer.cpp)
+target_link_libraries(x4vr_test_gpu_timer PRIVATE Vulkan::Vulkan)
 
 # The shader patches, exercised without a GPU. Needs no Vulkan library at all --
 # it only ever rewrites words in a buffer, which is the point.

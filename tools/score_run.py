@@ -5723,6 +5723,17 @@ def main(path):
             if flying and ab and not ours_phases:
                 fails.append("fog march: A/B asked for, and no phase was drawn (the phases "
                              "never switched)")
+        # After take 490 (every phase at the 90 fps cap): the march's GPU stopwatch.
+        gpu = re.findall(r"fog march final: GPU time a dispatch — (.*)$", text, re.M)
+        goff = re.findall(r"fog march (?:final|periodic): GPU time — OFF: (.*)$", text, re.M)
+        if gpu:
+            print(f"fogmarch GPU time: {gpu[-1][:300]}")
+            ours = re.findall(r"(A|B) \(our march\): (none timed|median ([\d.]+) ms)", gpu[-1])
+            if (mfin and int(mfin[-1][0]) > 0 and flying and ours
+                    and all(o[1] == "none timed" for o in ours)):
+                fails.append("fog march: its GPU stopwatch read no time of our march, which ran")
+        elif goff:
+            print(f"fogmarch GPU time OFF: {goff[-1][:160]}")
         for used, patched in re.findall(r"fog march: a pipeline with X4's fog blend gets fragment "
                                         r"module (as made|SWAPPED) \(the patched one (or its twin|NOT)\)",
                                         text):

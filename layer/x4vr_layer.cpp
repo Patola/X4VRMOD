@@ -56,6 +56,7 @@
 #include "x4vr_loading_panel.hpp"
 #include "x4vr_copy_ring.hpp"
 #include "x4vr_fog_march.hpp"
+#include "x4vr_gpu_timer.hpp"
 #include "vr_loading_assets.hpp"
 #include "../common/x4vr_env.hpp"
 #include "../common/x4vr_share.hpp"
@@ -2217,6 +2218,11 @@ static bool fog_march_on() {
     return on;
 }
 x4vr::FogMarch &g_march = x4vr::immortal<x4vr::FogMarch>();
+// The march's GPU time and X4's own walk's, by phase (kind 0 V: X4's walk; 1 A, 2 B: ours),
+// after take 490: every phase ran at the headset's 90 fps cap, so frame times could not
+// say what the march costs.
+x4vr::GpuTimer &g_march_timer = x4vr::immortal<x4vr::GpuTimer>();
+std::string &g_march_timer_why = x4vr::immortal<std::string>();
 std::atomic<bool> g_march_ready{false};      // its objects made, in the pose block's sets
 std::atomic<bool> g_march_setup_sent{false}; // its one-time setup submitted
 std::atomic<uint32_t> g_march_graphics_families{0}; // queue families with graphics, a bitmask
@@ -2239,9 +2245,9 @@ thread_local bool tl_march_blend = false; // this thread's last module got the b
 // Under g_fog_probe_mu: the modules made from X4's fog blend with the march's edit.
 std::unordered_set<VkShaderModule> &g_march_blend_mods =
     x4vr::immortal<std::unordered_set<VkShaderModule>>();
-// B against A (after take 489, "still less bright and less fuzzy"): glow 0.15 where A has the
-// march's 0.22, clouds 1.6 times as dense (extinction 0.008 against 0.005).
-constexpr float kMarchGlowB = 0.15f / 0.22f, kMarchDenseB = 1.6f;
+// B against A (after take 490, A kept, "still a bit too solid"): the clouds thinner, their
+// extinction 0.65 of A's -- more see-through and, gathering less light, dimmer (about 30%).
+constexpr float kMarchThinB = 0.65f;
 
 constexpr int kSmokeParams = 27;
 struct SmokeParam {
@@ -5564,6 +5570,31 @@ void shader_knob_report(const char *when) {
                      g_march_x4pipes.load(), g_march_x4pipe_failed.load(),
                      g_march_ready.load() ? "made" : "NOT made",
                      g_march_setup_sent.load() ? "sent" : "NOT sent");
+        if (fog_march_on()) {
+            if (!g_march_timer.on()) {
+                X4VR_LOG("fog march %s: GPU time — OFF: %s", when, g_march_timer_why.c_str());
+            } else {
+                std::string row;
+                static const char *const kKind[3] = {"V (X4's own walk)", "A (our march)",
+                                                     "B (our march)"};
+                for (uint32_t k = 0; k < 3; k++) {
+                    const std::vector<float> v = g_march_timer.sorted(k);
+                    char t[160];
+                    if (v.empty())
+                        snprintf(t, sizeof t, "%s%s: none timed", k ? "; " : "", kKind[k]);
+                    else
+                        snprintf(t, sizeof t, "%s%s: median %.3f ms, p90 %.3f, max %.3f, %zu "
+                                 "timed", k ? "; " : "", kKind[k], v[v.size() / 2],
+                                 v[(size_t)(0.9 * (v.size() - 1))], v.back(), v.size());
+                    row += t;
+                }
+                X4VR_LOG("fog march %s: GPU time a dispatch — %s; %llu not timed (ring full), "
+                         "%llu never came back, %llu stale", when, row.c_str(),
+                         (unsigned long long)g_march_timer.skipped(),
+                         (unsigned long long)g_march_timer.lost(),
+                         (unsigned long long)g_march_timer.stale());
+            }
+        }
         if (fog_smoke_on() || fog_march_on())
             X4VR_LOG("fog smoke %s: its knobs as last published — %s density %.2f, glow %.2f, "
                      "size %.2f, sharpness %.2f, ends at %.0f m (0: %.0f); clock %.1f s, "
@@ -10617,14 +10648,12 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             const bool fix = fog_cards_fix();
             if (fog_march_on()) {
                 // V: X4's own fog (its walk, its grid) and cards; A and B: our march, the
-                // cards off. A the march as built; B dimmer and denser -- two doses of "still
-                // less bright and less fuzzy" (take 489, where A and B differed by the haze
-                // alone and looked alike). Over eight views a 10 deg head turn changes A by
-                // 4.1% of the bright clouds at p99 and B by 4.2%; take 489's B, seen as
-                // stable, 3.9%.
+                // cards off. A the march as built (take 490's A); B thinner (extinction 0.65
+                // of A's): take 490's A was "still a bit too solid". Over eight views a 10 deg
+                // head turn changes either by 4.0-4.1% of the bright clouds at p99.
                 g_pose.value.fog[0] = fa == 0 ? 0.f : 1.f;
-                g_pose.value.fog[1] = fa == 2 ? kMarchGlowB : 1.f;
-                g_pose.value.fog[2] = fa == 2 ? kMarchDenseB : 1.f;
+                g_pose.value.fog[1] = 1.f;
+                g_pose.value.fog[2] = fa == 2 ? kMarchThinB : 1.f;
                 g_pose.value.fog[3] = 1.f;
                 g_pose.value.fog2[0] = 0.f;
                 g_pose.value.fog2[1] = fa == 0 ? 0.f : 1.f;
@@ -10635,9 +10664,9 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                     X4VR_LOG("fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)",
                              (unsigned long long)phase,
                              fa == 0 ? "V, X4's own fog and cards"
-                             : fa == 1 ? "A, our march, glow 0.22, extinction 0.005, no cards"
-                                       : "B, our march, glow 0.15, extinction 0.008 (dimmer, "
-                                         "denser), no cards");
+                             : fa == 1 ? "A, our march, extinction 0.005, no cards"
+                                       : "B, our march, extinction 0.00325 (thinner), no "
+                                         "cards");
                 }
             } else {
             g_pose.value.fog[0] = fa == 0 || (fix && fa == 1) ? 0.f : 1.f;
@@ -11576,17 +11605,29 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatch(VkCommandBuffer cb, uint32_t x,
             march = m == g_march_cb.end() ? 0 : m->second;
         }
         if (march == 1) {
-            // Our march: its own size, between barriers for its volume.
+            // Our march: its own size, between barriers for its volume, timed by phase.
             g_march.barrier_before(cb);
+            const int arm = fog_ab() ? g_fog_arm.load(std::memory_order_relaxed) : 1;
+            const int slot = g_march_timer.begin(cb, (uint32_t)std::max(arm, 1));
             d->CmdDispatch(cb, (x4vr::FogMarch::kW + 7) / 8, (x4vr::FogMarch::kH + 7) / 8, 1);
+            g_march_timer.end(cb, slot);
             g_march.barrier_after(cb);
             g_march_dispatches++;
             if (fog_probe_on())
                 fog_probe_dispatch(cb, x, y, z);
             return;
         }
-        if (march == 2)
+        if (march == 2) {
+            // X4's own walk (the vanilla phase), timed beside ours.
             g_march_x4_dispatches++;
+            const int slot = g_march_timer.begin(cb, 0);
+            d->CmdDispatch(cb, x, y, fsr_dispatch_z(cb, x, y, z));
+            g_march_timer.end(cb, slot);
+            if (fog_probe_on())
+                fog_probe_dispatch(cb, x, y, z);
+            ffx_dispatch_right(d, cb, x, y, z);
+            return;
+        }
     }
     d->CmdDispatch(cb, x, y, fsr_dispatch_z(cb, x, y, z));
     if (fog_probe_on())
@@ -13321,7 +13362,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
             ((g_march_graphics_families.load() >> fam) & 1u) &&
             !g_march_setup_sent.exchange(true)) {
             std::string why;
-            const VkCommandBuffer scb = g_march.setup_cb(fam, &why);
+            const VkCommandBuffer scb = g_march.setup_cb(
+                fam, &why, [](VkCommandBuffer c) { g_march_timer.reset_all(c); });
             if (scb) {
                 VkSubmitInfo one{};
                 one.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -16628,6 +16670,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
             pose_ring_report("periodic");
     }
     camdiff_sample();
+    // The march's stopwatch reads what is old enough to have run.
+    if (fog_march_on())
+        g_march_timer.present();
     // #36: everything below that touches the queue -- the SBS composite, the
     // cursor overlay, the readback's QueueWaitIdle, and the present itself --
     // is inside this scope, so one lock covers X4's whole side of the shared
@@ -21751,6 +21796,39 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
             g_march_graphics_families = gm;
             if (!g_march.configured())
                 X4VR_LOG("fog march: not every entry point it needs was found");
+            // Its stopwatch: the period from the card, the bits every graphics family keeps.
+            x4vr::GpuTimerFns tf;
+            tf.CreateQueryPool = (PFN_vkCreateQueryPool)gdpa(*out, "vkCreateQueryPool");
+            tf.CmdResetQueryPool = (PFN_vkCmdResetQueryPool)gdpa(*out, "vkCmdResetQueryPool");
+            tf.CmdWriteTimestamp = (PFN_vkCmdWriteTimestamp)gdpa(*out, "vkCmdWriteTimestamp");
+            tf.GetQueryPoolResults =
+                (PFN_vkGetQueryPoolResults)gdpa(*out, "vkGetQueryPoolResults");
+            float period = 0.f;
+            if (auto gpp = (PFN_vkGetPhysicalDeviceProperties)gipa(
+                    inst, "vkGetPhysicalDeviceProperties")) {
+                VkPhysicalDeviceProperties pp{};
+                gpp(phys, &pp);
+                period = pp.limits.timestampPeriod;
+            }
+            uint32_t bits = 64;
+            if (auto gqf = (PFN_vkGetPhysicalDeviceQueueFamilyProperties)gipa(
+                    inst, "vkGetPhysicalDeviceQueueFamilyProperties")) {
+                uint32_t n = 0;
+                gqf(phys, &n, nullptr);
+                std::vector<VkQueueFamilyProperties> qp(n);
+                gqf(phys, &n, qp.data());
+                for (uint32_t i = 0; i < n; i++)
+                    if (qp[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+                        bits = std::min(bits, qp[i].timestampValidBits);
+            }
+            const char *why = "";
+            if (g_march_timer.create(*out, tf, period, bits, &why))
+                X4VR_LOG("fog march: its GPU stopwatch is on (%u bits, %.2f ns a tick): our "
+                         "march's time and X4's own walk's, by phase", bits, period);
+            else {
+                g_march_timer_why = why;
+                X4VR_LOG("fog march: its GPU stopwatch is OFF: %s", why);
+            }
         }
         if (g_active && g_mv)
             X4VR_LOG("mv: X4's memory block on this card is %.1f MiB: what it would need "

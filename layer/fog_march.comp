@@ -118,12 +118,24 @@ float smoke(vec3 p, float t, float dist, float cell, float foot, out float clear
     // Its second octave slides against the first: the outlines change (kMorph).
     const vec3 morph = mod(vec3(0.6, 0.5, -0.6) * (t * kMorph / (0.4 * kCloud)), 64.0);
     clear = 0.0;
-    if (0.65 * c1 + 0.35 <= kCover - soft) {
-        clear = ((kCover - soft) - (0.65 * c1 + 0.35)) * kCloud / (0.65 * 1.5);
+    // A skip is measured against the lowest edge on its way: the edge widens with the
+    // distance (no thinner than a pixel), so it is lowest at kFar.
+    const float edge = kCover - max(kSoft, 0.45 * 2.5 * (cell / max(dist, 1.0)) * kFar / kCloud);
+    if (0.65 * c1 + 0.35 <= edge) {
+        clear = (edge - (0.65 * c1 + 0.35)) * kCloud / (0.65 * 1.5);
         return 0.0;
     }
-    const float cloud = smoothstep(kCover - soft, kCover + soft,
-                                   0.65 * c1 + 0.35 * n1(at(p, 0.4 * kCloud) + morph + vec3(9.1, 2.2, 5.5)));
+    const float cv = 0.65 * c1 + 0.35 * n1(at(p, 0.4 * kCloud) + morph + vec3(9.1, 2.2, 5.5));
+    // Both octaves under the edge (after take 490): no cloud can start before they rise by
+    // the difference, at most 1.5 a lattice cell each -- 0.65 x 1.5 / kCloud + 0.35 x 1.5 /
+    // (0.4 kCloud) a metre. Without this, a ray stepped plane by plane wherever the first
+    // octave alone allowed a cloud: 145 evaluations a ray over eight views, 25 in a cloud;
+    // with it, 94.
+    if (cv <= edge) {
+        clear = (edge - cv) * kCloud / (1.5 * (0.65 + 0.35 / 0.4));
+        return 0.0;
+    }
+    const float cloud = smoothstep(kCover - soft, kCover + soft, cv);
     if (cloud <= 0.001)
         return 0.0;
     // Mottling, curled by the clouds' warp.
@@ -210,7 +222,10 @@ void main() {
         if (k < 0)
             break;
         const float sp = max(6.0, exp2(floor(log2(max(kStepFrac * t, 1.0)))));
-        const float next = min((floor((w0 + t) / sp) + 1.0) * sp - w0, zk);
+        // One sample a world step, wherever the depths to store fall (after take 490): they
+        // split the step's light, not its sampling -- their places follow the view, the
+        // steps' don't, and each split was a second full evaluation.
+        const float next = (floor((w0 + t) / sp) + 1.0) * sp - w0;
         const float stp = max(next - t, 0.5);
         const float tm = t + 0.5 * stp;
         const vec3 pw = origin + ray * tm;
@@ -219,13 +234,23 @@ void main() {
                                         px * tm, px * footpx * tm, clear) *
                         (1.0 - smoothstep(0.6 * far, far, tm));
         if (d > 0.0) {
+            // The depths inside this step take its light up to where they are.
+            while (k >= 0 && zk < t + stp) {
+                const float part = exp(-sigma * d * max(zk - t, 0.0));
+                imageStore(march_out, ivec3(id, k), vec4(light + trans * glow * (1.0 - part), trans * part));
+                k--;
+                if (k >= 0)
+                    zk = length(cell_view(vec3(uv, (float(k) + 0.5) / float(kK))));
+            }
             const float slice = exp(-sigma * d * stp);
             light += trans * glow * (1.0 - slice);
             trans *= slice;
         }
-        // No cloud within `clear` of the sample: on to the last world plane before that
-        // (never past the next depth to store).
+        // No cloud within `clear` of the sample: on to the last world plane before that,
+        // past depths to store too -- the loop above writes each one passed, and nothing
+        // on the way adds to them (after take 490: every jump stopped at each, 9.5
+        // evaluations a ray).
         const float jump = kSkip != 0 ? floor((w0 + tm + clear) / sp) * sp - w0 : 0.0;
-        t = max(t + stp, min(jump, zk));
+        t = max(t + stp, jump);
     }
 }
