@@ -2485,6 +2485,13 @@ want "nebula volumetric: blend never patched -> FAIL" /tmp/census-nebula-nopatch
 absent "nebula volumetric: healthy -> no FAIL" /tmp/census-nebula-ok.log "FAIL .*fog march"
 { nbase vanilla; } > /tmp/census-nebula-vanilla.log
 absent "nebula vanilla -> silent" /tmp/census-nebula-vanilla.log fogmarch
+# After take 495: X4's preparation skipped behind our march; never skipped -> FAIL.
+mprep() { echo "[  99900.065] layer   fog prep final: X4's preparation for its fog — 3 module(s), 3 pipeline(s); skipped base $1, point $2, shad $3; run base 0, point 0, shad 0"; }
+{ nbase volumetric; printf '%s\n' "$mrep" "$mpipe" "$(mfin 5000 0 3 made sent)" "$(mprep 4000 4000 4000)"; } > /tmp/census-prep-ok.log
+want "fog prep: counts said" /tmp/census-prep-ok.log fogprep "skipped base 4000, point 4000, shad 4000"
+absent "fog prep: skipped -> no FAIL" /tmp/census-prep-ok.log "FAIL .*fog prep"
+{ nbase volumetric; printf '%s\n' "$mrep" "$mpipe" "$(mfin 5000 0 3 made sent)" "$(mprep 0 0 0)"; } > /tmp/census-prep-never.log
+want "fog prep: never skipped -> FAIL" /tmp/census-prep-never.log "FAIL|  - " "X4's preparation was never skipped"
 absent "fog march: not asked -> silent" "$BASE" fogmarch
 
 # After take 485: the smoke installed with density 0 (no A/B) -> FAIL; density 1 -> none.

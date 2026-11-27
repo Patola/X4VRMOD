@@ -1,0 +1,18 @@
+#version 450
+// SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
+//
+// A stand-in for X4's volume_point.comp (after take 495), written here: a compute entry
+// whose block names I_point_num and U_bias, the two names x4vr::spv::x4_fog_prep_kind knows
+// X4's by. It writes into the walk's output table, slot 0, as X4's preparation writes a grid
+// the walk reads. With our march in the walk's place the layer must skip its dispatch;
+// with X4's own nebulae it must run.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 6, rgba16f) uniform writeonly image3D U_output_rt[53306];
+layout(set = 4, binding = 0, std140) uniform BLOCK_BUFFER_BINDING_SLOT_DYNAMIC {
+    uint I_point_num;
+    float U_bias;
+};
+void main() {
+    imageStore(U_output_rt[0], ivec3(gl_GlobalInvocationID.xyz),
+               vec4(float(I_point_num) * U_bias, 0.0, 0.0, 1.0));
+}

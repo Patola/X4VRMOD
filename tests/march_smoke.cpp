@@ -315,6 +315,18 @@ int main(int argc, char **argv) {
     cpi.layout = pl;
     VkPipeline cpipe;
     CK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpi, nullptr, &cpipe));
+    // X4's preparation, stood in by volume_point when a fourth module is given (after take
+    // 495): dispatched before the walk, as X4 does.
+    VkPipeline ppipe = VK_NULL_HANDLE;
+    if (argc > 4) {
+        const VkShaderModule pm = module(argv[4]);
+        if (!pm) {
+            printf("FAIL modules\n");
+            return 1;
+        }
+        cpi.stage.module = pm;
+        CK(vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpi, nullptr, &ppipe));
+    }
     VkAttachmentDescription att{};
     att.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     att.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -424,6 +436,16 @@ int main(int argc, char **argv) {
     // bound its own set at the pipeline would, by Vulkan's compatibility rule, disturb it.
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 2, ds, 0, nullptr);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 4, 1, &ds[2], 0, nullptr);
+    if (ppipe) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, ppipe);
+        vkCmdDispatch(cmd, 1, 1, 1);
+        VkMemoryBarrier pmb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        pmb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        pmb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &pmb, 0, nullptr, 0,
+                             nullptr);
+    }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, cpipe);
     vkCmdDispatch(cmd, 22, 22, 1);
     // X4's blend.

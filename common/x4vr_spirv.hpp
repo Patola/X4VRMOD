@@ -2518,6 +2518,38 @@ inline bool is_x4_volume_base(const std::vector<uint32_t> &code,
     return true;
 }
 
+/// **X4's froxel fog's preparation, recognised** (after take 495): the stages before
+/// volume_walk, whose grids only the walk reads -- volume_base (each cell's starting
+/// density), volume_point (the media's density, by their patterns) and volume_shad (the
+/// sun's shadow through the grid, from its own last frame). With the walk replaced by our
+/// march their work is unused, and the layer skips it. Known by what each declares, X4
+/// keeping its names: volume_base by is_x4_volume_base; volume_point, a compute entry
+/// naming I_point_num and U_bias; volume_shad, a compute entry naming U_offset and U_pass
+/// (the walk names U_offset, not U_pass). Over the 414 modules X4 made in one session
+/// each of the three matched exactly one, and nothing else matched (X4's other compute
+/// clouds -- volume_noise, volume_convert, volume_sdf -- size by V_volume_size_clouds and
+/// name neither pair).
+inline bool declares_member_name(const std::vector<uint32_t> &code, const char *name);
+enum class FogPrep { None = 0, Base = 1, Point = 2, Shad = 3 };
+inline FogPrep x4_fog_prep_kind(const std::vector<uint32_t> &code) {
+    std::vector<Inst> insts;
+    if (!iterate(code, insts))
+        return FogPrep::None;
+    bool compute = false;
+    for (const auto &in : insts)
+        if (in.op == OpEntryPoint && in.len >= 3 && code[in.start + 1] == ExecutionModelGLCompute)
+            compute = true;
+    if (!compute)
+        return FogPrep::None;
+    if (is_x4_volume_base(code))
+        return FogPrep::Base;
+    if (declares_member_name(code, "I_point_num") && declares_member_name(code, "U_bias"))
+        return FogPrep::Point;
+    if (declares_member_name(code, "U_offset") && declares_member_name(code, "U_pass"))
+        return FogPrep::Shad;
+    return FogPrep::None;
+}
+
 /// **X4's volume_walk.comp, recognised** (after take 479): the stage of X4's froxel fog
 /// that turns density into light, column by column, writing Rgba16f cells (rgb the light
 /// gathered, a what still shows). The layer puts layer/fog_walk.comp in its place, so the

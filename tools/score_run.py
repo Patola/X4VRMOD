@@ -5738,6 +5738,23 @@ def main(path):
             if flying and ab and not ours_phases:
                 fails.append("fog march: A/B asked for, and no phase was drawn (the phases "
                              "never switched)")
+        # After take 495: X4's preparation for its fog, skipped behind our march (B and V run
+        # it in an A/B), and the dispatches over 2 ms.
+        prep = re.findall(r"fog prep final: X4's preparation for its fog — (\d+) module\(s\), (\d+) "
+                          r"pipeline\(s\); skipped base (\d+), point (\d+), shad (\d+); run base "
+                          r"(\d+), point (\d+), shad (\d+)", text)
+        if prep:
+            nm, npp, sb, sp, ss, rb, rp, rs = map(int, prep[-1])
+            print(f"fogprep {nm} module(s), {npp} pipeline(s); skipped base {sb}, point {sp}, "
+                  f"shad {ss}; run base {rb}, point {rp}, shad {rs}")
+            ab_run = bool(re.search(r"\bX4VR_FOG_AB=recentre\b", run or ""))
+            ours_a = (not ab_run) or "A" in {k for _, k in re.findall(
+                r"fog smoke: phase #(\d+) — (V|A|B)(?=[ ,])", text)}
+            if (mfin and int(mfin[-1][0]) > 0 and npp > 0 and ours_a and flying
+                    and sb + sp + ss == 0):
+                fails.append("fog prep: our march ran and X4's preparation was never skipped")
+        for ln in re.findall(r"fog march final: (over \d+ ms on the GPU — .*)$", text, re.M)[-1:]:
+            print(f"fogmarch {ln}")
         # After take 490 (every phase at the 90 fps cap): the march's GPU stopwatch.
         gpu = re.findall(r"fog march final: GPU time a dispatch — (.*)$", text, re.M)
         goff = re.findall(r"fog march (?:final|periodic): GPU time — OFF: (.*)$", text, re.M)

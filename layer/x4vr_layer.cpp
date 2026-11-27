@@ -2260,6 +2260,21 @@ std::unordered_map<VkShaderModule, VkShaderModule> &g_march_x4mod =
     x4vr::immortal<std::unordered_map<VkShaderModule, VkShaderModule>>();
 std::unordered_map<VkPipeline, VkPipeline> &g_march_x4pipe =
     x4vr::immortal<std::unordered_map<VkPipeline, VkPipeline>>();
+// X4's froxel fog preparation (after take 495: volume_base, volume_point, volume_shad --
+// x4vr::spv::x4_fog_prep_kind): its modules, pipelines and, per recording, which is
+// bound (0 none, 1 base, 2 point, 3 shad); under g_fog_probe_mu. With our march in the
+// walk's place, only the walk read what they make, so their dispatches are skipped --
+// except in an A/B's V (X4's own walk runs) and B (they run, timed, to measure the skip).
+std::unordered_map<VkShaderModule, int> &g_fog_prep_mods =
+    x4vr::immortal<std::unordered_map<VkShaderModule, int>>();
+std::unordered_map<VkPipeline, int> &g_fog_prep_pipes =
+    x4vr::immortal<std::unordered_map<VkPipeline, int>>();
+std::unordered_map<VkCommandBuffer, int> &g_fog_prep_cb =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, int>>();
+std::atomic<uint64_t> g_fog_prep_skipped[4] = {}, g_fog_prep_ran[4] = {};
+std::atomic<uint32_t> g_fog_prep_nmods{0}, g_fog_prep_npipes{0}; // for the report, lock-free
+std::atomic<bool> g_march_walk_replaced{false}; // our march took X4's walk's place
+std::atomic<uint64_t> g_march_slow[x4vr::GpuTimer::kKinds] = {};
 std::unordered_map<VkCommandBuffer, int> &g_march_cb =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, int>>();
 std::atomic<uint64_t> g_march_dispatches{0}, g_march_x4_dispatches{0};
@@ -2276,9 +2291,10 @@ thread_local bool tl_march_blend = false; // this thread's last module got the b
 // Under g_fog_probe_mu: the modules made from X4's fog blend with the march's edit.
 std::unordered_set<VkShaderModule> &g_march_blend_mods =
     x4vr::immortal<std::unordered_set<VkShaderModule>>();
-// B against A in an A/B (X4VR_FOG_AB=recentre): one step thinner, extinction 0.7 of A's
-// (after takes 492 and 493, each of whose B became the march's own).
-constexpr float kMarchThinB = 0.7f;
+// B against A in an A/B (X4VR_FOG_AB=recentre), after take 495: the same clouds, with X4's
+// own preparation for its fog run (and timed) where A skips it -- so a difference between
+// them is the skip's. (Takes 489-493 varied B's look; each chosen B became the march's own.)
+constexpr float kMarchThinB = 1.0f;
 
 constexpr int kSmokeParams = 27;
 struct SmokeParam {
@@ -5614,9 +5630,10 @@ void shader_knob_report(const char *when) {
                 X4VR_LOG("fog march %s: GPU time — OFF: %s", when, g_march_timer_why.c_str());
             } else {
                 std::string row;
-                static const char *const kKind[3] = {"V (X4's own walk)", "A (our march)",
-                                                     "B (our march)"};
-                for (uint32_t k = 0; k < 3; k++) {
+                static const char *const kKind[6] = {
+                    "V (X4's own walk)", "A (our march)", "B (our march)",
+                    "X4's volume_base", "X4's volume_point", "X4's volume_shad"};
+                for (uint32_t k = 0; k < 6; k++) {
                     const std::vector<float> v = g_march_timer.sorted(k);
                     char t[160];
                     if (v.empty())
@@ -5632,7 +5649,27 @@ void shader_knob_report(const char *when) {
                          (unsigned long long)g_march_timer.skipped(),
                          (unsigned long long)g_march_timer.lost(),
                          (unsigned long long)g_march_timer.stale());
+                X4VR_LOG("fog march %s: over %.0f ms on the GPU — X4's walk %llu, ours %llu (A) "
+                         "and %llu (B), X4's preparation %llu",
+                         when, (double)x4vr::GpuTimer::kSlowMs,
+                         (unsigned long long)g_march_slow[0].load(),
+                         (unsigned long long)g_march_slow[1].load(),
+                         (unsigned long long)g_march_slow[2].load(),
+                         (unsigned long long)(g_march_slow[3].load() + g_march_slow[4].load() +
+                                              g_march_slow[5].load()));
             }
+        }
+        if (fog_march_on()) {
+            X4VR_LOG("fog prep %s: X4's preparation for its fog — %u module(s), %u "
+                     "pipeline(s); skipped base %llu, point %llu, shad %llu; run base %llu, "
+                     "point %llu, shad %llu",
+                     when, g_fog_prep_nmods.load(), g_fog_prep_npipes.load(),
+                     (unsigned long long)g_fog_prep_skipped[1].load(),
+                     (unsigned long long)g_fog_prep_skipped[2].load(),
+                     (unsigned long long)g_fog_prep_skipped[3].load(),
+                     (unsigned long long)g_fog_prep_ran[1].load(),
+                     (unsigned long long)g_fog_prep_ran[2].load(),
+                     (unsigned long long)g_fog_prep_ran[3].load());
         }
         if (fog_smoke_on() || fog_march_on())
             X4VR_LOG("fog smoke %s: its knobs as last published — %s density %.2f, glow %.2f, "
@@ -9168,6 +9205,7 @@ std::vector<uint32_t> fog_volume_module(const VkShaderModuleCreateInfo *ci) {
         }
         tl_fog_vol = true;
         tl_fog_march = true;
+        g_march_walk_replaced.store(true, std::memory_order_relaxed);
         if (++g_march_modules <= 3)
             X4VR_LOG("fog march: X4's volume_walk for %d medium(s) (%zu bytes) replaced by our "
                      "march — one ray per pixel of %ux%u across X4's field, %u depths, wisps "
@@ -9986,6 +10024,22 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         std::lock_guard<std::mutex> lock(g_fsr_mu);
         g_fsr_modules.insert(*out);
     }
+    if (r == VK_SUCCESS && fog_march_on() && g_active && ci->pCode && ci->codeSize >= 20) {
+        const std::vector<uint32_t> words(ci->pCode, ci->pCode + ci->codeSize / 4);
+        const x4vr::spv::FogPrep kind = x4vr::spv::x4_fog_prep_kind(words);
+        if (kind != x4vr::spv::FogPrep::None) {
+            std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+            g_fog_prep_mods[*out] = (int)kind;
+            g_fog_prep_nmods++;
+            static const char *const kName[4] = {"", "volume_base", "volume_point",
+                                                 "volume_shad"};
+            static uint32_t said = 0;
+            if (said++ < 9)
+                X4VR_LOG("fog prep: X4's %s recognised (%zu bytes): its dispatches are "
+                         "skipped while our march has the walk's place",
+                         kName[(int)kind], (size_t)ci->codeSize);
+        }
+    }
     const bool is_march = is_fog_vol && tl_fog_march;
     if (r == VK_SUCCESS && is_fog_vol && !is_march) {
         std::lock_guard<std::mutex> lock(g_fog_probe_mu);
@@ -10687,8 +10741,8 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             const bool fix = fog_cards_fix();
             if (fog_march_on()) {
                 // V: X4's own fog (its walk, its grid) and cards; A and B: our march, the
-                // cards off. A the march as built (take 493's B, chosen); B a step thinner
-                // (extinction 0.7 of A's).
+                // cards off. A the march as built, X4's preparation skipped; B the same, X4's
+                // preparation run (after take 495).
                 g_pose.value.fog[0] = fa == 0 ? 0.f : 1.f;
                 g_pose.value.fog[1] = 1.f;
                 g_pose.value.fog[2] = fa == 2 ? kMarchThinB : 1.f;
@@ -10702,9 +10756,8 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                     X4VR_LOG("fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)",
                              (unsigned long long)phase,
                              fa == 0 ? "V, X4's own fog and cards"
-                             : fa == 1 ? "A, our march, extinction 0.0012, no cards"
-                                       : "B, our march, extinction 0.00084 (thinner), no "
-                                         "cards");
+                             : fa == 1 ? "A, our march, X4's preparation skipped, no cards"
+                                       : "B, our march, X4's preparation run, no cards");
                 }
             } else {
             g_pose.value.fog[0] = fa == 0 || (fix && fa == 1) ? 0.f : 1.f;
@@ -11384,6 +11437,17 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
             if (out[i] != VK_NULL_HANDLE && g_fsr_modules.count(ci[i].stage.module))
                 g_fsr_pipes.insert(out[i]);
     }
+    if (r == VK_SUCCESS && fog_march_on()) {
+        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        for (uint32_t i = 0; i < count; i++)
+            if (out[i] != VK_NULL_HANDLE) {
+                auto m = g_fog_prep_mods.find(ci[i].stage.module);
+                if (m != g_fog_prep_mods.end()) {
+                    g_fog_prep_pipes[out[i]] = m->second;
+                    g_fog_prep_npipes++;
+                }
+            }
+    }
     if (r == VK_SUCCESS && fog_probe_on()) {
         std::lock_guard<std::mutex> lock(g_fog_probe_mu);
         for (uint32_t i = 0; i < count; i++)
@@ -11652,6 +11716,36 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatch(VkCommandBuffer cb, uint32_t x,
             g_march.barrier_after(cb);
             g_march_dirty.store(true, std::memory_order_relaxed);
             g_march_dispatches++;
+            if (fog_probe_on())
+                fog_probe_dispatch(cb, x, y, z);
+            return;
+        }
+        int prep = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+            auto m = g_fog_prep_cb.find(cb);
+            prep = m == g_fog_prep_cb.end() ? 0 : m->second;
+        }
+        if (prep > 0 && prep < 4) {
+            // X4's preparation (after take 495): skipped while our march has the walk's
+            // place; run in an A/B's V (X4's walk reads it) and B (timed: what the skip saves).
+            const int arm = fog_ab() ? g_fog_arm.load(std::memory_order_relaxed) : 1;
+            static const char *const kName[4] = {"", "volume_base", "volume_point",
+                                                 "volume_shad"};
+            if (g_march_walk_replaced.load(std::memory_order_relaxed) && arm == 1) {
+                if (++g_fog_prep_skipped[prep] <= 2)
+                    X4VR_LOG("fog prep: X4's %s dispatch skipped (our march has the walk's "
+                             "place)", kName[prep]);
+                return;
+            }
+            if (++g_fog_prep_ran[prep] <= 2)
+                X4VR_LOG("fog prep: X4's %s dispatch run (%s)", kName[prep],
+                         !g_march_walk_replaced.load(std::memory_order_relaxed)
+                             ? "no march in the walk's place"
+                             : arm == 0 ? "the vanilla phase" : "the B phase, timed");
+            const int slot = g_march_timer.begin(cb, (uint32_t)(2 + prep));
+            d->CmdDispatch(cb, x, y, fsr_dispatch_z(cb, x, y, z));
+            g_march_timer.end(cb, slot);
             if (fog_probe_on())
                 fog_probe_dispatch(cb, x, y, z);
             return;
@@ -16355,6 +16449,8 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
             which = 1; // ours, with X4's own pipeline not made
         }
         g_march_cb[cb] = which;
+        auto pp = g_fog_prep_pipes.find(p);
+        g_fog_prep_cb[cb] = pp == g_fog_prep_pipes.end() ? 0 : pp->second;
     }
     if (fog_probe_on()) {
         std::lock_guard<std::mutex> lock(g_fog_probe_mu);
@@ -16746,6 +16842,21 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
     // screen (take 492, The Void). One stale frame at most, and nothing in a frame with fog.
     if (fog_march_on()) {
         g_march_timer.present();
+        // The slow ones (after take 495's rare 4 ms): each with its frame, so the log's
+        // times around it say what was happening.
+        for (const auto &sl : g_march_timer.drain_slow()) {
+            const uint64_t n = ++g_march_slow[sl.kind];
+            static const char *const kKind[x4vr::GpuTimer::kKinds] = {
+                "X4's own walk", "our march (A)", "our march (B)", "X4's volume_base",
+                "X4's volume_point", "X4's volume_shad"};
+            static uint32_t said = 0;
+            if (said++ < 40)
+                X4VR_LOG("fog march: a slow dispatch — %s took %.2f ms on the GPU (recorded at "
+                         "present %llu, %llu ago; %llu of this kind so far)",
+                         kKind[sl.kind], sl.ms, (unsigned long long)sl.frame,
+                         (unsigned long long)(g_march_timer.now() - sl.frame),
+                         (unsigned long long)n);
+        }
         static uint64_t seen = 0;
         const uint64_t n = g_march_dispatches.load(std::memory_order_relaxed);
         if (n == seen && g_march_dirty.exchange(false, std::memory_order_relaxed))

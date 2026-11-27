@@ -174,6 +174,17 @@ int main() {
         printf("       fill of 256 MB: %.4f ms; empty bracket: %.4f ms\n", fill[0], empty[0]);
         check(fill[0] > 0.f && fill[0] < 1000.f, "the fill's time is above zero and finite");
         check(empty[0] < fill[0], "the empty bracket's time is below the fill's");
+        // The slow ones (after take 495): every time over kSlowMs kept, with its frame, and no
+        // other -- the fill is one on lavapipe (about 66 ms), not on a fast card.
+        const auto slow = timer.drain_slow();
+        const size_t over = (fill[0] > x4vr::GpuTimer::kSlowMs ? 1 : 0) +
+                            (empty[0] > x4vr::GpuTimer::kSlowMs ? 1 : 0);
+        bool kinds_ok = true;
+        for (const auto &sl : slow)
+            kinds_ok = kinds_ok && sl.kind == 1 && sl.ms == fill[0] && sl.frame == 0;
+        printf("       slow (over %.0f ms): %zu\n", (double)x4vr::GpuTimer::kSlowMs, slow.size());
+        check(slow.size() == over && kinds_ok, "the slow ones kept: exactly those over kSlowMs");
+        check(timer.drain_slow().empty(), "drained once");
     }
     for (int i = 0; i < 4; i++)
         timer.present();

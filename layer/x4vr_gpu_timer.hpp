@@ -39,7 +39,14 @@ struct GpuTimerFns {
 
 class GpuTimer {
 public:
-    static constexpr uint32_t kSlots = 1024, kKinds = 3;
+    static constexpr uint32_t kSlots = 1024, kKinds = 6;
+    // A time over kSlowMs is kept with its frame (after take 495: a rare 4 ms dispatch).
+    static constexpr float kSlowMs = 2.f;
+    struct Slow {
+        uint32_t kind;
+        float ms;
+        uint64_t frame; // the present count when its bracket was recorded
+    };
     static constexpr uint64_t kMinAge = 4, kMaxAge = 600;
 
     // False, with `why`, and the timer off, when the queue family keeps no timestamps or
@@ -117,8 +124,11 @@ public:
                 const uint64_t dt = ((r[2] & mask_) - (r[0] & mask_)) & mask_;
                 std::lock_guard<std::mutex> lock(mu_);
                 std::vector<float> &v = ms_[kind_[s]];
+                const float ms = (float)(dt * period_ms_);
                 if (v.size() < 200000)
-                    v.push_back((float)(dt * period_ms_));
+                    v.push_back(ms);
+                if (ms > kSlowMs && slow_.size() < 1000)
+                    slow_.push_back({kind_[s], ms, frame_[s]});
                 state_[s].store(0, std::memory_order_release);
             } else if (age > kMaxAge) {
                 (r[1] && r[3] && !fresh ? stale_ : lost_).fetch_add(1, std::memory_order_relaxed);
@@ -134,6 +144,14 @@ public:
         std::sort(v.begin(), v.end());
         return v;
     }
+    // The slow ones read since the last call, oldest first.
+    std::vector<Slow> drain_slow() {
+        std::lock_guard<std::mutex> lock(mu_);
+        std::vector<Slow> out;
+        out.swap(slow_);
+        return out;
+    }
+    uint64_t now() const { return frame_now_.load(std::memory_order_relaxed); }
     uint64_t skipped() const { return skipped_.load(); }
     uint64_t lost() const { return lost_.load(); }
     uint64_t stale() const { return stale_.load(); }
@@ -153,6 +171,7 @@ private:
     std::atomic<uint64_t> frame_now_{0}, skipped_{0}, lost_{0}, stale_{0};
     mutable std::mutex mu_; // ms_: filled at presents, read by the reports
     std::vector<float> ms_[kKinds];
+    std::vector<Slow> slow_;
 };
 
 } // namespace x4vr

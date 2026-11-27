@@ -12,7 +12,8 @@ ROOT="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="${X4VR_BUILD:-$ROOT/build}"
 BIN="$BUILD/tests/x4vr_test_march_smoke"
 [[ -x "$BIN" ]] || { echo "build first: cmake --build $BUILD" >&2; exit 1; }
-ARGS=("$BUILD/tests/sample_volume_walk.comp.spv" "$BUILD/tests/fullscreen.vert.spv" "$BUILD/tests/sample_fog_apply.frag.spv")
+ARGS=("$BUILD/tests/sample_volume_walk.comp.spv" "$BUILD/tests/fullscreen.vert.spv" "$BUILD/tests/sample_fog_apply.frag.spv"
+      "$BUILD/tests/sample_volume_point.comp.spv")
 LAYERS=VK_LAYER_X4VR_core
 VAL=0
 if ls /usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json >/dev/null 2>&1; then
@@ -36,6 +37,9 @@ check "march: the walk replaced" "grep -q 'replaced by our march' '$LOG'"
 check "march: the blend patched" "grep -q \"now reads our march's volume\" '$LOG'"
 check "march: the stereo patch ran too" "grep -q 'patched fragment shader #1 (index + ViewIndex' '$LOG'"
 check "march: setup in front" "grep -q 'one-time setup goes in front' '$LOG'"
+# After take 495: X4's preparation (stood in by volume_point) skipped behind our march.
+check "march: X4's preparation recognised" "grep -q \"fog prep: X4's volume_point recognised\" '$LOG'"
+check "march: X4's preparation skipped" "grep -q \"fog prep: X4's volume_point dispatch skipped\" '$LOG'"
 check "march: its GPU stopwatch on" "grep -q 'its GPU stopwatch is on' '$LOG'"
 check "march: no setup warning" "! grep -q 'fog march: WARNING' '$LOG'"
 check "march: picture finite" "grep -q '^FINITE=1' <<<\"\$out\""
@@ -72,10 +76,12 @@ outn1=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS="$LAYERS" X4VR_P
         "${BL[@]}" X4VR_NEBULA=volumetric X4VR_LOG="$LOGN" "$BIN" "${ARGS[@]}" 2>&1)
 check "nebula volumetric: the walk replaced" "grep -q 'replaced by our march' '$LOGN'"
 check "nebula volumetric: the blend reads ours" "grep -q '^OURS=1' <<<\"\$outn1\""
+LOGV="$(mktemp)"
 outn0=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS=VK_LAYER_X4VR_core X4VR_POSE=1 X4VR_STEREO=1 \
-        "${BL[@]}" X4VR_NEBULA=vanilla X4VR_LOG= "$BIN" "${ARGS[@]}" 2>&1)
+        "${BL[@]}" X4VR_NEBULA=vanilla X4VR_LOG="$LOGV" "$BIN" "${ARGS[@]}" 2>&1)
 check "nebula vanilla: X4's grid alone" "grep -q '^OURS=0' <<<\"\$outn0\""
-rm -f "$LOGN"
+check "nebula vanilla: X4's preparation untouched" "! grep -q 'fog prep' '$LOGV'"
+rm -f "$LOGN" "$LOGV"
 # Control: X4's grid alone.
 out0=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS=VK_LAYER_X4VR_core X4VR_POSE=1 X4VR_STEREO=1 \
        "${BL[@]}" X4VR_LOG= "$BIN" "${ARGS[@]}" 2>&1)

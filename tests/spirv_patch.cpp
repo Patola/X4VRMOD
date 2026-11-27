@@ -1933,6 +1933,13 @@ int main(int argc, char **argv) {
         printf("IS=%d WHY=%s\n", is ? 1 : 0, is ? "" : rep.why);
         return 0;
     }
+    // fog-prep <in.spv>: which of X4's froxel fog preparation stages this is (after take
+    // 495): 0 none, 1 volume_base, 2 volume_point, 3 volume_shad.
+    if (strcmp(argv[1], "fog-prep") == 0 && argc >= 3) {
+        const std::vector<uint32_t> code = load_spv(argv[2]);
+        printf("PREP=%d\n", code.empty() ? -1 : (int)x4vr::spv::x4_fog_prep_kind(code));
+        return 0;
+    }
     // volume-walk <in.spv>: is_x4_volume_walk's verdict, the media, and why.
     if (strcmp(argv[1], "volume-walk") == 0 && argc >= 3) {
         const std::vector<uint32_t> code = load_spv(argv[2]);
