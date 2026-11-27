@@ -12,8 +12,15 @@
 // picture), MEAN and SPREAD of its green, and OURS -- whether the picture is not what X4's
 // own grid stand-in (a constant 0.5) would give: 0.3 * 0.5 + 0.5 = 0.65. With the validation layer below ours, any
 // misuse of Vulkan by the layer shows on stderr.
+//
+// SMOKE_FRAMES=3 (after take 492): two more frames, each presented through a headless
+// swapchain so the layer sees X4's frame boundaries -- the blend drawn with no walk
+// dispatched, as in a sector without fog. Frame 3 is printed too (F3_ lines): the layer
+// must have cleared its volume once it saw a frame with no march, or the blend shows the
+// last march's picture, fixed to the screen (take 492, The Void).
 #include <vulkan/vulkan.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -123,6 +130,12 @@ int main(int argc, char **argv) {
     app.apiVersion = VK_API_VERSION_1_2;
     VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ici.pApplicationInfo = &app;
+    const bool frames3 = getenv("SMOKE_FRAMES") && atoi(getenv("SMOKE_FRAMES")) >= 3;
+    const char *iexts[2] = {VK_KHR_SURFACE_EXTENSION_NAME, "VK_EXT_headless_surface"};
+    if (frames3) {
+        ici.enabledExtensionCount = 2;
+        ici.ppEnabledExtensionNames = iexts;
+    }
     VkInstance inst;
     CK(vkCreateInstance(&ici, nullptr, &inst));
     uint32_t n = 0;
@@ -160,6 +173,11 @@ int main(int argc, char **argv) {
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
+    const char *dexts[1] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    if (frames3) {
+        dci.enabledExtensionCount = 1;
+        dci.ppEnabledExtensionNames = dexts;
+    }
     CK(vkCreateDevice(phys, &dci, nullptr, &dev));
     VkQueue q;
     vkGetDeviceQueue(dev, fam, 0, &q);
@@ -433,20 +451,119 @@ int main(int argc, char **argv) {
     CK(vkQueueSubmit(q, 1, &si, VK_NULL_HANDLE));
     CK(vkQueueWaitIdle(q));
 
-    // The blended picture's green: X4's grid alone would give 0.3 * 0.5 + 0.5 = 0.65.
-    const uint16_t *px = (const uint16_t *)prb;
-    bool finite = true;
-    double sum = 0, sum2 = 0;
-    for (int i = 0; i < 64 * 64; i++) {
-        const float g = h2f(px[i * 4 + 1]);
-        if (!std::isfinite(g))
-            finite = false;
-        sum += g;
-        sum2 += (double)g * g;
+    // The blended picture's green: X4's grid alone would give 0.3 * 0.5 + 0.5 = 0.65, no
+    // fog at all 0.3 (the stand-in's colour) with no spread.
+    auto stats = [&](const char *pre) {
+        const uint16_t *px = (const uint16_t *)prb;
+        bool finite = true;
+        double sum = 0, sum2 = 0;
+        for (int i = 0; i < 64 * 64; i++) {
+            const float g = h2f(px[i * 4 + 1]);
+            if (!std::isfinite(g))
+                finite = false;
+            sum += g;
+            sum2 += (double)g * g;
+        }
+        const double mean = sum / 4096.0,
+                     spread = std::sqrt(std::fmax(0.0, sum2 / 4096.0 - mean * mean));
+        printf("%sFINITE=%d\n%sMEAN=%.4f\n%sSPREAD=%.4f\n%sOURS=%d\n", pre, finite ? 1 : 0, pre,
+               mean, pre, spread, pre, (std::fabs(mean - 0.65) > 0.02 || spread > 0.005) ? 1 : 0);
+    };
+    stats("");
+    if (frames3) {
+        // A headless swapchain, its images ready to present.
+        auto csurf = (PFN_vkCreateHeadlessSurfaceEXT)vkGetInstanceProcAddr(
+            inst, "vkCreateHeadlessSurfaceEXT");
+        if (!csurf) {
+            printf("FAIL no VK_EXT_headless_surface\n");
+            return 1;
+        }
+        VkHeadlessSurfaceCreateInfoEXT hsi{};
+        hsi.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
+        VkSurfaceKHR surf;
+        CK(csurf(inst, &hsi, nullptr, &surf));
+        uint32_t nf = 0;
+        vkGetPhysicalDeviceSurfaceFormatsKHR(phys, surf, &nf, nullptr);
+        std::vector<VkSurfaceFormatKHR> sf(nf);
+        vkGetPhysicalDeviceSurfaceFormatsKHR(phys, surf, &nf, sf.data());
+        VkSurfaceCapabilitiesKHR caps;
+        CK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys, surf, &caps));
+        VkSwapchainCreateInfoKHR sci2{};
+        sci2.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        sci2.surface = surf;
+        sci2.minImageCount = std::max(2u, caps.minImageCount);
+        sci2.imageFormat = sf[0].format;
+        sci2.imageColorSpace = sf[0].colorSpace;
+        sci2.imageExtent = {64, 64};
+        sci2.imageArrayLayers = 1;
+        sci2.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        sci2.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+        sci2.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        sci2.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+        sci2.clipped = VK_TRUE;
+        VkSwapchainKHR swc;
+        CK(vkCreateSwapchainKHR(dev, &sci2, nullptr, &swc));
+        uint32_t ni = 0;
+        vkGetSwapchainImagesKHR(dev, swc, &ni, nullptr);
+        std::vector<VkImage> sims(ni);
+        vkGetSwapchainImagesKHR(dev, swc, &ni, sims.data());
+        VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        VkFence af;
+        CK(vkCreateFence(dev, &fci, nullptr, &af));
+        // Acquire, bring that image to the present layout (nothing is drawn in it), present.
+        auto present = [&]() -> int {
+            uint32_t idx = 0;
+            CK(vkAcquireNextImageKHR(dev, swc, UINT64_MAX, VK_NULL_HANDLE, af, &idx));
+            CK(vkWaitForFences(dev, 1, &af, VK_TRUE, UINT64_MAX));
+            CK(vkResetFences(dev, 1, &af));
+            VkCommandBuffer pc;
+            CK(vkAllocateCommandBuffers(dev, &cai, &pc));
+            CK(vkBeginCommandBuffer(pc, &bi));
+            VkImageMemoryBarrier pb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            pb.srcQueueFamilyIndex = pb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            pb.image = sims[idx];
+            pb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            pb.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            pb.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            vkCmdPipelineBarrier(pc, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                                 &pb);
+            CK(vkEndCommandBuffer(pc));
+            VkSubmitInfo psi{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            psi.commandBufferCount = 1;
+            psi.pCommandBuffers = &pc;
+            CK(vkQueueSubmit(q, 1, &psi, VK_NULL_HANDLE));
+            CK(vkQueueWaitIdle(q));
+            VkPresentInfoKHR ppi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+            ppi.swapchainCount = 1;
+            ppi.pSwapchains = &swc;
+            ppi.pImageIndices = &idx;
+            CK(vkQueuePresentKHR(q, &ppi));
+            return 0;
+        };
+        // Frames 2 and 3: X4's blend, and no walk -- a sector with no fog.
+        VkCommandBuffer c2;
+        CK(vkAllocateCommandBuffers(dev, &cai, &c2));
+        CK(vkBeginCommandBuffer(c2, &bi));
+        vkCmdBeginRenderPass(c2, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindDescriptorSets(c2, VK_PIPELINE_BIND_POINT_GRAPHICS, pl, 0, 2, ds, 0, nullptr);
+        vkCmdBindDescriptorSets(c2, VK_PIPELINE_BIND_POINT_GRAPHICS, pl, 4, 1, &ds[2], 0, nullptr);
+        vkCmdBindPipeline(c2, VK_PIPELINE_BIND_POINT_GRAPHICS, gpipe);
+        vkCmdDraw(c2, 3, 1, 0, 0);
+        vkCmdEndRenderPass(c2);
+        vkCmdCopyImageToBuffer(c2, colour, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, rb, 1, &rg);
+        CK(vkEndCommandBuffer(c2));
+        if (present())
+            return 1;
+        si.pCommandBuffers = &c2;
+        for (int f = 2; f <= 3; f++) {
+            CK(vkQueueSubmit(q, 1, &si, VK_NULL_HANDLE));
+            CK(vkQueueWaitIdle(q));
+            if (f == 2 && present())
+                return 1;
+        }
+        stats("F3_");
     }
-    const double mean = sum / 4096.0, spread = std::sqrt(std::fmax(0.0, sum2 / 4096.0 - mean * mean));
-    printf("FINITE=%d\nMEAN=%.4f\nSPREAD=%.4f\nOURS=%d\n", finite ? 1 : 0, mean, spread,
-           (std::fabs(mean - 0.65) > 0.02 || spread > 0.005) ? 1 : 0);
     vkDeviceWaitIdle(dev);
     return 0;
 }

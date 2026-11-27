@@ -148,16 +148,20 @@ public:
         VkCommandBufferAllocateInfo ai{};
         ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        ai.commandBufferCount = 1;
-        VkCommandBuffer cb = VK_NULL_HANDLE;
+        ai.commandBufferCount = 2;
+        VkCommandBuffer cbs[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
         if (fns_.CreateCommandPool(device_, &pi, nullptr, &pool_) != VK_SUCCESS ||
-            (ai.commandPool = pool_, fns_.AllocateCommandBuffers(device_, &ai, &cb) != VK_SUCCESS)) {
+            (ai.commandPool = pool_, fns_.AllocateCommandBuffers(device_, &ai, cbs) != VK_SUCCESS)) {
             *why = "its command buffer";
             return VK_NULL_HANDLE;
         }
+        const VkCommandBuffer cb = cbs[0];
         // Made here, not through the loader's trampoline: the device's dispatch pointer
         // is copied in by hand, as the layer interface asks.
         *(void **)cb = *(void **)device_;
+        *(void **)cbs[1] = *(void **)device_;
+        record_clear(cbs[1]);
+        family_ = family;
         VkCommandBufferBeginInfo bi{};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -199,9 +203,45 @@ public:
         return cb;
     }
 
+    // The volume back to no fog (after take 492): recorded once, beside the setup, put in
+    // front of X4's next submission after a frame in which no march ran. X4 skips its fog
+    // walk where there is no fog, and so our march, but keeps drawing its blend: reading
+    // the last march's volume, which sits on the screen, it drew that frame's fog fixed to
+    // the face (The Void). VK_NULL_HANDLE until the setup is recorded.
+    VkCommandBuffer clear_cb() const { return clear_; }
+    uint32_t family() const { return family_; }
+
     // Around the march's dispatch, in X4's command buffer: the previous frame's reads of
     // the volume (X4's blend) finish before it is written, and the write before the
     // blend reads it.
+    void record_clear(VkCommandBuffer cb) {
+        VkCommandBufferBeginInfo bi{};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT; // submitted again and again
+        if (fns_.BeginCommandBuffer(cb, &bi) != VK_SUCCESS)
+            return;
+        VkMemoryBarrier mb{};
+        mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        fns_.CmdPipelineBarrier(cb,
+                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+        VkClearColorValue none{};
+        none.float32[3] = 1.f; // no light, everything behind shows
+        const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        fns_.CmdClearColorImage(cb, volume_, VK_IMAGE_LAYOUT_GENERAL, &none, 1, &all);
+        mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        fns_.CmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                0, 1, &mb, 0, nullptr, 0, nullptr);
+        if (fns_.EndCommandBuffer(cb) == VK_SUCCESS)
+            clear_ = cb;
+    }
+
     void barrier_before(VkCommandBuffer cb) const {
         VkMemoryBarrier mb{};
         mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -285,6 +325,8 @@ private:
     VkSampler clamp_ = VK_NULL_HANDLE, repeat_ = VK_NULL_HANDLE;
     VkBuffer staging_ = VK_NULL_HANDLE;
     VkCommandPool pool_ = VK_NULL_HANDLE;
+    VkCommandBuffer clear_ = VK_NULL_HANDLE; // record_clear's, once the setup is recorded
+    uint32_t family_ = 0;                     // the queue family both were made for
 };
 
 } // namespace x4vr

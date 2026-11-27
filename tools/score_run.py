@@ -5701,6 +5701,11 @@ def main(path):
             print(f"fogmarch {md} march dispatch(es) ({mw}x{mh} rays, {mk} depths), {mx4} of X4's own "
                   f"walk; blend patched in {mpat} module(s), {mref} refused; X4's own walk "
                   f"pipelines {mpipes} made, {mpfail} failed; objects {mobj}; setup {msetup}")
+            # After take 492: the clears after frames with no march (fogless space).
+            clr = re.findall(r"fog march final: .*; cleared (\d+) time\(s\) after a frame with no march",
+                             text)
+            if clr:
+                print(f"fogmarch cleared {clr[-1]} time(s) after a frame with no march")
             ab = bool(re.search(r"\bX4VR_FOG_AB=recentre\b", run or ""))
             ours_phases = {k for _, k in re.findall(r"fog smoke: phase #(\d+) — (V|A|B)(?=[ ,])", text)}
             if mobj != "made":

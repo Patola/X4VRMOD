@@ -50,6 +50,21 @@ grep -iE 'Validation Error' <<<"$out" | head -5 | sed 's/^/       | /'
 outn=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS="$LAYERS" X4VR_POSE=1 X4VR_STEREO=1 \
        "${BL[@]}" X4VR_FOG_PROBE=march X4VR_LOG= SMOKE_GRID=nan "$BIN" "${ARGS[@]}" 2>&1)
 check "march: X4's grid NaN, ours finite" "grep -q '^FINITE=1' <<<\"\$outn\""
+# Take 492 (The Void): X4 skips its fog walk where there is no fog, and so our march, but
+# still draws its blend. Three frames, presented: the walk and blend, then the blend alone
+# twice. Frame 3 must be no fog at all (the stand-in's 0.3, no spread), not the last
+# march's picture fixed to the screen; one clear, after frame 2's present.
+LOG3="$(mktemp)"
+out3=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS="$LAYERS" X4VR_POSE=1 X4VR_STEREO=1 \
+       "${BL[@]}" X4VR_FOG_PROBE=march X4VR_LOG="$LOG3" SMOKE_FRAMES=3 "$BIN" "${ARGS[@]}" 2>&1)
+check "march: frame 1 ours (three frames)" "grep -q '^OURS=1' <<<\"\$out3\""
+check "march: no march, then no fog" "awk -F= '/^F3_MEAN=/{m=\$2} /^F3_SPREAD=/{s=\$2} END{exit !(m>0.298 && m<0.302 && s+0==0)}' <<<\"\$out3\""
+check "march: cleared once" "[ \"\$(grep -c 'cleared to no fog' '$LOG3')\" = 1 ]"
+if [[ $VAL == 1 ]]; then
+    check "march: three frames, no validation error" "! grep -qiE 'Validation Error|VUID-' <<<\"\$out3\""
+fi
+grep -E '^F3_(MEAN|SPREAD)|^FAIL' <<<"$out3" | sed 's/^/       3 frames | /'
+rm -f "$LOG3"
 # Control: X4's grid alone.
 out0=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS=VK_LAYER_X4VR_core X4VR_POSE=1 X4VR_STEREO=1 \
        "${BL[@]}" X4VR_LOG= "$BIN" "${ARGS[@]}" 2>&1)

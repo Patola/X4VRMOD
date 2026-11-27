@@ -2238,6 +2238,11 @@ std::unordered_map<VkPipeline, VkPipeline> &g_march_x4pipe =
 std::unordered_map<VkCommandBuffer, int> &g_march_cb =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, int>>();
 std::atomic<uint64_t> g_march_dispatches{0}, g_march_x4_dispatches{0};
+// After take 492 (The Void: the last march's fog fixed to the face): our volume holds fog
+// (dirty) from a march until cleared; a present with no march since the last one asks
+// for a clear (pending), put in front of X4's next submission on the setup's family.
+std::atomic<bool> g_march_dirty{false}, g_march_clear_pending{false};
+std::atomic<uint64_t> g_march_clears{0};
 std::atomic<uint32_t> g_march_modules{0}, g_march_apply_patched{0}, g_march_apply_refused{0},
     g_march_x4pipes{0}, g_march_x4pipe_failed{0};
 thread_local bool tl_fog_march = false;
@@ -2245,8 +2250,8 @@ thread_local bool tl_march_blend = false; // this thread's last module got the b
 // Under g_fog_probe_mu: the modules made from X4's fog blend with the march's edit.
 std::unordered_set<VkShaderModule> &g_march_blend_mods =
     x4vr::immortal<std::unordered_set<VkShaderModule>>();
-// B against A (after take 491, "still too strong and too big"; A half as dense as 491's, its
-// clouds at 0.8 of their size): B thinner still, extinction 0.7 of A's (0.35 of 491's).
+// B against A (after take 492, whose B -- extinction 0.00175 -- is now A): B one step thinner
+// again, extinction 0.7 of A's, to say whether A is it or lighter is better.
 constexpr float kMarchThinB = 0.7f;
 
 constexpr int kSmokeParams = 27;
@@ -5562,14 +5567,16 @@ void shader_knob_report(const char *when) {
             X4VR_LOG("fog march %s: %llu dispatch(es) of our march (%ux%u rays, %u depths), %llu "
                      "of X4's own walk (the vanilla phase); X4's fog blend patched in %u "
                      "module(s), %u refused; X4's own walk pipelines %u made beside ours, %u "
-                     "failed; our objects %s; setup %s — DIAGNOSTIC",
+                     "failed; our objects %s; setup %s; cleared %llu time(s) after a frame "
+                     "with no march — DIAGNOSTIC",
                      when, (unsigned long long)g_march_dispatches.load(), x4vr::FogMarch::kW,
                      x4vr::FogMarch::kH, x4vr::FogMarch::kK,
                      (unsigned long long)g_march_x4_dispatches.load(),
                      g_march_apply_patched.load(), g_march_apply_refused.load(),
                      g_march_x4pipes.load(), g_march_x4pipe_failed.load(),
                      g_march_ready.load() ? "made" : "NOT made",
-                     g_march_setup_sent.load() ? "sent" : "NOT sent");
+                     g_march_setup_sent.load() ? "sent" : "NOT sent",
+                     (unsigned long long)g_march_clears.load());
         if (fog_march_on()) {
             if (!g_march_timer.on()) {
                 X4VR_LOG("fog march %s: GPU time — OFF: %s", when, g_march_timer_why.c_str());
@@ -10648,9 +10655,8 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             const bool fix = fog_cards_fix();
             if (fog_march_on()) {
                 // V: X4's own fog (its walk, its grid) and cards; A and B: our march, the
-                // cards off. A the march as built; B thinner (extinction 0.7 of A's), a
-                // stronger dose of take 491's "too strong". Over 24 views a 10 deg head turn
-                // changes A by 4.5% of the bright clouds at p99 (491's A: 4.1%).
+                // cards off. A the march as built (take 492's B, chosen); B a step thinner
+                // (extinction 0.7 of A's).
                 g_pose.value.fog[0] = fa == 0 ? 0.f : 1.f;
                 g_pose.value.fog[1] = 1.f;
                 g_pose.value.fog[2] = fa == 2 ? kMarchThinB : 1.f;
@@ -10664,8 +10670,8 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                     X4VR_LOG("fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)",
                              (unsigned long long)phase,
                              fa == 0 ? "V, X4's own fog and cards"
-                             : fa == 1 ? "A, our march, extinction 0.0025, no cards"
-                                       : "B, our march, extinction 0.00175 (thinner), no "
+                             : fa == 1 ? "A, our march, extinction 0.00175, no cards"
+                                       : "B, our march, extinction 0.0012 (thinner), no "
                                          "cards");
                 }
             } else {
@@ -11612,6 +11618,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatch(VkCommandBuffer cb, uint32_t x,
             d->CmdDispatch(cb, (x4vr::FogMarch::kW + 7) / 8, (x4vr::FogMarch::kH + 7) / 8, 1);
             g_march_timer.end(cb, slot);
             g_march.barrier_after(cb);
+            g_march_dirty.store(true, std::memory_order_relaxed);
             g_march_dispatches++;
             if (fog_probe_on())
                 fog_probe_dispatch(cb, x, y, z);
@@ -13386,6 +13393,37 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
                          "(%s): X4's blend reads an uninitialised volume",
                          why.c_str());
             }
+        }
+    }
+    // The march's volume back to no fog, after a frame with no march (take 492): its clear
+    // in front of this submission, on the family it was recorded for.
+    if (g_march_clear_pending.load(std::memory_order_relaxed) && g_march.clear_cb()) {
+        uint32_t fam = 0;
+        if (queue_family_of(queue, fam) && fam == g_march.family() &&
+            g_march_clear_pending.exchange(false, std::memory_order_relaxed)) {
+            // After the setup when both go in front of this one submission: the setup is
+            // what brings the volume to the layout the clear expects.
+            const size_t after = msub.empty() ? 0 : 1;
+            if (msub.empty()) {
+                VkSubmitInfo one{};
+                one.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                if (submitCount)
+                    msub.assign(submits, submits + submitCount);
+                else
+                    msub.push_back(one);
+                mcbs.assign(msub[0].pCommandBuffers,
+                            msub[0].pCommandBuffers + msub[0].commandBufferCount);
+            }
+            mcbs.insert(mcbs.begin() + after, g_march.clear_cb());
+            msub[0].commandBufferCount = (uint32_t)mcbs.size();
+            msub[0].pCommandBuffers = mcbs.data();
+            submits = msub.data();
+            submitCount = (uint32_t)msub.size();
+            const uint64_t c = ++g_march_clears;
+            if (c <= 3 || c % 100 == 0)
+                X4VR_LOG("fog march: a frame with no march (X4 drew no fog walk): our volume "
+                         "cleared to no fog in front of X4's next submission (%llu so far)",
+                         (unsigned long long)c);
         }
     }
     // #36: the runtime shares this queue on any device with one graphics
@@ -16670,9 +16708,18 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueuePresentKHR(
             pose_ring_report("periodic");
     }
     camdiff_sample();
-    // The march's stopwatch reads what is old enough to have run.
-    if (fog_march_on())
+    // The march's stopwatch reads what is old enough to have run; and a frame with no march
+    // (X4 skips its fog walk where there is no fog, but still draws its blend) asks for our
+    // volume to be cleared, or that blend keeps drawing the last march's fog fixed to the
+    // screen (take 492, The Void). One stale frame at most, and nothing in a frame with fog.
+    if (fog_march_on()) {
         g_march_timer.present();
+        static uint64_t seen = 0;
+        const uint64_t n = g_march_dispatches.load(std::memory_order_relaxed);
+        if (n == seen && g_march_dirty.exchange(false, std::memory_order_relaxed))
+            g_march_clear_pending.store(true, std::memory_order_relaxed);
+        seen = n;
+    }
     // #36: everything below that touches the queue -- the SBS composite, the
     // cursor overlay, the readback's QueueWaitIdle, and the present itself --
     // is inside this scope, so one lock covers X4's whole side of the shared
