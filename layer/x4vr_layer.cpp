@@ -2245,9 +2245,9 @@ thread_local bool tl_march_blend = false; // this thread's last module got the b
 // Under g_fog_probe_mu: the modules made from X4's fog blend with the march's edit.
 std::unordered_set<VkShaderModule> &g_march_blend_mods =
     x4vr::immortal<std::unordered_set<VkShaderModule>>();
-// B against A (after take 490, A kept, "still a bit too solid"): the clouds thinner, their
-// extinction 0.65 of A's -- more see-through and, gathering less light, dimmer (about 30%).
-constexpr float kMarchThinB = 0.65f;
+// B against A (after take 491, "still too strong and too big"; A half as dense as 491's, its
+// clouds at 0.8 of their size): B thinner still, extinction 0.7 of A's (0.35 of 491's).
+constexpr float kMarchThinB = 0.7f;
 
 constexpr int kSmokeParams = 27;
 struct SmokeParam {
@@ -10648,9 +10648,9 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             const bool fix = fog_cards_fix();
             if (fog_march_on()) {
                 // V: X4's own fog (its walk, its grid) and cards; A and B: our march, the
-                // cards off. A the march as built (take 490's A); B thinner (extinction 0.65
-                // of A's): take 490's A was "still a bit too solid". Over eight views a 10 deg
-                // head turn changes either by 4.0-4.1% of the bright clouds at p99.
+                // cards off. A the march as built; B thinner (extinction 0.7 of A's), a
+                // stronger dose of take 491's "too strong". Over 24 views a 10 deg head turn
+                // changes A by 4.5% of the bright clouds at p99 (491's A: 4.1%).
                 g_pose.value.fog[0] = fa == 0 ? 0.f : 1.f;
                 g_pose.value.fog[1] = 1.f;
                 g_pose.value.fog[2] = fa == 2 ? kMarchThinB : 1.f;
@@ -10664,8 +10664,8 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                     X4VR_LOG("fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)",
                              (unsigned long long)phase,
                              fa == 0 ? "V, X4's own fog and cards"
-                             : fa == 1 ? "A, our march, extinction 0.005, no cards"
-                                       : "B, our march, extinction 0.00325 (thinner), no "
+                             : fa == 1 ? "A, our march, extinction 0.0025, no cards"
+                                       : "B, our march, extinction 0.00175 (thinner), no "
                                          "cards");
                 }
             } else {

@@ -61,11 +61,14 @@ layout(set = POSE_SET, binding = 0, std140) uniform X4vrPose {
 layout(set = POSE_SET, binding = 1, rgba16f) uniform restrict writeonly image3D march_out;
 layout(set = POSE_SET, binding = 3) uniform sampler3D noise4;
 
-layout(constant_id = 0) const float kCloud = 670.0;    // a cloud, m
+// After take 491 ("still too strong and too big"): the clouds, their curl and mottling at
+// 0.8 of their size, the wisps kept (smaller ones changed more as the head turned: 5.0% of
+// the bright clouds at p99 against 4.5%, over 24 views), half as dense.
+layout(constant_id = 0) const float kCloud = 536.0;    // a cloud, m (670 to 491)
 layout(constant_id = 1) const float kCover = 0.70;     // where a cloud starts: sparse
 layout(constant_id = 2) const float kSoft = 0.015;     // its edge (0.08 to take 488, 0.03 to 489)
-layout(constant_id = 3) const float kWarp = 400.0;     // the clouds' curl, m
-layout(constant_id = 4) const float kMottle = 200.0;   // the mottling, m (and half)
+layout(constant_id = 3) const float kWarp = 320.0;     // the clouds' curl, m (400)
+layout(constant_id = 4) const float kMottle = 160.0;   // the mottling, m (and half) (200)
 layout(constant_id = 5) const float kStr = 40.0;       // the finest wisps, m
 layout(constant_id = 6) const float kGain = 7.0;       // how thin a wisp is
 layout(constant_id = 7) const float kSharp = 3.0;      // and how sharp
@@ -73,11 +76,11 @@ layout(constant_id = 8) const float kMix = 0.95;       // wisps against the soft
 layout(constant_id = 9) const float kStretch = 1.5;    // wisps drawn out along x
 layout(constant_id = 10) const float kCurl = 3.0;      // how much the wisps curl
 layout(constant_id = 11) const float kFootPx = 3.0;    // no wisp thinner than this many pixels
-layout(constant_id = 12) const float kSigma = 0.005;   // extinction at full density, 1/m (0.003 to 489)
+layout(constant_id = 12) const float kSigma = 0.0025;  // extinction at full density, 1/m (0.003 to 489, 0.005 to 491)
 layout(constant_id = 13) const float kBright = 0.22;   // the glow of an opaque cloud (0.3 to 489)
 layout(constant_id = 14) const float kFar = 2500.0;    // everything fades by here, m
-layout(constant_id = 15) const float kDrift = 4.0;     // the clouds drift, m/s
-layout(constant_id = 16) const float kMorph = 77.0;    // their outlines slide, m/s (12 to 488, 48 to 489)
+layout(constant_id = 15) const float kDrift = 3.2;     // the clouds drift, m/s (4 to 491: with their size)
+layout(constant_id = 16) const float kMorph = 61.6;    // their outlines slide, m/s (12 to 488, 48 to 489, 77 to 491)
 layout(constant_id = 17) const float kChurn = 0.13;    // their curl churns, a second (0.02, 0.08)
 layout(constant_id = 18) const float kTint = 3.0;      // the light colour, deepened
 layout(constant_id = 19) const int kW = 704;           // the march's pixels across
