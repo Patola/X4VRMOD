@@ -21,8 +21,12 @@ if ls /usr/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json >/dev/n
 fi
 LOG="$(mktemp)"
 fails=0
+# With the stereo table patch, as every take runs: it rewrites the blend's lookup of
+# X4's volume to "39 + eye * offset", and take 487's blend patch, run after it, found no
+# element 39 and patched nothing (the scene black).
+BL=(X4VR_BINDLESS_PATCH=1 X4VR_BINDLESS_MIRROR=1)
 out=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS="$LAYERS" X4VR_POSE=1 X4VR_STEREO=1 \
-      X4VR_FOG_PROBE=march X4VR_LOG="$LOG" "$BIN" "${ARGS[@]}" 2>&1)
+      "${BL[@]}" X4VR_FOG_PROBE=march X4VR_LOG="$LOG" "$BIN" "${ARGS[@]}" 2>&1)
 dev=$(sed -n 's/^DEVICE=//p' <<<"$out")
 check() { # label, condition-command
     if eval "$2"; then printf 'ok   %-38s %s\n' "$1" "$dev"; else
@@ -30,6 +34,7 @@ check() { # label, condition-command
 }
 check "march: the walk replaced" "grep -q 'replaced by our march' '$LOG'"
 check "march: the blend patched" "grep -q \"now reads our march's volume\" '$LOG'"
+check "march: the stereo patch ran too" "grep -q 'patched fragment shader #1 (index + ViewIndex' '$LOG'"
 check "march: setup in front" "grep -q 'one-time setup goes in front' '$LOG'"
 check "march: no setup warning" "! grep -q 'fog march: WARNING' '$LOG'"
 check "march: picture finite" "grep -q '^FINITE=1' <<<\"\$out\""
@@ -38,9 +43,15 @@ if [[ $VAL == 1 ]]; then
     check "march: no validation error" "! grep -qiE 'Validation Error|VUID-' <<<\"\$out\""
 fi
 grep -iE 'Validation Error' <<<"$out" | head -5 | sed 's/^/       | /'
+# X4's grid holding NaN: in A and B X4's walk does not run, and its volume holds what it
+# last held, or never-written memory when the first phase is ours. The blend must take ours
+# alone, not X4's times zero: NaN times zero is NaN.
+outn=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS="$LAYERS" X4VR_POSE=1 X4VR_STEREO=1 \
+       "${BL[@]}" X4VR_FOG_PROBE=march X4VR_LOG= SMOKE_GRID=nan "$BIN" "${ARGS[@]}" 2>&1)
+check "march: X4's grid NaN, ours finite" "grep -q '^FINITE=1' <<<\"\$outn\""
 # Control: X4's grid alone.
 out0=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS=VK_LAYER_X4VR_core X4VR_POSE=1 X4VR_STEREO=1 \
-       X4VR_LOG= "$BIN" "${ARGS[@]}" 2>&1)
+       "${BL[@]}" X4VR_LOG= "$BIN" "${ARGS[@]}" 2>&1)
 check "march off: X4's grid alone" "grep -q '^OURS=0' <<<\"\$out0\""
 grep -E '^(MEAN|FAIL)' <<<"$out0" | sed 's/^/       off | /'
 sed -n 's/^\(MEAN\|SPREAD\)=/       \1=/p' <<<"$out"

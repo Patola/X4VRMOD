@@ -5718,6 +5718,11 @@ def main(path):
                 fails.append("fog march: in flight, and our march was never dispatched")
             if flying and ab and "V" in ours_phases and int(mpipes) > 0 and int(mx4) == 0:
                 fails.append("fog march: the vanilla phase never ran X4's own walk")
+            # Take 487: the phases asked for and never switched (only the smoke's were
+            # wired), so the take was A throughout and said nothing.
+            if flying and ab and not ours_phases:
+                fails.append("fog march: A/B asked for, and no phase was drawn (the phases "
+                             "never switched)")
         for used, patched in re.findall(r"fog march: a pipeline with X4's fog blend gets fragment "
                                         r"module (as made|SWAPPED) \(the patched one (or its twin|NOT)\)",
                                         text):

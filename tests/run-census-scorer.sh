@@ -2452,6 +2452,10 @@ want "fog march: V without X4's walk -> FAIL" /tmp/census-march-nov.log "FAIL|  
 want "fog march: unpatched blend drawn -> FAIL" /tmp/census-march-swap.log "FAIL|  - " "draws an unpatched module"
 { mbase; printf '%s\n' "$mrep" "$mpipe" "$mv" "$ma"; } > /tmp/census-march-silent.log
 want "fog march: no final line -> FAIL" /tmp/census-march-silent.log "FAIL|  - " "printed no fog march line"
+# Take 487: the phases asked for and never switched -- no phase line at all.
+{ mbase; printf '%s\n' "$mrep" "$mpipe" "$(mfin 5000 0 3 made sent)"; } > /tmp/census-march-nophase.log
+want "fog march: A/B with no phase -> FAIL" /tmp/census-march-nophase.log "FAIL|  - " "no phase was drawn (the phases never switched)"
+absent "fog march: phases drawn -> no phase FAIL" /tmp/census-march-ok.log "no phase was drawn"
 absent "fog march: not asked -> silent" "$BASE" fogmarch
 
 # After take 485: the smoke installed with density 0 (no A/B) -> FAIL; density 1 -> none.

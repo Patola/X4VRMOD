@@ -165,10 +165,11 @@ int main(int argc, char **argv) {
     vkGetDeviceQueue(dev, fam, 0, &q);
 
     // X4's sets: 0 samplers (4), images (5) and storage images (6, the walk's output
-    // table, as large as X4's); 1 the camera; 4 the dynamic block.
+    // table), both tables as large as X4's, so the stereo patch offsets the blend's
+    // lookups by the eye as in X4 (take 487); 1 the camera; 4 the dynamic block.
     VkDescriptorSetLayoutBinding b0[3] = {
         {4, VK_DESCRIPTOR_TYPE_SAMPLER, 18, VK_SHADER_STAGE_ALL, nullptr},
-        {5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 64, VK_SHADER_STAGE_ALL, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 53306, VK_SHADER_STAGE_ALL, nullptr},
         {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 53306, VK_SHADER_STAGE_ALL, nullptr}};
     VkDescriptorSetLayoutBinding b1 = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1,
                                        VK_SHADER_STAGE_ALL, nullptr};
@@ -244,7 +245,7 @@ int main(int argc, char **argv) {
     VkSampler smp;
     CK(vkCreateSampler(dev, &sci, nullptr, &smp));
     VkDescriptorPoolSize ps[4] = {{VK_DESCRIPTOR_TYPE_SAMPLER, 18},
-                                  {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 64},
+                                  {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 53306},
                                   {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
                                   {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 53306}};
     VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};

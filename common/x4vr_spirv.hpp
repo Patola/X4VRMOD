@@ -7265,10 +7265,14 @@ inline bool is_nebula_fade(float near_start, float far_end) {
 // S_sampler[9]), uvw, 0)` -- 39 its froxel volume, uvw from the pixel's screen position
 // and depth by X4's own mapping -- and composites `colour * v.a + v.rgb`. This adds a
 // second lookup with the same coordinates in our volume (a combined image sampler at
-// (pose_set, march_binding)) and makes the result X4's + (ours - X4's) * fog2.y, fog2.y
-// read from the layer's block at (pose_set, pose_binding), offset 304: 0 X4's own (the
-// A/B's vanilla phase), 1 ours. Every later use of X4's result sees the blend; nothing
-// else changes.
+// (pose_set, march_binding)) and makes the result ours where fog2.y > 0.5, X4's
+// otherwise -- a choice, never a blend, so a NaN in the volume not chosen cannot reach the
+// picture (after take 487) -- fog2.y read from the layer's block at (pose_set,
+// pose_binding), offset 304: 0 X4's own (the A/B's vanilla phase), 1 ours. Every later use
+// of X4's result sees the choice; nothing else changes.
+//
+// Run it BEFORE the stereo table patch (patch_fragment_index_offset): that one turns the
+// constant 39 into 39 + ViewIndex * offset, and this then finds nothing (take 487).
 //
 // Only X4's blend: the module must name U_pass (the blend's dynamic switch) and sample a
 // 3D image loaded from a constant element 39 of an image array -- X4's tonemap also
@@ -7287,7 +7291,7 @@ inline bool patch_fog_apply_march(std::vector<uint32_t> &code, uint32_t pose_set
     if (!iterate(code, insts))
         return r.why = "not SPIR-V", false;
     bool has_pass = false;
-    uint32_t t_float = 0, t_v4 = 0, t_int = 0;
+    uint32_t t_float = 0, t_v4 = 0, t_int = 0, t_bool = 0, t_bv4 = 0;
     std::unordered_map<uint32_t, uint32_t> int_const; // id -> value (32-bit int constants)
     std::unordered_set<uint32_t> img3d, arr3d, ptr_arr3d, var_arr3d;
     std::unordered_map<uint32_t, uint32_t> chain39, load39, si39; // result -> source
@@ -7317,6 +7321,12 @@ inline bool patch_fog_apply_march(std::vector<uint32_t> &code, uint32_t pose_set
         case OpTypeVector:
             if (in.len >= 4 && w[2] == t_float && t_float && w[3] == 4)
                 t_v4 = w[1];
+            if (in.len >= 4 && w[2] == t_bool && t_bool && w[3] == 4)
+                t_bv4 = w[1];
+            break;
+        case OpTypeBool:
+            if (in.len >= 2)
+                t_bool = w[1];
             break;
         case OpTypeImage:
             if (in.len >= 4 && w[3] == 2u) // Dim3D
@@ -7393,6 +7403,18 @@ inline bool patch_fog_apply_march(std::vector<uint32_t> &code, uint32_t pose_set
         t_int = new_id();
         emit(decls, OpTypeInt, {t_int, 32, 1});
     }
+    // The choice's types: X4's own where it declares them (a second OpTypeBool, or a second
+    // bvec4, would be invalid SPIR-V), ours otherwise.
+    if (!t_bool) {
+        t_bool = new_id();
+        emit(decls, OpTypeBool, {t_bool});
+    }
+    if (!t_bv4) {
+        t_bv4 = new_id();
+        emit(decls, OpTypeVector, {t_bv4, t_bool, 4});
+    }
+    const uint32_t c_half = new_id();
+    emit(decls, OpConstant, {t_float, c_half, 0x3f000000u}); // 0.5
     const uint32_t ptr_si = new_id(), var_m = new_id();
     emit(decls, OpTypePointer, {ptr_si, StorageClassUniformConstant, t_si});
     emit(decls, OpVariable, {ptr_si, var_m, StorageClassUniformConstant});
@@ -7428,7 +7450,7 @@ inline bool patch_fog_apply_march(std::vector<uint32_t> &code, uint32_t pose_set
             emit_words(OpImageSampleExplicitLod, x4s);
             // Ours, with the same coordinate and operands.
             const uint32_t msi = new_id(), mv = new_id(), pp = new_id(), f2 = new_id(),
-                           k = new_id(), d = new_id(), sc = new_id();
+                           k = new_id(), b = new_id(), bv = new_id();
             emit(out, OpLoad, {t_si, msi, var_m});
             std::vector<uint32_t> ours(w + 1, w + in.len);
             ours[1] = mv;
@@ -7437,9 +7459,13 @@ inline bool patch_fog_apply_march(std::vector<uint32_t> &code, uint32_t pose_set
             emit(out, OpAccessChain, {ptr_v4, pp, var_p, c0});
             emit(out, OpLoad, {t_v4, f2, pp});
             emit(out, OpCompositeExtract, {t_float, k, f2, 1});
-            emit(out, OpFSub, {t_v4, d, mv, x4});
-            emit(out, OpVectorTimesScalar, {t_v4, sc, d, k});
-            emit(out, OpFAdd, {t_v4, result, x4, sc});
+            // A choice, not a blend (after take 487): in A and B X4's walk does not run, so
+            // its volume holds what it last held -- or never-written memory, when the first
+            // phase is ours -- and a blend's X4 * 0 is NaN wherever that is NaN. The vector
+            // form of OpSelect wants a bvec4 condition before SPIR-V 1.4.
+            emit(out, OpFOrdGreaterThan, {t_bool, b, k, c_half});
+            emit(out, OpCompositeConstruct, {t_bv4, bv, b, b, b, b});
+            emit(out, OpSelect, {t_v4, result, bv, mv, x4});
         } else {
             out.insert(out.end(), code.begin() + in.start, code.begin() + in.start + in.len);
         }

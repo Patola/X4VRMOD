@@ -2275,10 +2275,12 @@ static std::array<float, kSmokeParams> fog_smoke_params() {
 // near the ship only (out to kFogNearFar), for the sense of speed. Otherwise (takes
 // 482-483): V; A, the smoke and no cards; B, the smoke sharper (kFogSharper). Its phase,
 // for the cards and the frame times.
+// The smoke's or the march's phases. The march too (take 487): asked this by name of the
+// smoke alone, the march ran A for the whole take -- no phase line, and its V never ran.
 static bool fog_ab() {
     static const bool ab = [] {
         const char *e = getenv("X4VR_FOG_AB");
-        return fog_smoke_on() && e && !strcmp(e, "recentre");
+        return (fog_smoke_on() || fog_march_on()) && e && !strcmp(e, "recentre");
     }();
     return ab;
 }
@@ -8233,6 +8235,40 @@ VkResult create_shader_module_inner(
     // canvas twin's -- or the edit is computed and thrown away (the march's smoke test
     // caught exactly that: the drawn twin was X4's pristine blend).
     bool march_patched = false;
+    // The march (after take 486): X4's fog blend reads our volume too, by its own lookup,
+    // and takes one of the two by the pose block's fog2.y (1 ours, 0 X4's: the vanilla
+    // phase) -- a choice, so the volume not chosen cannot reach the picture (take 487).
+    //
+    // **First, before the stereo table patch below (take 487).** That one rewrites every
+    // lookup in X4's big image table to "index + ViewIndex * offset", the blend's lookup
+    // of X4's volume included, and this recogniser finds the volume by its constant
+    // element 39: run after it, it found none, patched no module, and X4's blend read a
+    // volume our march had stopped X4 from writing -- the 3D black in both phases. Our
+    // added lookup reads the pose set, which that patch leaves alone; X4's own lookup
+    // still gets its eye offset after this.
+    if (fog_march_on() && g_march_ready.load() && pose_active()) {
+        x4vr::spv::FogApplyReport frep;
+        if (x4vr::spv::patch_fog_apply_march(code, pose_set_index(), kPoseBinding,
+                                             x4vr::FogMarch::kBindVolume, &frep)) {
+            march_patched = true;
+            tl_march_blend = true;
+            if (++g_march_apply_patched <= 4)
+                X4VR_LOG("fog march: X4's fog blend (fragment module, %zu words) now reads our "
+                         "march's volume by its own lookup, X4's grid where fog2.y is 0",
+                         code.size());
+        } else if (strstr(frep.why, "more than one") && ++g_march_apply_refused <= 3) {
+            X4VR_LOG("fog march: a fragment module like X4's fog blend REFUSED: %s", frep.why);
+        } else if (strcmp(frep.why, "no U_pass: not X4's fog blend") != 0 &&
+                   strcmp(frep.why, "not SPIR-V") != 0) {
+            // X4's other full-screen passes with U_pass (about ten programs) land here
+            // too, so this names the reason and decides nothing: take 487's "patched in
+            // 0 module(s)" had no line saying why.
+            static uint32_t said = 0;
+            if (++said <= 6)
+                X4VR_LOG("fog march: a module with X4's U_pass, not taken as the fog blend "
+                         "(%u of the first 6): %s", said, frep.why);
+        }
+    }
     // Named, because it gates TWO unrelated things below and used to gate
     // them as one. See the hoist under "Task #22".
     const bool bindless_ok = g_bindless_patch && g_bindless_mirror;
@@ -8418,22 +8454,6 @@ VkResult create_shader_module_inner(
     // Placed before the twin snapshot below on purpose: the unsheared twin must
     // carry the same fog treatment, or the passes that take the twin would keep
     // the fog while the rest lost it, and the measurement would be unreadable.
-    // The march (after take 486): X4's fog blend reads our volume too, by its own lookup,
-    // and mixes the two by the pose block's fog2.y (1 ours, 0 X4's: the vanilla phase).
-    if (fog_march_on() && g_march_ready.load() && pose_active()) {
-        x4vr::spv::FogApplyReport frep;
-        if (x4vr::spv::patch_fog_apply_march(code, pose_set_index(), kPoseBinding,
-                                             x4vr::FogMarch::kBindVolume, &frep)) {
-            march_patched = true;
-            tl_march_blend = true;
-            if (++g_march_apply_patched <= 4)
-                X4VR_LOG("fog march: X4's fog blend (fragment module, %zu words) now reads our "
-                         "march's volume by its own lookup, X4's grid where fog2.y is 0",
-                         code.size());
-        } else if (strstr(frep.why, "more than one") && ++g_march_apply_refused <= 3) {
-            X4VR_LOG("fog march: a fragment module like X4's fog blend REFUSED: %s", frep.why);
-        }
-    }
     if (const char *fg = getenv("X4VR_DISABLE_FOG"); fg && *fg && *fg != '0') {
         if (x4vr::spv::patch_fragment_disable_fog(code)) {
             const uint64_t n = ++g_fog_disabled;
