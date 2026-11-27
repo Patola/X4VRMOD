@@ -2239,7 +2239,9 @@ thread_local bool tl_march_blend = false; // this thread's last module got the b
 // Under g_fog_probe_mu: the modules made from X4's fog blend with the march's edit.
 std::unordered_set<VkShaderModule> &g_march_blend_mods =
     x4vr::immortal<std::unordered_set<VkShaderModule>>();
-constexpr float kMarchHazeB = 0.03f; // B's haze where A keeps the march's 0.05 (after take 488)
+// B against A (after take 489, "still less bright and less fuzzy"): glow 0.15 where A has the
+// march's 0.22, clouds 1.6 times as dense (extinction 0.008 against 0.005).
+constexpr float kMarchGlowB = 0.15f / 0.22f, kMarchDenseB = 1.6f;
 
 constexpr int kSmokeParams = 27;
 struct SmokeParam {
@@ -10615,26 +10617,27 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             const bool fix = fog_cards_fix();
             if (fog_march_on()) {
                 // V: X4's own fog (its walk, its grid) and cards; A and B: our march, the
-                // cards off, its unresolved wisps leaving a haze of 0.05 (A, the march's
-                // own) or 0.03 (B: the clouds' bodies dimmer, the strands carrying them) --
-                // after take 488, "too bright and fuzzy". B's 0.03, not lower: over eight
-                // views a 10 deg head turn changed it as much as take 488's B (3.9% of the
-                // bright clouds at p99), which he saw as stable; 0.02 changed more.
+                // cards off. A the march as built; B dimmer and denser -- two doses of "still
+                // less bright and less fuzzy" (take 489, where A and B differed by the haze
+                // alone and looked alike). Over eight views a 10 deg head turn changes A by
+                // 4.1% of the bright clouds at p99 and B by 4.2%; take 489's B, seen as
+                // stable, 3.9%.
                 g_pose.value.fog[0] = fa == 0 ? 0.f : 1.f;
-                g_pose.value.fog[1] = 1.f;
-                g_pose.value.fog[2] = 1.f;
+                g_pose.value.fog[1] = fa == 2 ? kMarchGlowB : 1.f;
+                g_pose.value.fog[2] = fa == 2 ? kMarchDenseB : 1.f;
                 g_pose.value.fog[3] = 1.f;
                 g_pose.value.fog2[0] = 0.f;
                 g_pose.value.fog2[1] = fa == 0 ? 0.f : 1.f;
-                g_pose.value.fog2[3] = fa == 2 ? kMarchHazeB : 0.f;
+                g_pose.value.fog2[3] = 0.f;
                 static uint64_t msaid = ~0ull;
                 if (msaid != phase) {
                     msaid = phase;
                     X4VR_LOG("fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)",
                              (unsigned long long)phase,
                              fa == 0 ? "V, X4's own fog and cards"
-                             : fa == 1 ? "A, our march, haze 0.05, no cards"
-                                       : "B, our march, haze 0.03 (dimmer bodies), no cards");
+                             : fa == 1 ? "A, our march, glow 0.22, extinction 0.005, no cards"
+                                       : "B, our march, glow 0.15, extinction 0.008 (dimmer, "
+                                         "denser), no cards");
                 }
             } else {
             g_pose.value.fog[0] = fa == 0 || (fix && fa == 1) ? 0.f : 1.f;

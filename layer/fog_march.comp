@@ -29,7 +29,8 @@
 // nothing of X4's: in our phases X4's blend reads our volume instead.
 //
 // The layer's block, x4vr::PoseBlock, at set 31 (renumbered by the layer): fog.x scales
-// the density (0: none), fog.y the glow, fog.w the wisps' thinness (kFootPx times it);
+// the density (0: none), fog.y the glow, fog.z the extinction (kSigma times it: denser,
+// more defined), fog.w the wisps' thinness (kFootPx times it);
 // fog2.x where the smoke ends, fog2.z its clock (s), fog2.w its haze (0: kHaze).
 #extension GL_ARB_enhanced_layouts : require
 
@@ -62,7 +63,7 @@ layout(set = POSE_SET, binding = 3) uniform sampler3D noise4;
 
 layout(constant_id = 0) const float kCloud = 670.0;    // a cloud, m
 layout(constant_id = 1) const float kCover = 0.70;     // where a cloud starts: sparse
-layout(constant_id = 2) const float kSoft = 0.03;      // its edge (0.08 to take 488)
+layout(constant_id = 2) const float kSoft = 0.015;     // its edge (0.08 to take 488, 0.03 to 489)
 layout(constant_id = 3) const float kWarp = 400.0;     // the clouds' curl, m
 layout(constant_id = 4) const float kMottle = 200.0;   // the mottling, m (and half)
 layout(constant_id = 5) const float kStr = 40.0;       // the finest wisps, m
@@ -72,12 +73,12 @@ layout(constant_id = 8) const float kMix = 0.95;       // wisps against the soft
 layout(constant_id = 9) const float kStretch = 1.5;    // wisps drawn out along x
 layout(constant_id = 10) const float kCurl = 3.0;      // how much the wisps curl
 layout(constant_id = 11) const float kFootPx = 3.0;    // no wisp thinner than this many pixels
-layout(constant_id = 12) const float kSigma = 0.003;   // extinction at full density, 1/m
-layout(constant_id = 13) const float kBright = 0.3;    // the glow of an opaque cloud
+layout(constant_id = 12) const float kSigma = 0.005;   // extinction at full density, 1/m (0.003 to 489)
+layout(constant_id = 13) const float kBright = 0.22;   // the glow of an opaque cloud (0.3 to 489)
 layout(constant_id = 14) const float kFar = 2500.0;    // everything fades by here, m
 layout(constant_id = 15) const float kDrift = 4.0;     // the clouds drift, m/s
-layout(constant_id = 16) const float kMorph = 48.0;    // their outlines slide, m/s (12 to 488)
-layout(constant_id = 17) const float kChurn = 0.08;    // their curl churns, a second (0.02)
+layout(constant_id = 16) const float kMorph = 77.0;    // their outlines slide, m/s (12 to 488, 48 to 489)
+layout(constant_id = 17) const float kChurn = 0.13;    // their curl churns, a second (0.02, 0.08)
 layout(constant_id = 18) const float kTint = 3.0;      // the light colour, deepened
 layout(constant_id = 19) const int kW = 704;           // the march's pixels across
 layout(constant_id = 20) const int kH = 704;           // and down
@@ -86,7 +87,7 @@ layout(constant_id = 22) const float kStepFrac = 0.03; // steps at most this of 
 layout(constant_id = 23) const int kSkip = 1;          // skip space proven cloud-free
 // What a wisp too thin to draw at its distance leaves behind (0.12 to take 488): X4's cards
 // blur their unresolved strands into a dim average, and a bright one was the fuzz.
-layout(constant_id = 24) const float kHaze = 0.05;
+layout(constant_id = 24) const float kHaze = 0.03; // (0.05 in take 489's A)
 
 // Four smooth noises at once: the texture's lattice, interpolated with smoothstep.
 vec4 n4(vec3 x) {
@@ -187,6 +188,7 @@ void main() {
     const float t_ = pose.fog2.z;
     g_drift = t_ * kDrift;
     g_haze = pose.fog2.w > 0.0 ? pose.fog2.w : kHaze;
+    const float sigma = kSigma * (knobs.z > 0.0 ? knobs.z : 1.0);
 
     vec3 light = vec3(0.0);
     float trans = 1.0;
@@ -217,7 +219,7 @@ void main() {
                                         px * tm, px * footpx * tm, clear) *
                         (1.0 - smoothstep(0.6 * far, far, tm));
         if (d > 0.0) {
-            const float slice = exp(-kSigma * d * stp);
+            const float slice = exp(-sigma * d * stp);
             light += trans * glow * (1.0 - slice);
             trans *= slice;
         }

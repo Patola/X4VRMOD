@@ -452,8 +452,8 @@ struct PoseBlock {
     // leaves every card as X4 turned it.
     float look[16];
     // **The smoke's knobs** (layer/fog_walk.comp, after take 480): x scales its density
-    // (0: no smoke), y its glow, z its size (after take 481), w the sharpest it may be
-    // (after take 482). (1, 1, 1, 1) is the smoke as built, and an A/B's phases switch it
+    // (0: no smoke), y its glow, z its size (after take 481) -- in the march its extinction
+    // (after take 489) -- w the sharpest it may be (after take 482). (1, 1, 1, 1) is the smoke as built, and an A/B's phases switch it
     // here without a new pipeline.
     float fog[4];
     // x: where the smoke ends, m (0: the walk's kFar) -- after take 483, the smoke near the
