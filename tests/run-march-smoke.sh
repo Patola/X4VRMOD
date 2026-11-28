@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
 #
 # The march through the layer (after take 486): tests/march_smoke.cpp plays X4 -- its fog
-# walk dispatched, its fog blend drawn, in one submission -- with X4VR_FOG_PROBE=march, and
+# walk dispatched, its fog blend drawn, in one submission -- with X4VR_NEBULA=volumetric, and
 # the validation layer below ours when it is installed. Wanted: the layer swapped in its
 # march, dispatched it at its own size, patched the blend, put its one-time setup first;
 # the blended picture finite and not X4's grid alone; and no validation error.
-# Control: without X4VR_FOG_PROBE=march the picture is X4's grid alone (OURS=0).
+# Control: with X4VR_NEBULA unset the picture is X4's grid alone (OURS=0).
 set -uo pipefail
 ROOT="$(CDPATH= cd -- "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="${X4VR_BUILD:-$ROOT/build}"
@@ -27,7 +27,7 @@ fails=0
 # element 39 and patched nothing (the scene black).
 BL=(X4VR_BINDLESS_PATCH=1 X4VR_BINDLESS_MIRROR=1)
 out=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS="$LAYERS" X4VR_POSE=1 X4VR_STEREO=1 \
-      "${BL[@]}" X4VR_FOG_PROBE=march X4VR_LOG="$LOG" "$BIN" "${ARGS[@]}" 2>&1)
+      "${BL[@]}" X4VR_NEBULA=volumetric X4VR_LOG="$LOG" "$BIN" "${ARGS[@]}" 2>&1)
 dev=$(sed -n 's/^DEVICE=//p' <<<"$out")
 check() { # label, condition-command
     if eval "$2"; then printf 'ok   %-38s %s\n' "$1" "$dev"; else
@@ -52,7 +52,7 @@ grep -iE 'Validation Error' <<<"$out" | head -5 | sed 's/^/       | /'
 # last held, or never-written memory when the first phase is ours. The blend must take ours
 # alone, not X4's times zero: NaN times zero is NaN.
 outn=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS="$LAYERS" X4VR_POSE=1 X4VR_STEREO=1 \
-       "${BL[@]}" X4VR_FOG_PROBE=march X4VR_LOG= SMOKE_GRID=nan "$BIN" "${ARGS[@]}" 2>&1)
+       "${BL[@]}" X4VR_NEBULA=volumetric X4VR_LOG= SMOKE_GRID=nan "$BIN" "${ARGS[@]}" 2>&1)
 check "march: X4's grid NaN, ours finite" "grep -q '^FINITE=1' <<<\"\$outn\""
 # Take 492 (The Void): X4 skips its fog walk where there is no fog, and so our march, but
 # still draws its blend. Three frames, presented: the walk and blend, then the blend alone
@@ -60,7 +60,7 @@ check "march: X4's grid NaN, ours finite" "grep -q '^FINITE=1' <<<\"\$outn\""
 # march's picture fixed to the screen; one clear, after frame 2's present.
 LOG3="$(mktemp)"
 out3=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS="$LAYERS" X4VR_POSE=1 X4VR_STEREO=1 \
-       "${BL[@]}" X4VR_FOG_PROBE=march X4VR_LOG="$LOG3" SMOKE_FRAMES=3 "$BIN" "${ARGS[@]}" 2>&1)
+       "${BL[@]}" X4VR_NEBULA=volumetric X4VR_LOG="$LOG3" SMOKE_FRAMES=3 "$BIN" "${ARGS[@]}" 2>&1)
 check "march: frame 1 ours (three frames)" "grep -q '^OURS=1' <<<\"\$out3\""
 check "march: no march, then no fog" "awk -F= '/^F3_MEAN=/{m=\$2} /^F3_SPREAD=/{s=\$2} END{exit !(m>0.298 && m<0.302 && s+0==0)}' <<<\"\$out3\""
 check "march: cleared once" "[ \"\$(grep -c 'cleared to no fog' '$LOG3')\" = 1 ]"
@@ -69,19 +69,13 @@ if [[ $VAL == 1 ]]; then
 fi
 grep -E '^F3_(MEAN|SPREAD)|^FAIL' <<<"$out3" | sed 's/^/       3 frames | /'
 rm -f "$LOG3"
-# The player's choice (rc11): X4VR_NEBULA=volumetric alone -- no measurement knob -- is the
-# march; =vanilla is X4's own.
-LOGN="$(mktemp)"
-outn1=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS="$LAYERS" X4VR_POSE=1 X4VR_STEREO=1 \
-        "${BL[@]}" X4VR_NEBULA=volumetric X4VR_LOG="$LOGN" "$BIN" "${ARGS[@]}" 2>&1)
-check "nebula volumetric: the walk replaced" "grep -q 'replaced by our march' '$LOGN'"
-check "nebula volumetric: the blend reads ours" "grep -q '^OURS=1' <<<\"\$outn1\""
+# The player's other choice: X4VR_NEBULA=vanilla is X4's own, its preparation untouched.
 LOGV="$(mktemp)"
 outn0=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS=VK_LAYER_X4VR_core X4VR_POSE=1 X4VR_STEREO=1 \
         "${BL[@]}" X4VR_NEBULA=vanilla X4VR_LOG="$LOGV" "$BIN" "${ARGS[@]}" 2>&1)
 check "nebula vanilla: X4's grid alone" "grep -q '^OURS=0' <<<\"\$outn0\""
 check "nebula vanilla: X4's preparation untouched" "! grep -q 'fog prep' '$LOGV'"
-rm -f "$LOGN" "$LOGV"
+rm -f "$LOGV"
 # Control: X4's grid alone.
 out0=$(env VK_ADD_LAYER_PATH="$BUILD/layer" VK_INSTANCE_LAYERS=VK_LAYER_X4VR_core X4VR_POSE=1 X4VR_STEREO=1 \
        "${BL[@]}" X4VR_LOG= "$BIN" "${ARGS[@]}" 2>&1)

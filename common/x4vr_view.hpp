@@ -451,7 +451,7 @@ struct PoseBlock {
     // would draw it with the head straight (patch_vertex_facing_body). Identity
     // leaves every card as X4 turned it.
     float look[16];
-    // **The smoke's knobs** (layer/fog_walk.comp, after take 480): x scales its density
+    // **The march's knobs** (layer/fog_march.comp, after take 480): x scales its density
     // (0: no smoke), y its glow, z its size (after take 481) -- in the march its extinction
     // (after take 489) -- w the sharpest it may be (after take 482). (1, 1, 1, 1) is the smoke as built, and an A/B's phases switch it
     // here without a new pipeline.
@@ -469,10 +469,10 @@ static_assert(sizeof(PoseBlock) == 320, "std140: three mat4 at 0, 64, 128, vec4s
 constexpr uint32_t kPoseHeadFwdOffset = 208;
 // Where look sits, for patch_vertex_facing_body.
 constexpr uint32_t kPoseLookOffset = 224;
-// Where fog sits, for layer/fog_walk.comp (which writes the number itself).
+// Where fog sits, for layer/fog_march.comp (which writes the number itself).
 constexpr uint32_t kPoseFogOffset = 288;
-static_assert(offsetof(PoseBlock, fog) == kPoseFogOffset, "fog_walk.comp reads fog at 288");
-static_assert(offsetof(PoseBlock, fog2) == kPoseFogOffset + 16, "fog_walk.comp reads fog2 at 304");
+static_assert(offsetof(PoseBlock, fog) == kPoseFogOffset, "fog_march.comp reads fog at 288");
+static_assert(offsetof(PoseBlock, fog2) == kPoseFogOffset + 16, "fog_march.comp reads fog2 at 304");
 // The offset the SPIR-V patch decorates its one-member view with. Named here so
 // the shader-side constant and the struct cannot drift apart silently.
 constexpr uint32_t kPoseEyeOfsOffset = 192;

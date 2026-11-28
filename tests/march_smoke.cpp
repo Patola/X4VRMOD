@@ -4,7 +4,7 @@
 // layout like X4's (samplers and images at set 0, the camera at set 1, the dynamic block at
 // set 4), X4's fog walk (tests/sample_volume_walk.comp, the stand-in the layer recognises as
 // X4's), dispatched at X4's size, and X4's fog blend (tests/sample_fog_apply.frag) drawn
-// after it -- all in one submission, the first the layer sees. With X4VR_FOG_PROBE=march
+// after it -- all in one submission, the first the layer sees. With X4VR_NEBULA=volumetric
 // the layer must swap in its march, dispatch it at its own size between barriers, patch the
 // blend to read the march's volume, and put its one-time setup in front of the submission.
 //

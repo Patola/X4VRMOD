@@ -1,0 +1,28 @@
+#version 450
+// SPDX-License-Identifier: GPL-3.0-or-later WITH x4vrmod-linking-exception
+//
+// The interface of X4's froxel fog's first stage (volume_base.comp) as is_x4_volume_base
+// checks it: names and offsets only, after take 495 the way the layer knows one of X4's
+// preparation stages to skip (x4vr::spv::x4_fog_prep_kind). X4's own module never enters
+// this repository; this one only has the same interface: a compute entry of 8x8x1, one
+// write into an R16f 3D table at set 0 binding 6, 53306 long, and nothing read.
+#extension GL_ARB_enhanced_layouts : require
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 1, binding = 0, std140) uniform BLOCK_BUFFER_BINDING_SLOT_CAMERA {
+    layout(offset = 128) mat4 M_invprojection;
+    layout(offset = 512) mat4 M_viewinverse;
+    layout(offset = 736) vec4 V_cameraposition;
+    layout(offset = 960) vec4 V_volume_size;
+    layout(offset = 1420) float F_time;
+    layout(offset = 1528) float F_volume_off;
+    layout(offset = 1532) float F_volume_scale;
+};
+layout(set = 4, binding = 0, std140) uniform BLOCK_BUFFER_BINDING_SLOT_DYNAMIC {
+    layout(offset = 432) uint S_output_rt_idx;
+};
+layout(set = 0, binding = 6, r16f) uniform restrict writeonly image3D U_output_rt_decl[53306];
+void main() {
+    const float k = F_time + F_volume_off + F_volume_scale + V_cameraposition.x +
+                    M_invprojection[0][0] + M_viewinverse[0][0] + V_volume_size.x;
+    imageStore(U_output_rt_decl[S_output_rt_idx], ivec3(gl_GlobalInvocationID), vec4(k));
+}

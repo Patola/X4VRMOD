@@ -2163,10 +2163,9 @@ float *slot_host_ptr(const ViewSlot &s) {
 // removed); Low, Medium and High, our clouds, the same at all three (the march ignores X4's
 // grid, and X4's depth mapping was the same at each in take 494). launch/defaults.conf
 // sets volumetric; unset (an old
-// take replayed with X4VR_DEFAULTS=0, or a test), X4's own. Where X4VR_FOG_PROBE or
-// X4VR_FOG_CARDS is set, it is that, not this, that counts: they are the measurement
-// knobs the takes ran with, and volumetric is exactly X4VR_FOG_PROBE=march with
-// X4VR_FOG_CARDS=off -- the configuration takes 488-493 played.
+// take replayed with X4VR_DEFAULTS=0, or a test), X4's own. (Takes 488-493 played it as the
+// measurement knobs X4VR_FOG_PROBE=march and X4VR_FOG_CARDS=off, gone before 1.0 with the
+// experiments they chose between.)
 static bool nebula_volumetric() {
     static const bool on = [] {
         const char *e = getenv("X4VR_NEBULA");
@@ -2174,74 +2173,14 @@ static bool nebula_volumetric() {
     }();
     return on;
 }
-static bool fog_probe_set() {
-    const char *e = getenv("X4VR_FOG_PROBE");
-    return e && *e;
-}
-
-// The fog probe's state (X4VR_FOG_PROBE=1; its patch and hooks are further down). The
-// march runs on its hooks, so volumetric nebulae turn it on too.
-static bool fog_probe_on() {
-    static const bool on = fog_probe_set() ? x4vr::env_on("X4VR_FOG_PROBE", false)
-                                           : nebula_volumetric();
-    return on;
-}
-static x4vr::spv::FogProbe fog_probe_params() {
-    x4vr::spv::FogProbe p;
-    p.strength = 25.f;
-    p.radius_out = 100.f;
-    if (const char *e = getenv("X4VR_FOG_PROBE"); e && !strcmp(e, "noise")) {
-        p.mode = 1;
-        p.far = 2000.f;
-    }
-    auto num = [](const char *n, float dflt) {
-        const char *e = getenv(n);
-        const float v = e && *e ? strtof(e, nullptr) : dflt;
-        return v > 0.f ? v : dflt;
-    };
-    p.strength = num("X4VR_FOG_PROBE_DENSITY", p.strength);
-    p.cell = num("X4VR_FOG_PROBE_CELL", p.cell);
-    p.radius_out = num("X4VR_FOG_PROBE_RADIUS", p.radius_out);
-    p.radius_in = p.radius_out * 0.4f; // soft edges
-    p.far = num("X4VR_FOG_PROBE_FAR", p.far);
-    p.scale = num("X4VR_FOG_PROBE_SCALE", p.scale);
-    p.cover = num("X4VR_FOG_PROBE_COVER", p.cover);
-    p.soft = num("X4VR_FOG_PROBE_SOFT", p.soft);
-    p.drift = num("X4VR_FOG_PROBE_DRIFT", p.drift);
-    return p;
-}
-std::atomic<uint32_t> g_fog_vol_modules{0}, g_fog_vol_refused{0};
-std::mutex g_fog_probe_mu;
-// X4's volume_base modules replaced by ours, under g_fog_probe_mu.
-std::unordered_set<VkShaderModule> &g_fog_vol_mods =
-    x4vr::immortal<std::unordered_set<VkShaderModule>>();
-// **The smoke** (X4VR_FOG_PROBE=smoke, after take 479): X4's volume_walk replaced by
-// layer/fog_walk.comp, which computes the smoke's density itself and makes it glow. Its
-// modules, under g_fog_probe_mu, and its parameters: the shader's specialisation
-// constants in order, each with the variable that overrides it where one does (after
-// take 480: the look is chosen in an offline model of X4's grid, so most are fixed).
-std::unordered_set<VkShaderModule> &g_fog_walk_mods =
-    x4vr::immortal<std::unordered_set<VkShaderModule>>();
-std::atomic<uint32_t> g_fog_walk_modules{0};
-static bool fog_smoke_on() {
-    static const bool on = [] {
-        const char *e = getenv("X4VR_FOG_PROBE");
-        return e && !strcmp(e, "smoke");
-    }();
-    return on;
-}
-// **The march** (X4VR_FOG_PROBE=march, after take 486): X4's volume_walk replaced by
-// layer/fog_march.comp, which marches one ray per pixel of a quarter-resolution view
-// into a volume of ours (x4vr_fog_march.hpp); X4's fog blend, patched, reads it by X4's
-// own lookup (x4vr::spv::patch_fog_apply_march), or X4's own grid where the pose block's
-// fog2.y is 0 (the A/B's vanilla phase, in which X4's own walk runs again).
-static bool fog_march_on() {
-    static const bool on = [] {
-        const char *e = getenv("X4VR_FOG_PROBE");
-        return fog_probe_set() ? !strcmp(e, "march") : nebula_volumetric();
-    }();
-    return on;
-}
+std::atomic<uint32_t> g_fog_vol_refused{0};
+std::mutex g_march_mu;
+// **The march** (after take 486): X4's volume_walk replaced by layer/fog_march.comp,
+// which marches one ray per pixel of a quarter-resolution view into a volume of ours
+// (x4vr_fog_march.hpp); X4's fog blend, patched, reads it by X4's own lookup
+// (x4vr::spv::patch_fog_apply_march), or X4's own grid where the pose block's fog2.y is 0
+// (an A/B's vanilla phase, in which X4's own walk runs again).
+static bool fog_march_on() { return nebula_volumetric(); }
 x4vr::FogMarch &g_march = x4vr::immortal<x4vr::FogMarch>();
 // The march's GPU time and X4's own walk's, by phase (kind 0 V: X4's walk; 1 A, 2 B: ours),
 // after take 490: every phase ran at the headset's 90 fps cap, so frame times could not
@@ -2252,7 +2191,7 @@ std::atomic<bool> g_march_ready{false};      // its objects made, in the pose bl
 std::atomic<bool> g_march_setup_sent{false}; // its one-time setup submitted
 std::atomic<uint32_t> g_march_graphics_families{0}; // queue families with graphics, a bitmask
 std::string &g_march_why = x4vr::immortal<std::string>();
-// Under g_fog_probe_mu: our march modules and X4's own walk module for each; our march
+// Under g_march_mu: our march modules and X4's own walk module for each; our march
 // pipelines and X4's own walk pipeline for each; per recording, which is bound (1 ours,
 // 2 X4's own in the vanilla phase).
 std::unordered_set<VkShaderModule> &g_march_mods = x4vr::immortal<std::unordered_set<VkShaderModule>>();
@@ -2262,7 +2201,7 @@ std::unordered_map<VkPipeline, VkPipeline> &g_march_x4pipe =
     x4vr::immortal<std::unordered_map<VkPipeline, VkPipeline>>();
 // X4's froxel fog preparation (after take 495: volume_base, volume_point, volume_shad --
 // x4vr::spv::x4_fog_prep_kind): its modules, pipelines and, per recording, which is
-// bound (0 none, 1 base, 2 point, 3 shad); under g_fog_probe_mu. With our march in the
+// bound (0 none, 1 base, 2 point, 3 shad); under g_march_mu. With our march in the
 // walk's place, only the walk read what they make, so their dispatches are skipped --
 // except in an A/B's V (X4's own walk runs) and B (they run, timed, to measure the skip).
 std::unordered_map<VkShaderModule, int> &g_fog_prep_mods =
@@ -2288,7 +2227,7 @@ std::atomic<uint32_t> g_march_modules{0}, g_march_apply_patched{0}, g_march_appl
     g_march_x4pipes{0}, g_march_x4pipe_failed{0};
 thread_local bool tl_fog_march = false;
 thread_local bool tl_march_blend = false; // this thread's last module got the blend patch
-// Under g_fog_probe_mu: the modules made from X4's fog blend with the march's edit.
+// Under g_march_mu: the modules made from X4's fog blend with the march's edit.
 std::unordered_set<VkShaderModule> &g_march_blend_mods =
     x4vr::immortal<std::unordered_set<VkShaderModule>>();
 // B against A in an A/B (X4VR_FOG_AB=recentre), after take 495: the same clouds, with X4's
@@ -2296,123 +2235,24 @@ std::unordered_set<VkShaderModule> &g_march_blend_mods =
 // them is the skip's. (Takes 489-493 varied B's look; each chosen B became the march's own.)
 constexpr float kMarchThinB = 1.0f;
 
-constexpr int kSmokeParams = 27;
-struct SmokeParam {
-    const char *env; // nullptr: fixed
-    float def;
-};
-static constexpr SmokeParam kSmoke[kSmokeParams] = {
-    {"X4VR_FOG_CLOUD", 670.f},  {"X4VR_FOG_COVER", 0.70f},  {nullptr, 0.05f},
-    {"X4VR_FOG_RES", 1.5f},     {nullptr, 400.f},           {"X4VR_FOG_MOTTLE", 200.f},
-    {nullptr, 3.f},             {nullptr, 0.8f},            {"X4VR_FOG_STRING", 60.f},
-    {nullptr, 4.f},             {nullptr, 1.5f},            {nullptr, 0.5f},
-    {nullptr, 4.f},             {nullptr, 0.3f},            {nullptr, 40.f},
-    {nullptr, 400.f},           {"X4VR_FOG_SIGMA", 0.003f}, {"X4VR_FOG_BRIGHT", 0.3f},
-    {"X4VR_FOG_FAR", 2500.f},   {nullptr, 6.f},             {nullptr, 0.03f},
-    {nullptr, 8.f},             {"X4VR_FOG_DRIFT", 4.f},    {"X4VR_FOG_TINT", 3.f},
-    {nullptr, 2.f},             {"X4VR_FOG_MORPH", 12.f},   {nullptr, 0.03f}};
-static std::array<float, kSmokeParams> fog_smoke_params() {
-    std::array<float, kSmokeParams> v{};
-    for (int i = 0; i < kSmokeParams; i++) {
-        v[i] = kSmoke[i].def;
-        if (const char *e = kSmoke[i].env ? getenv(kSmoke[i].env) : nullptr; e && *e) {
-            const float f = strtof(e, nullptr);
-            if (f >= 0.f)
-                v[i] = f;
-        }
-    }
-    return v;
-}
-// X4VR_FOG_AB=recentre (after take 480, DIAGNOSTIC): each recentre moves to the next of
-// three phases, starting at one drawn at random, so X4's look and ours are compared
-// within one run, by a switch. With X4VR_FOG_CARDS=fix (after take 483): V, X4's cards as
-// it draws them; A, the cards fixed to the world, no smoke; B, the same with our smoke
-// near the ship only (out to kFogNearFar), for the sense of speed. Otherwise (takes
-// 482-483): V; A, the smoke and no cards; B, the smoke sharper (kFogSharper). Its phase,
-// for the cards and the frame times.
-// The smoke's or the march's phases. The march too (take 487): asked this by name of the
-// smoke alone, the march ran A for the whole take -- no phase line, and its V never ran.
+// X4VR_FOG_AB=recentre (a developer's switch, after take 480): each recentre moves to the
+// next of three phases, starting at one drawn at random, so X4's look and ours are compared
+// within one run: V, X4's own fog and cards; A, our march; B, our march with X4's
+// preparation run (kMarchThinB). Kept past 1.0 to re-tune the clouds by players' reports.
 static bool fog_ab() {
     static const bool ab = [] {
         const char *e = getenv("X4VR_FOG_AB");
-        return (fog_smoke_on() || fog_march_on()) && e && !strcmp(e, "recentre");
+        return fog_march_on() && e && !strcmp(e, "recentre");
     }();
     return ab;
 }
-constexpr float kFogSharper = 1.f / 1.5f; // B: 1 column where A keeps 1.5, edges 0.44 as soft
-constexpr float kFogNearFar = 600.f;      // with the cards fixed, B's smoke ends here, m
 std::atomic<int> g_fog_arm{1}; // 0 V, 1 A, 2 B
-// The smoke's knobs as last published to the GPU (fog x..w, fog2 x), for the log (after
-// take 485: zeroed every frame, the smoke was invisible and nothing said so).
+// The march's knobs as last published to the GPU, for the log (after take 485: zeroed
+// every frame, the smoke was invisible and nothing said so).
 std::atomic<float> g_fog_pub[7] = {}; // fog x..w, fog2 x, z (the clock), w (the haze)
 std::atomic<bool> g_fog_pub_seen{false};
-std::unordered_set<VkPipeline> &g_fog_probe_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
-std::unordered_map<VkCommandBuffer, bool> &g_fog_probe_cb =
-    x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
-// Under g_track.mu: each recording's froxel dispatches, their camera block and size, read
-// at submit for the log.
-struct FogProbeDispatch {
-    ViewSlot cam;
-    uint32_t x, y, z;
-    uint64_t seq; // g_fog_seq at recording: the order against the blends
-};
-// Under g_track.mu: one count over the froxel dispatches and the blends as they are
-// recorded, so the submit can read them in the GPU's order (after take 480).
-uint64_t g_fog_seq = 0;
-std::unordered_map<VkCommandBuffer, std::vector<FogProbeDispatch>> &g_fog_probe_pending =
-    x4vr::immortal<std::unordered_map<VkCommandBuffer, std::vector<FogProbeDispatch>>>();
-struct FogProbeSeen {
-    uint64_t dispatches = 0, read = 0, unread = 0, relative = 0;
-    float vi_t[3] = {}, campos[4] = {}, range[4] = {}, size[4] = {}, ftime = 0.f, off = 0.f,
-          scale = 0.f;
-    uint32_t x = 0, y = 0, z = 0;
-};
-FogProbeSeen g_fog_probe_seen;
-// **Same camera?** (after take 477, where puffs "moved too fast"): X4's fog blend
-// (volume_apply, the fragment pass that reads the froxel volume -- a subpass input and a
-// 3D sample) and the camera that built the volume. If the blend draws with a later camera
-// than the one the volume was built with, the fog lags the head. Under g_fog_probe_mu:
-// the blend's modules and pipelines, and each recording's flag.
-std::unordered_set<VkShaderModule> &g_fog_apply_mods =
-    x4vr::immortal<std::unordered_set<VkShaderModule>>();
-std::unordered_set<VkPipeline> &g_fog_apply_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
-std::unordered_map<VkCommandBuffer, bool> &g_fog_apply_cb =
-    x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
-// Under g_track.mu: the blends' camera slots to read at submit, in recording order (seq),
-// the last volume's camera turn, and the angle between them.
-struct FogBlend {
-    ViewSlot cam;
-    uint64_t seq;
-};
-std::unordered_map<VkCommandBuffer, std::vector<FogBlend>> &g_fog_apply_pending =
-    x4vr::immortal<std::unordered_map<VkCommandBuffer, std::vector<FogBlend>>>();
-// **The sun's direction** (after take 478: the puffs held still with the head, yet their
-// light "changes gradually" as it turns): X4 lights its fog by the angle between the view
-// ray and V_light_direction_view, the sun in the view's axes; it should be mat3(M_view)
-// times V_direction1, the sun in the world's. Their angle, by how far the head-look is
-// turned: zero whatever the head does if X4 turns it with head-look, the head-look if not.
-struct FogSunCheck {
-    uint64_t n[4] = {};
-    double sum[4] = {}, max[4] = {};
-};
-FogSunCheck g_fog_sun;
-// After take 480 (mean 0.437 deg): that check read every blend of a submit before its
-// dispatches, so a blend whose volume was built in the same submit was compared with the
-// previous one -- a frame of head motion by construction. Now in the GPU's order, and by
-// where the volume a blend reads was built: 0 in its own command buffer, 1 in an earlier
-// one of the same vkQueueSubmit, 2 in an earlier vkQueueSubmit. `after`: blends recorded
-// before a dispatch in their own command buffer.
-struct FogSameCamera {
-    bool have_volume = false;
-    float volume_turn[9] = {};
-    uint64_t n = 0, bins[5] = {}; // deg: <0.01, <0.1, <1, <5, more
-    double sum = 0.0, max = 0.0;
-    uint64_t vol_call = 0, call = 0, after = 0;
-    uint32_t vol_sub = 0, vol_cb = 0;
-    uint64_t wn[3] = {}, wsmall[3] = {}; // per where: blends, and those under 0.01 deg
-    double wsum[3] = {}, wmax[3] = {};
-};
-FogSameCamera g_fog_same;
+// Under g_march_mu: our march's pipelines and X4's own walk's beside them.
+std::unordered_set<VkPipeline> &g_march_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
 // Under g_track.mu: the frame times of each phase of the smoke's A/B (V, A, B), ms.
 std::array<std::vector<float>, 3> &g_fog_arm_ms = x4vr::immortal<std::array<std::vector<float>, 3>>();
 
@@ -2429,23 +2269,10 @@ bool facing_compare();
 bool facing_census() { return facing_collapse(); }
 bool facing_enabled(); // beside the other facing switches
 bool facing_ab();
-// X4VR_FOG_CARDS (DIAGNOSTIC): what becomes of X4's nebula cards, known by their material
-// (after take 482). =off (after take 474): removed, so our own fog shows alone. =fix
-// (after take 483: our fog, held to X4's grid of about a degree a column, "still too
-// blurred"; Patola wants the original's look): kept, each turned to face the eye's
-// position with the sector's up, so a head turn moves nothing (fog_cards_fix()).
-// fog_cards_off() is true for either: the layer handles the cards.
-static int fog_cards_mode() {
-    static const int m = [] {
-        const char *e = getenv("X4VR_FOG_CARDS");
-        if (!e || !*e)
-            return fog_probe_set() ? 0 : nebula_volumetric() ? 1 : 0;
-        return !strcmp(e, "off") ? 1 : !strcmp(e, "fix") ? 2 : 0;
-    }();
-    return m;
-}
-bool fog_cards_off() { return fog_cards_mode() != 0; }
-static bool fog_cards_fix() { return fog_cards_mode() == 2; }
+// X4's nebula cards, known by their material (after take 482), removed with our clouds:
+// whether or not our march runs (X4's Volumetric Fog Off: no clouds at all, after take
+// 494). X4's own, cards and all, with X4VR_NEBULA=vanilla.
+bool fog_cards_off() { return nebula_volumetric(); }
 // The tracking of X4's near/far-faded draws: for the census, the fix on the CPU, or the
 // cards' removal.
 bool fade_tracking() { return facing_census() || facing_enabled() || fog_cards_off(); }
@@ -2874,33 +2701,6 @@ static void fix_draw(float *o_dst, float *o, const float *c, int mode,
         fog_cards_off() && !(fog_ab() && g_fog_arm.load(std::memory_order_relaxed) == 0);
     if (cards_off && mat == 1) {
         g_fix_stats.cards_by_material++;
-        if (fog_cards_fix()) {
-            // Kept, and turned to face the eye's position with the sector's up (+y in the
-            // world; +z where the card sits on that line): Q' = F Q, F from the line to the
-            // card and that up in the view's axes -- W' = B K in the world, B from
-            // positions alone, K X4's own turn of the card against its camera. No
-            // head-look angle enters it.
-            const float up_y[3] = {c[4], c[5], c[6]}, up_z[3] = {c[8], c[9], c[10]};
-            float w[16], wvp[16];
-            std::memcpy(wvp, o, sizeof wvp);
-            std::memcpy(w, o + 16, sizeof w);
-            bool ok = x4vr::billboard::face_eye(c, c + 7 * 16, w, wvp, up_y);
-            if (!ok) {
-                std::memcpy(wvp, o, sizeof wvp);
-                std::memcpy(w, o + 16, sizeof w);
-                ok = x4vr::billboard::face_eye(c, c + 7 * 16, w, wvp, up_z);
-            }
-            if (ok) {
-                std::memcpy(o, wvp, sizeof wvp);
-                std::memcpy(o + 16, w, sizeof w);
-                std::memcpy(o_dst, o, 32 * sizeof(float));
-                done.insert(o_dst);
-                g_fix_stats.cards_fixed++;
-            } else {
-                g_fix_stats.cards_fix_refused++;
-            }
-            return;
-        }
         remove_draw(o_dst, o, c, done);
         g_fix_stats.cards_removed++;
         return;
@@ -2936,7 +2736,7 @@ static void fix_draw(float *o_dst, float *o, const float *c, int mode,
     bool remove = g_fix_kill.load(std::memory_order_relaxed);
     // A STOPGAP where the material could not be read: the camera-turned draws at a card's
     // distance and size (removing only; =fix leaves what it can't read).
-    if (cards_off && !fog_cards_fix() && mat < 0 && !remove) {
+    if (cards_off && mat < 0 && !remove) {
         // Only what can be one of X4's nebula cards (after take 482, where the radar's
         // ellipse and axes went with them): X4 turns its radar with the camera too, and
         // draws it as its own scene from about 43 km (take 469's census: draws kept under
@@ -3300,12 +3100,6 @@ void credit_draw(VkCommandBuffer cb) {
         auto cc = g_cb_canvas.find(cb);
         on_canvas = cc != g_cb_canvas.end() && cc->second;
     }
-    bool fog_apply = false;
-    if (fog_probe_on()) {
-        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
-        auto f = g_fog_apply_cb.find(cb);
-        fog_apply = f != g_fog_apply_cb.end() && f->second;
-    }
     bool census_fade = false;
     x4vr::spv::FadeBlock fblock;
     if (fade_tracking()) {
@@ -3323,12 +3117,6 @@ void credit_draw(VkCommandBuffer cb) {
         }
     }
     std::lock_guard<std::mutex> lock(g_track.mu);
-    if (fog_apply) {
-        auto vb = g_track.bound.find(cb);
-        auto &pend = g_fog_apply_pending[cb];
-        if (vb != g_track.bound.end() && !vb->second.empty() && pend.size() < 16)
-            pend.push_back({vb->second.front(), ++g_fog_seq});
-    }
     if (census_fade) {
         auto ob = g_census_obj.find(cb);
         auto vb = g_track.bound.find(cb);
@@ -5570,47 +5358,7 @@ void shader_knob_report(const char *when) {
                                          "own, S (cards turned to the ship) and H (billboards to "
                                          "the eye, tilted cards to the ship)")
                                 : "");
-    if (fog_probe_on()) {
-        std::lock_guard<std::mutex> lock(g_track.mu);
-        const FogProbeSeen &sn = g_fog_probe_seen;
-        {
-            static const char *const kB[4] = {"<2", "2-10", "10-30", "30+"};
-            std::string row;
-            for (int b = 0; b < 4; b++) {
-                char t[96];
-                const double n = (double)std::max<uint64_t>(g_fog_sun.n[b], 1);
-                snprintf(t, sizeof t, "%s%s deg: %llu, %.2f (max %.2f)", b ? "; " : "", kB[b],
-                         (unsigned long long)g_fog_sun.n[b], g_fog_sun.sum[b] / n,
-                         g_fog_sun.max[b]);
-                row += t;
-            }
-            X4VR_LOG("fog probe %s: X4's sun in the view against the world's turned by the "
-                     "view, by head-look turned — %s",
-                     when, row.c_str());
-        }
-        const FogSameCamera &fs = g_fog_same;
-        X4VR_LOG("fog probe %s: the blend against the camera that built the volume — %llu "
-                 "draw(s), mean %.3f deg, max %.2f deg; <0.01 %llu, <0.1 %llu, <1 %llu, <5 %llu, "
-                 "more %llu (%zu blend module(s))",
-                 when, (unsigned long long)fs.n, fs.n ? fs.sum / fs.n : 0.0, fs.max,
-                 (unsigned long long)fs.bins[0], (unsigned long long)fs.bins[1],
-                 (unsigned long long)fs.bins[2], (unsigned long long)fs.bins[3],
-                 (unsigned long long)fs.bins[4], g_fog_apply_mods.size());
-        // Where the volume each blend read was built (after take 480): the angle only
-        // means "the fog lags the head" where X4 built it in an earlier frame.
-        auto wh = [&fs](int w, char *out, size_t cap) {
-            snprintf(out, cap, "%llu (%llu under 0.01 deg), mean %.3f deg, max %.2f",
-                     (unsigned long long)fs.wn[w], (unsigned long long)fs.wsmall[w],
-                     fs.wn[w] ? fs.wsum[w] / fs.wn[w] : 0.0, fs.wmax[w]);
-        };
-        char w0[96], w1[96], w2[96];
-        wh(0, w0, sizeof w0);
-        wh(1, w1, sizeof w1);
-        wh(2, w2, sizeof w2);
-        X4VR_LOG("fog probe %s: where each blend's volume was built — its own command "
-                 "buffer: %s; an earlier one of its submit: %s; an earlier submit: %s; %llu "
-                 "blend(s) recorded before a dispatch of their own buffer",
-                 when, w0, w1, w2, (unsigned long long)fs.after);
+    if (fog_march_on()) {
         if (fog_march_on())
             X4VR_LOG("fog march %s: %llu dispatch(es) of our march (%ux%u rays, %u depths), %llu "
                      "of X4's own walk (the vanilla phase); X4's fog blend patched in %u "
@@ -5671,16 +5419,16 @@ void shader_knob_report(const char *when) {
                      (unsigned long long)g_fog_prep_ran[2].load(),
                      (unsigned long long)g_fog_prep_ran[3].load());
         }
-        if (fog_smoke_on() || fog_march_on())
-            X4VR_LOG("fog smoke %s: its knobs as last published — %s density %.2f, glow %.2f, "
+        X4VR_LOG("fog smoke %s: its knobs as last published — %s density %.2f, glow %.2f, "
                      "size %.2f, sharpness %.2f, ends at %.0f m (0: %.0f); clock %.1f s, "
                      "haze %.3f (0: the march's own)",
                      when, g_fog_pub_seen.load() ? "" : "(none published yet)",
                      g_fog_pub[0].load(), g_fog_pub[1].load(), g_fog_pub[2].load(),
-                     g_fog_pub[3].load(), g_fog_pub[4].load(), fog_smoke_params()[18],
+                     g_fog_pub[3].load(), g_fog_pub[4].load(), 2500.f,
                      g_fog_pub[5].load(), g_fog_pub[6].load());
         if (fog_ab()) {
-            // What the smoke costs against X4's cards: each phase's frame times.
+            // What the march costs against X4's cards: each phase's frame times.
+            std::lock_guard<std::mutex> lock(g_track.mu);
             std::string row;
             static const char *const kArm[3] = {"V", "A", "B"};
             for (int a = 0; a < 3; a++) {
@@ -5699,14 +5447,6 @@ void shader_knob_report(const char *when) {
             }
             X4VR_LOG("fog smoke %s: frame time by phase — %s", when, row.c_str());
         }
-        X4VR_LOG("fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(es), "
-                 "%llu read (%llu camera-relative), %llu unreadable; last grid "
-                 "%.0fx%.0fx%.0f, range %.1f..%.1f m",
-                 when, g_fog_vol_modules.load() + g_fog_walk_modules.load(),
-                 g_fog_vol_refused.load(),
-                 (unsigned long long)sn.dispatches, (unsigned long long)sn.read,
-                 (unsigned long long)sn.relative, (unsigned long long)sn.unread, sn.size[0],
-                 sn.size[1], sn.size[2], sn.range[0], sn.range[1]);
     }
     // Zero with the pose channel up: X4 created no froxel fog pass, or its module no
     // longer has M_offset and I_point_num by name.
@@ -5722,8 +5462,7 @@ void shader_knob_report(const char *when) {
         X4VR_LOG("fog cards %s: off — %llu draw(s) of X4's nebula material %s (fading in "
                  "at 500 m, out by 3 km), %llu of other fading materials left alone, %llu with "
                  "the material unread (fade blocks: %u modules found, %u not) — DIAGNOSTIC",
-                 when, (unsigned long long)fs.cards_by_material,
-                 fog_cards_fix() ? "fixed" : "removed",
+                 when, (unsigned long long)fs.cards_by_material, "removed",
                  (unsigned long long)fs.cards_other_material,
                  (unsigned long long)fs.cards_unread_material, g_fade_blocks_found.load(),
                  g_fade_blocks_missing.load());
@@ -5737,11 +5476,6 @@ void shader_knob_report(const char *when) {
                          : "");
             mats += t;
         }
-        if (fog_cards_fix())
-            X4VR_LOG("fog cards %s: fixed — %llu draw(s) of X4's nebula material turned to face "
-                     "the eye with the sector's up, %llu refused — DIAGNOSTIC",
-                     when, (unsigned long long)fs.cards_fixed,
-                     (unsigned long long)fs.cards_fix_refused);
         X4VR_LOG("fog cards %s: the fading materials drawn, by where they fade in and out "
                  "— %s",
                  when, mats.empty() ? "none read" : mats.c_str());
@@ -9140,16 +8874,6 @@ std::vector<uint32_t> fsr_patch_module(const VkShaderModuleCreateInfo *ci) {
 // the head-look undone (patch_fog_points_facing, after take 466). Empty to create the
 // module as X4 wrote it. Only a module naming M_offset is tried: one of ~400.
 std::vector<uint32_t> fogpoint_patch_facing(const VkShaderModuleCreateInfo *ci);
-// **The fog probe** (X4VR_FOG_PROBE=1, after take 473): a lattice of fog puffs fixed in
-// the world, written into X4's froxel fog by layer/fog_volume.comp -- the first step of
-// the nebula becoming an effect of our own. X4VR_FOG_PROBE_DENSITY, _CELL, _RADIUS and
-// _FAR size it. Defaults since take 477 (thin, small puffs out to 6 km aliased on X4's
-// grid): density 25, a puff every 400 m, soft out to 100 m, fading by 1500 m.
-// X4VR_FOG_PROBE=noise (after take 478, where the puffs moved right with the ship and
-// stayed put with the head): the smoke -- drifting 3D noise, _SCALE (350 m), _COVER
-// (0.57), _SOFT (0.06): the noise sits near 0.5 (std 0.11), so this leaves about 60% of
-// space clear and the clouds with soft edges, where 0.5/0.2 was a haze everywhere --
-// _DRIFT (4 m/s), density 25, fading by 2000 m.
 
 
 std::vector<uint32_t> fogpoint_patch_module(const VkShaderModuleCreateInfo *ci) {
@@ -9162,21 +8886,20 @@ std::vector<uint32_t> fogpoint_patch_module(const VkShaderModuleCreateInfo *ci) 
     return fogpoint_patch_facing(ci);
 }
 
-// **Our fog in X4's froxel volume** (after take 474): X4's volume_base.comp, which writes
-// a density of zero into every cell, replaced by layer/fog_volume.comp, which writes
-// ours. Empty to create the module as X4 wrote it.
+// **Our march in X4's volume_walk's place** (X4VR_NEBULA=volumetric): its module for X4's
+// walk, empty to create the module as X4 wrote it.
 thread_local bool tl_fog_vol = false;
 std::vector<uint32_t> fog_volume_module(const VkShaderModuleCreateInfo *ci) {
     std::vector<uint32_t> code;
     tl_fog_vol = false;
-    if (!g_active || !fog_probe_on() || !ci || ci->codeSize < 20)
+    if (!g_active || !fog_march_on() || !ci || ci->codeSize < 20)
         return code;
     static const char kName[] = "F_volume_scale";
     if (!memmem(ci->pCode, ci->codeSize, kName, sizeof kName - 1))
         return code;
     std::vector<uint32_t> x4(ci->pCode, ci->pCode + ci->codeSize / 4);
     tl_fog_march = false;
-    if (fog_march_on()) {
+    {
         x4vr::spv::VolumeWalkReport wr;
         if (!x4vr::spv::is_x4_volume_walk(x4, &wr)) {
             if (strstr(wr.why, "offsets") || strstr(wr.why, "S_output_rt_idx is not") ||
@@ -9217,88 +8940,6 @@ std::vector<uint32_t> fog_volume_module(const VkShaderModuleCreateInfo *ci) {
                      fog_ab() ? "; phases V, A and B by recentre (X4VR_FOG_AB)" : "");
         return code;
     }
-    if (fog_smoke_on()) {
-        x4vr::spv::VolumeWalkReport wr;
-        if (!x4vr::spv::is_x4_volume_walk(x4, &wr)) {
-            if (strstr(wr.why, "offsets") || strstr(wr.why, "S_output_rt_idx is not") ||
-                strstr(wr.why, "media"))
-                if (++g_fog_vol_refused <= 3)
-                    X4VR_LOG("fog smoke: a module like X4's volume_walk (%zu bytes) REFUSED: "
-                             "%s — X4's own stays", (size_t)ci->codeSize, wr.why);
-            return code;
-        }
-        // Ours reads the layer's block (its knobs, after take 480), so only with the
-        // channel up: a module bound with no block there would read nothing defined.
-        if (!pose_active()) {
-            if (++g_fog_vol_refused <= 3)
-                X4VR_LOG("fog smoke: X4's volume_walk (%zu bytes) left as X4's — the smoke "
-                         "reads the layer's block, and the pose channel is %s",
-                         (size_t)ci->codeSize,
-                         !pose_wanted()   ? "off (X4VR_POSE=1 turns it on)"
-                         : pose_collided() ? "off (it collided with X4's sets)"
-                                           : "not up yet");
-            return code;
-        }
-        if (wr.media == 1)
-            code.assign(x4vr::kFogWalk1Comp,
-                        x4vr::kFogWalk1Comp + sizeof x4vr::kFogWalk1Comp / sizeof(uint32_t));
-        else
-            code.assign(x4vr::kFogWalk2Comp,
-                        x4vr::kFogWalk2Comp + sizeof x4vr::kFogWalk2Comp / sizeof(uint32_t));
-        if (x4vr::spv::retarget_descriptor_set(code, 31, pose_set_index()) != 1) {
-            if (++g_fog_vol_refused <= 3)
-                X4VR_LOG("fog smoke: our walk has no block at set 31 to move to set %u — "
-                         "X4's own stays (a build fault)", pose_set_index());
-            code.clear();
-            return code;
-        }
-        tl_fog_vol = true;
-        const auto p = fog_smoke_params();
-        if (++g_fog_walk_modules <= 3)
-            X4VR_LOG("fog smoke: X4's volume_walk for %d medium(s) (%zu bytes) replaced by ours — "
-                     "glowing smoke: clouds %.0f m (cover %.2f), mottled at %.0f m, strings "
-                     "%.0f m near the ship, extinction %.4f/m, glow %.2f, tint %.1f, drift "
-                     "%.1f m/s, outlines sliding %.1f m/s, curl churning %.3f/s, out to %.0f m; "
-                     "each column stepped at most %.0f%% of the distance apart (%.0f m at "
-                     "least, %.0f steps a slice), nothing sharper than %.1f columns; its knobs "
-                     "in the layer's block at set %u%s — DIAGNOSTIC",
-                     wr.media, (size_t)ci->codeSize, p[0], p[1], p[5], p[8], p[16], p[17],
-                     p[23], p[22], p[25], p[26], p[18], 100.f * p[20], p[19], p[21], p[3],
-                     pose_set_index(),
-                     fog_ab() ? "; phases V, A and B (sharper) by recentre (X4VR_FOG_AB)" : "");
-        return code;
-    }
-    x4vr::spv::VolumeBaseReport rep;
-    if (!x4vr::spv::is_x4_volume_base(x4, &rep)) {
-        // Every later fog stage names the scale too; only a module that looks like the
-        // first stage and differs from it is worth a line.
-        if (strstr(rep.why, "offsets") || strstr(rep.why, "R16f") || strstr(rep.why, "53306"))
-            if (++g_fog_vol_refused <= 3)
-                X4VR_LOG("fog volume: a module like X4's volume_base (%zu bytes) REFUSED: %s — "
-                         "X4's own stays", (size_t)ci->codeSize, rep.why);
-        return code;
-    }
-    code.assign(x4vr::kFogVolumeComp, x4vr::kFogVolumeComp +
-                                          sizeof x4vr::kFogVolumeComp / sizeof(uint32_t));
-    tl_fog_vol = true;
-    const x4vr::spv::FogProbe pr = fog_probe_params();
-    if (++g_fog_vol_modules <= 3) {
-        if (pr.mode == 1) {
-            X4VR_LOG("fog volume: X4's volume_base (%zu bytes) replaced by ours — the smoke: "
-                         "drifting 3D noise, features %.0f m, cover %.2f, edges %.2f, drift %.1f "
-                         "m/s, density %.4f, fixed in the world, fading out by %.0f m, in X4's "
-                         "froxel fog — DIAGNOSTIC",
-                         (size_t)ci->codeSize, pr.scale, pr.cover, pr.soft, pr.drift,
-                         pr.strength, pr.far);
-        } else {
-            X4VR_LOG("fog volume: X4's volume_base (%zu bytes) replaced by ours — the probe's "
-                     "puffs every %.0f m, %.0f..%.0f m across, density %.4f, fixed in the "
-                     "world, fading out by %.0f m, in X4's froxel fog — DIAGNOSTIC",
-                     (size_t)ci->codeSize, pr.cell, 2.f * pr.radius_in, 2.f * pr.radius_out,
-                     pr.strength, pr.far);
-        }
-    }
-    return code;
 }
 
 std::vector<uint32_t> fogpoint_patch_facing(const VkShaderModuleCreateInfo *ci) {
@@ -10028,7 +9669,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         const std::vector<uint32_t> words(ci->pCode, ci->pCode + ci->codeSize / 4);
         const x4vr::spv::FogPrep kind = x4vr::spv::x4_fog_prep_kind(words);
         if (kind != x4vr::spv::FogPrep::None) {
-            std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+            std::lock_guard<std::mutex> lock(g_march_mu);
             g_fog_prep_mods[*out] = (int)kind;
             g_fog_prep_nmods++;
             static const char *const kName[4] = {"", "volume_base", "volume_point",
@@ -10041,16 +9682,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         }
     }
     const bool is_march = is_fog_vol && tl_fog_march;
-    if (r == VK_SUCCESS && is_fog_vol && !is_march) {
-        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
-        (fog_smoke_on() ? g_fog_walk_mods : g_fog_vol_mods).insert(*out);
-    }
     if (r == VK_SUCCESS && tl_march_blend) {
         // Its twins too, built from the bytes after every fragment edit, ours included
         // (frag_only): a pipeline given the no-shear or the canvas twin draws our blend
         // as much as one given the module itself. Take 488 drew our smoke in A and B and
         // its log called the twin "the patched one NOT", because only this handle was
-        // here. Read apart from g_fog_probe_mu, so the two locks never nest.
+        // here. Read apart from g_march_mu, so the two locks never nest.
         VkShaderModule twins[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
         {
             std::lock_guard<std::mutex> lock(g_variants.mu);
@@ -10059,7 +9696,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
             if (auto c = g_variants.canvas.find(*out); c != g_variants.canvas.end())
                 twins[1] = c->second;
         }
-        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        std::lock_guard<std::mutex> lock(g_march_mu);
         g_march_blend_mods.insert(*out);
         for (VkShaderModule t : twins)
             if (t != VK_NULL_HANDLE)
@@ -10074,7 +9711,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         }
         VkShaderModule x4mod = VK_NULL_HANDLE;
         const bool own = dd->CreateShaderModule(device, ci, ac, &x4mod) == VK_SUCCESS;
-        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        std::lock_guard<std::mutex> lock(g_march_mu);
         g_march_mods.insert(*out);
         if (own)
             g_march_x4mod[*out] = x4mod;
@@ -10086,14 +9723,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         record_module(ci, *out);
         complog_module(ci, *out);
         ffx_note_module(ci, *out);
-        // The fog blend's fragment module, for the same-camera check.
-        if (fog_probe_on() && ci->codeSize >= 20) {
-            std::vector<uint32_t> probe(ci->pCode, ci->pCode + ci->codeSize / 4);
-            if (x4vr::spv::patch_fragment_disable_fog(probe)) {
-                std::lock_guard<std::mutex> lock(g_fog_probe_mu);
-                g_fog_apply_mods.insert(*out);
-            }
-        }
         // The census: a vertex module of X4's near/far-faded effects.
         static const char kFade[] = "U_camera_fade_range_near_start";
         if (fade_tracking() && ci->codeSize >= 20 &&
@@ -10729,17 +10358,15 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                          std::memory_order_relaxed);
         if (facing_enabled() && facing_ab())
             g_fix_phase.store(forward_latches(), std::memory_order_relaxed);
-        // The smoke's phases (X4VR_FOG_AB=recentre, after take 480): V, X4's cards and no
-        // smoke; A, the smoke and no cards; B, the smoke smaller (after take 481). In turn
-        // from one drawn at random, once a run; the walk reads its knobs from the block.
+        // The march's phases (X4VR_FOG_AB=recentre, after take 480): in turn from one drawn at
+        // random, once a run.
         if (fog_ab()) {
             static const uint64_t fdraw = ((uint64_t)std::chrono::steady_clock::now()
                                                .time_since_epoch().count() >> 12) % 3;
             const uint64_t phase = forward_latches();
             const int fa = (int)((phase + fdraw) % 3u);
             g_fog_arm.store(fa, std::memory_order_relaxed);
-            const bool fix = fog_cards_fix();
-            if (fog_march_on()) {
+            {
                 // V: X4's own fog (its walk, its grid) and cards; A and B: our march, the
                 // cards off. A the march as built, X4's preparation skipped; B the same, X4's
                 // preparation run (after take 495).
@@ -10759,33 +10386,7 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
                              : fa == 1 ? "A, our march, X4's preparation skipped, no cards"
                                        : "B, our march, X4's preparation run, no cards");
                 }
-            } else {
-            g_pose.value.fog[0] = fa == 0 || (fix && fa == 1) ? 0.f : 1.f;
-            g_pose.value.fog[1] = 1.f;
-            g_pose.value.fog[2] = 1.f;
-            g_pose.value.fog[3] = !fix && fa == 2 ? kFogSharper : 1.f;
-            g_pose.value.fog2[0] = fix && fa == 2 ? kFogNearFar : 0.f;
-            static uint64_t fsaid = ~0ull;
-            if (fsaid != phase) {
-                fsaid = phase;
-                if (fix && fa != 0)
-                    X4VR_LOG("fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)",
-                             (unsigned long long)phase,
-                             fa == 1 ? "A, X4's cards fixed to the world, no smoke"
-                                     : "B, X4's cards fixed to the world, our smoke near the "
-                                       "ship");
-                else if (fa == 0)
-                    X4VR_LOG("fog smoke: phase #%llu — V, X4's own cards, no smoke "
-                             "(X4VR_FOG_AB=recentre)",
-                             (unsigned long long)phase);
-                else
-                    X4VR_LOG("fog smoke: phase #%llu — %s, the smoke, nothing sharper than "
-                             "%.1f columns, cloud edges %.3f, no cards (X4VR_FOG_AB=recentre)",
-                             (unsigned long long)phase, fa == 1 ? "A" : "B",
-                             (fa == 2 ? kFogSharper : 1.f) * fog_smoke_params()[3],
-                             (fa == 2 ? kFogSharper * kFogSharper : 1.f) * fog_smoke_params()[2]);
             }
-            } // not the march
         }
         // The march's clock (after take 488): seconds since the layer started, published every
         // VR frame. X4's own F_time is the save's game time -- 91786 s in his -- whose float
@@ -11345,61 +10946,12 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
     // volume is filled by compute.
     const VkComputePipelineCreateInfo *ci_app = ci;
     std::vector<VkComputePipelineCreateInfo> csubs;
-    // Our fog's pipelines: its parameters as specialisation constants (after take 474).
-    std::vector<VkComputePipelineCreateInfo> fsubs;
-    std::vector<uint32_t> walk_at; // our walk's pipelines in ci, for the layout check
-    static const VkSpecializationMapEntry kFogMap[10] = {
-        {0, 0, 4},  {1, 4, 4},  {2, 8, 4},  {3, 12, 4}, {4, 16, 4},
-        {5, 20, 4}, {6, 24, 4}, {7, 28, 4}, {8, 32, 4}, {9, 36, 4}};
-    // Ten 4-byte constants: the floats, and kMode (id 5) an int in its slot.
-    static const std::array<uint32_t, 10> fog_data = [] {
-        const x4vr::spv::FogProbe p = fog_probe_params();
-        const float f[10] = {p.cell, p.radius_in, p.radius_out, p.strength, p.far,
-                             0.f,    p.scale,     p.cover,      p.soft,     p.drift};
-        std::array<uint32_t, 10> d{};
-        std::memcpy(d.data(), f, sizeof f);
-        d[5] = (uint32_t)p.mode;
-        return d;
-    }();
-    static const VkSpecializationInfo kFogSpec = {10, kFogMap, sizeof(uint32_t) * 10,
-                                                  fog_data.data()};
-    static const std::array<VkSpecializationMapEntry, kSmokeParams> kWalkMap = [] {
-        std::array<VkSpecializationMapEntry, kSmokeParams> m{};
-        for (uint32_t i = 0; i < (uint32_t)kSmokeParams; i++)
-            m[i] = {i, 4 * i, 4};
-        return m;
-    }();
-    static const std::array<float, kSmokeParams> walk_data = fog_smoke_params();
-    static const VkSpecializationInfo kWalkSpec = {(uint32_t)kSmokeParams, kWalkMap.data(),
-                                                   sizeof(float) * kSmokeParams,
-                                                   walk_data.data()};
-    if (fog_probe_on()) {
-        bool any = false;
-        {
-            std::lock_guard<std::mutex> lock(g_fog_probe_mu);
-            for (uint32_t i = 0; i < count; i++)
-                any = any || g_fog_vol_mods.count(ci[i].stage.module) ||
-                      g_fog_walk_mods.count(ci[i].stage.module);
-        }
-        {
-            std::lock_guard<std::mutex> lock(g_fog_probe_mu);
-            for (uint32_t i = 0; i < count; i++)
-                if (g_march_mods.count(ci[i].stage.module))
-                    walk_at.push_back(i); // the layout check below covers ours too
-        }
-        if (any) {
-            fsubs.assign(ci, ci + count);
-            std::lock_guard<std::mutex> lock(g_fog_probe_mu);
-            for (uint32_t i = 0; i < count; i++) {
-                if (g_fog_vol_mods.count(ci[i].stage.module))
-                    fsubs[i].stage.pSpecializationInfo = &kFogSpec;
-                if (g_fog_walk_mods.count(ci[i].stage.module)) {
-                    fsubs[i].stage.pSpecializationInfo = &kWalkSpec;
-                    walk_at.push_back(i);
-                }
-            }
-            ci = fsubs.data();
-        }
+    std::vector<uint32_t> walk_at; // our march's pipelines in ci, for the layout check
+    if (fog_march_on()) {
+        std::lock_guard<std::mutex> lock(g_march_mu);
+        for (uint32_t i = 0; i < count; i++)
+            if (g_march_mods.count(ci[i].stage.module))
+                walk_at.push_back(i);
     }
     if (pose_active()) {
         std::lock_guard<std::mutex> lock(g_pose.mu);
@@ -11411,9 +10963,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
                 csubs[i].layout = e->second;
                 g_pose.pipes_extended++;
             } else if (std::find(walk_at.begin(), walk_at.end(), i) != walk_at.end()) {
-                // Our walk reads the layer's block: without our set in its layout the
-                // pipeline is invalid, and the run is not evidence.
-                X4VR_LOG("fog smoke: WARNING — the walk's pipeline layout has no set of the "
+                // Our march reads the layer's block: without our set in its layout the
+                // pipeline is invalid.
+                X4VR_LOG("fog march: WARNING — the march's pipeline layout has no set of the "
                          "layer's (not extended): its block is unbound");
             }
         }
@@ -11438,7 +10990,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
                 g_fsr_pipes.insert(out[i]);
     }
     if (r == VK_SUCCESS && fog_march_on()) {
-        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        std::lock_guard<std::mutex> lock(g_march_mu);
         for (uint32_t i = 0; i < count; i++)
             if (out[i] != VK_NULL_HANDLE) {
                 auto m = g_fog_prep_mods.find(ci[i].stage.module);
@@ -11448,13 +11000,11 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
                 }
             }
     }
-    if (r == VK_SUCCESS && fog_probe_on()) {
-        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+    if (r == VK_SUCCESS && fog_march_on()) {
+        std::lock_guard<std::mutex> lock(g_march_mu);
         for (uint32_t i = 0; i < count; i++)
-            if (out[i] != VK_NULL_HANDLE && (g_fog_vol_mods.count(ci[i].stage.module) ||
-                                             g_fog_walk_mods.count(ci[i].stage.module) ||
-                                             g_march_mods.count(ci[i].stage.module)))
-                g_fog_probe_pipes.insert(out[i]);
+            if (out[i] != VK_NULL_HANDLE && g_march_mods.count(ci[i].stage.module))
+                g_march_pipes.insert(out[i]);
     }
     // The march: X4's own walk pipeline beside each of ours, with the same (extended)
     // layout and X4's own specialisation, for the vanilla phase.
@@ -11462,7 +11012,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
         for (uint32_t i = 0; i < count; i++) {
             VkShaderModule x4mod = VK_NULL_HANDLE;
             {
-                std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+                std::lock_guard<std::mutex> lock(g_march_mu);
                 auto m = g_march_x4mod.find(ci[i].stage.module);
                 if (out[i] == VK_NULL_HANDLE || m == g_march_x4mod.end())
                     continue;
@@ -11483,9 +11033,9 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
             }
             g_march_x4pipes++;
             {
-                std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+                std::lock_guard<std::mutex> lock(g_march_mu);
                 g_march_x4pipe[out[i]] = x4pipe;
-                g_fog_probe_pipes.insert(x4pipe);
+                g_march_pipes.insert(x4pipe);
             }
             if (pose_active()) {
                 std::lock_guard<std::mutex> lock(g_pose.mu);
@@ -11512,173 +11062,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateComputePipelines(
     return r;
 }
 
-// The probe's froxel dispatches: the camera block they read, for the log at submit.
-static void fog_probe_dispatch(VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z) {
-    {
-        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
-        auto f = g_fog_probe_cb.find(cb);
-        if (f == g_fog_probe_cb.end() || !f->second)
-            return;
-    }
-    std::lock_guard<std::mutex> lock(g_track.mu);
-    g_fog_probe_seen.dispatches++;
-    auto vb = g_track.bound.find(cb);
-    auto &pend = g_fog_probe_pending[cb];
-    if (pend.size() < 16)
-        pend.push_back({vb != g_track.bound.end() && !vb->second.empty()
-                            ? vb->second.front()
-                            : ViewSlot{VK_NULL_HANDLE, 0},
-                        x, y, z, ++g_fog_seq});
-}
-// At submit: X4's froxel volume as the camera block gives it -- grid, depth range, the
-// camera's position and whether the view's inverse carries it (camera-relative or not).
-static void fog_probe_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) {
-    std::lock_guard<std::mutex> lock(g_track.mu);
-    FogProbeSeen &sn = g_fog_probe_seen;
-    // Each blend against the volume built before it, in the GPU's order (after take 480),
-    // and by where that volume was built.
-    FogSameCamera &fs = g_fog_same;
-    const uint64_t call = ++fs.call;
-    auto blend = [&](const FogBlend &bl, uint32_t i, uint32_t j) {
-        const float *c = slot_host_ptr(bl.cam);
-        if (!c || !fs.have_volume)
-            return;
-        float m[12];
-        std::memcpy(m, c + 128, sizeof m); // M_viewinverse, columns 0..2
-        double tr = 0.0;
-        for (int col = 0; col < 3; col++)
-            for (int row = 0; row < 3; row++)
-                tr += (double)m[col * 4 + row] * fs.volume_turn[col * 3 + row];
-        const double ang =
-            std::acos(std::fmax(-1.0, std::fmin(1.0, (tr - 1.0) / 2.0))) * 57.2957795;
-        fs.n++;
-        fs.sum += ang;
-        fs.max = std::max(fs.max, ang);
-        fs.bins[ang < 0.01 ? 0 : ang < 0.1 ? 1 : ang < 1.0 ? 2 : ang < 5.0 ? 3 : 4]++;
-        const int where = fs.vol_call != call ? 2 : (fs.vol_sub == i && fs.vol_cb == j) ? 0 : 1;
-        fs.wn[where]++;
-        fs.wsmall[where] += ang < 0.01;
-        fs.wsum[where] += ang;
-        fs.wmax[where] = std::max(fs.wmax[where], ang);
-    };
-    auto dispatch = [&](const FogProbeDispatch &dp, uint32_t i, uint32_t j) {
-        const float *c = dp.cam.buffer ? slot_host_ptr(dp.cam) : nullptr;
-        if (!c) {
-            sn.unread++;
-            return;
-        }
-        float cb[400];
-        std::memcpy(cb, c, sizeof cb); // through F_volume_scale (float 383)
-        for (int k = 0; k < 3; k++)
-            sn.vi_t[k] = cb[128 + 12 + k];
-        for (int k = 0; k < 4; k++) {
-            sn.campos[k] = cb[184 + k];
-            sn.range[k] = cb[236 + k];
-            sn.size[k] = cb[240 + k];
-        }
-        sn.ftime = cb[355];
-        // X4's grid follows its volumetric-fog setting, which can change in a run.
-        static float grid_seen[3] = {0.f, 0.f, 0.f};
-        if (sn.size[0] != grid_seen[0] || sn.size[1] != grid_seen[1] ||
-            sn.size[2] != grid_seen[2]) {
-            X4VR_LOG("fog probe: X4's grid is %.0fx%.0fx%.0f (was %.0fx%.0fx%.0f)", sn.size[0],
-                     sn.size[1], sn.size[2], grid_seen[0], grid_seen[1], grid_seen[2]);
-            for (int k = 0; k < 3; k++)
-                grid_seen[k] = sn.size[k];
-        }
-        {
-            // The sun: the world's (V_direction1, float 192) turned by the view
-            // (M_view, floats 0..15) against X4's own in the view's axes
-            // (V_light_direction_view[0], float 216).
-            double w[3] = {cb[192], cb[193], cb[194]}, v[3] = {0, 0, 0},
-                   x4[3] = {cb[216], cb[217], cb[218]};
-            double lw = 0, lv = 0, lx = 0, dot = 0;
-            for (int rr = 0; rr < 3; rr++)
-                for (int k = 0; k < 3; k++)
-                    v[rr] += (double)cb[k * 4 + rr] * w[k];
-            for (int k = 0; k < 3; k++) {
-                lw += w[k] * w[k];
-                lv += v[k] * v[k];
-                lx += x4[k] * x4[k];
-                dot += v[k] * x4[k];
-            }
-            float fy = 0.f, fp = 0.f;
-            if (lw > 0 && lv > 0 && lx > 0 && frame_look(&fy, &fp)) {
-                const double ang = std::acos(std::fmax(-1.0, std::fmin(1.0,
-                                       dot / std::sqrt(lv * lx)))) * 57.2957795;
-                const double hl = std::max(std::fabs(fy), std::fabs(fp));
-                const int b = hl < 2.0 ? 0 : hl < 10.0 ? 1 : hl < 30.0 ? 2 : 3;
-                g_fog_sun.n[b]++;
-                g_fog_sun.sum[b] += ang;
-                g_fog_sun.max[b] = std::max(g_fog_sun.max[b], ang);
-            }
-        }
-        g_fog_same.have_volume = true;
-        g_fog_same.vol_call = call;
-        g_fog_same.vol_sub = i;
-        g_fog_same.vol_cb = j;
-        for (int col = 0; col < 3; col++)
-            for (int row = 0; row < 3; row++)
-                g_fog_same.volume_turn[col * 3 + row] = cb[128 + col * 4 + row];
-        sn.off = cb[382];
-        sn.scale = cb[383];
-        sn.x = dp.x;
-        sn.y = dp.y;
-        sn.z = dp.z;
-        const bool rel = sn.vi_t[0] * sn.vi_t[0] + sn.vi_t[1] * sn.vi_t[1] +
-                             sn.vi_t[2] * sn.vi_t[2] < 1.f;
-        sn.relative += rel;
-        // How X4 lights the volume (after take 476: density 1 everywhere fogged
-        // the sky, 0.04 in puffs showed nothing): the sun's colour, the ambient,
-        // and each medium's extinction and scatter (camera block 752, 784, 1120,
-        // 1072).
-        if (sn.read < 3 || ((sn.read + 1) % 3000) == 0)
-            X4VR_LOG("fog probe: X4's light — sun (%.3g, %.3g, %.3g), ambient (%.3g, "
-                     "%.3g, %.3g); extinction per medium (%.3g, %.3g, %.3g) (%.3g, "
-                     "%.3g, %.3g) (%.3g, %.3g, %.3g); scatter (%.3g, %.3g, %.3g) "
-                     "(%.3g, %.3g, %.3g) (%.3g, %.3g, %.3g)",
-                     cb[196], cb[197], cb[198], cb[188], cb[189], cb[190], cb[280],
-                     cb[281], cb[282], cb[284], cb[285], cb[286], cb[288], cb[289],
-                     cb[290], cb[268], cb[269], cb[270], cb[272], cb[273], cb[274],
-                     cb[276], cb[277], cb[278]);
-        if (++sn.read <= 3 || (sn.read % 3000) == 0)
-            X4VR_LOG("fog probe: froxel dispatch %ux%ux%u, grid %.0fx%.0fx%.0f, range "
-                     "%.1f..%.1f m, volume off %.4g scale %.4g; the view's inverse "
-                     "moves by (%.1f, %.1f, %.1f)%s, the camera at (%.1f, %.1f, %.1f); "
-                     "time %.2f",
-                     dp.x, dp.y, dp.z, sn.size[0], sn.size[1], sn.size[2], sn.range[0],
-                     sn.range[1], sn.off, sn.scale, sn.vi_t[0], sn.vi_t[1], sn.vi_t[2],
-                     rel ? " — camera-relative: the puffs take V_cameraposition" : "",
-                     sn.campos[0], sn.campos[1], sn.campos[2], sn.ftime);
-    };
-    // The submit's command buffers in order, and in each its dispatches and blends as
-    // they were recorded.
-    for (uint32_t i = 0; i < submitCount; i++)
-        for (uint32_t j = 0; j < submits[i].commandBufferCount; j++) {
-            const VkCommandBuffer cb = submits[i].pCommandBuffers[j];
-            auto ap = g_fog_apply_pending.find(cb);
-            auto dp = g_fog_probe_pending.find(cb);
-            const FogBlend *bls = ap == g_fog_apply_pending.end() ? nullptr : ap->second.data();
-            const FogProbeDispatch *dps =
-                dp == g_fog_probe_pending.end() ? nullptr : dp->second.data();
-            const size_t nb = bls ? ap->second.size() : 0, nd = dps ? dp->second.size() : 0;
-            size_t a = 0, d = 0;
-            while (a < nb || d < nd) {
-                if (d < nd && (a == nb || dps[d].seq < bls[a].seq)) {
-                    dispatch(dps[d++], i, j);
-                } else {
-                    // A blend recorded before a dispatch in its own buffer reads a volume
-                    // built earlier than this buffer's.
-                    fs.after += d < nd;
-                    blend(bls[a++], i, j);
-                }
-            }
-            if (ap != g_fog_apply_pending.end())
-                ap->second.clear();
-            if (dp != g_fog_probe_pending.end())
-                dp->second.clear();
-        }
-}
 void note_dispatch(VkCommandBuffer cb) {
     if (!g_mv_inventory || !g_active)
         return;
@@ -11702,7 +11085,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatch(VkCommandBuffer cb, uint32_t x,
     if (fog_march_on()) {
         int march = 0;
         {
-            std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+            std::lock_guard<std::mutex> lock(g_march_mu);
             auto m = g_march_cb.find(cb);
             march = m == g_march_cb.end() ? 0 : m->second;
         }
@@ -11716,13 +11099,11 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatch(VkCommandBuffer cb, uint32_t x,
             g_march.barrier_after(cb);
             g_march_dirty.store(true, std::memory_order_relaxed);
             g_march_dispatches++;
-            if (fog_probe_on())
-                fog_probe_dispatch(cb, x, y, z);
             return;
         }
         int prep = 0;
         {
-            std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+            std::lock_guard<std::mutex> lock(g_march_mu);
             auto m = g_fog_prep_cb.find(cb);
             prep = m == g_fog_prep_cb.end() ? 0 : m->second;
         }
@@ -11746,8 +11127,6 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatch(VkCommandBuffer cb, uint32_t x,
             const int slot = g_march_timer.begin(cb, (uint32_t)(2 + prep));
             d->CmdDispatch(cb, x, y, fsr_dispatch_z(cb, x, y, z));
             g_march_timer.end(cb, slot);
-            if (fog_probe_on())
-                fog_probe_dispatch(cb, x, y, z);
             return;
         }
         if (march == 2) {
@@ -11756,15 +11135,11 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdDispatch(VkCommandBuffer cb, uint32_t x,
             const int slot = g_march_timer.begin(cb, 0);
             d->CmdDispatch(cb, x, y, fsr_dispatch_z(cb, x, y, z));
             g_march_timer.end(cb, slot);
-            if (fog_probe_on())
-                fog_probe_dispatch(cb, x, y, z);
             ffx_dispatch_right(d, cb, x, y, z);
             return;
         }
     }
     d->CmdDispatch(cb, x, y, fsr_dispatch_z(cb, x, y, z));
-    if (fog_probe_on())
-        fog_probe_dispatch(cb, x, y, z);
     ffx_dispatch_right(d, cb, x, y, z);
 }
 
@@ -12143,13 +11518,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     auto publish_canvas = [&](VkResult r) {
         if (r != VK_SUCCESS)
             return;
-        if (fog_probe_on()) {
-            std::lock_guard<std::mutex> fl(g_fog_probe_mu);
-            for (uint32_t i = 0; i < count; i++)
-                for (uint32_t k = 0; out[i] != VK_NULL_HANDLE && k < ci_app[i].stageCount; k++)
-                    if (g_fog_apply_mods.count(ci_app[i].pStages[k].module))
-                        g_fog_apply_pipes.insert(out[i]);
-        }
         if (fade_tracking()) {
             std::lock_guard<std::mutex> cl(g_census_mu);
             for (uint32_t i = 0; i < count; i++)
@@ -12208,7 +11576,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
                  "KEPT: bindless offset and per-eye M_invprojection");
     }
     if (fog_march_on()) {
-        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        std::lock_guard<std::mutex> lock(g_march_mu);
         for (uint32_t i = 0; i < count; i++)
             for (uint32_t k = 0; k < ci_app[i].stageCount; k++)
                 if (g_march_blend_mods.count(ci_app[i].pStages[k].module)) {
@@ -13473,8 +12841,6 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
     after_rp_headless_frame();
     if (fade_tracking())
         census_at_submit(submitCount, submits);
-    if (fog_probe_on())
-        fog_probe_at_submit(submitCount, submits);
     patch_view_before_submit();
     // Task #59: publish this frame's pose into the region each submitted
     // command buffer was given. Submit time is the latest moment that is still
@@ -16437,7 +15803,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
     // The march (after take 486): our walk, or X4's own in the vanilla phase -- swapped
     // here, before anything below sees which pipeline this is.
     if (bp == VK_PIPELINE_BIND_POINT_COMPUTE && fog_march_on()) {
-        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
+        std::lock_guard<std::mutex> lock(g_march_mu);
         auto m = g_march_x4pipe.find(p);
         int which = 0;
         if (m != g_march_x4pipe.end()) {
@@ -16445,19 +15811,12 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
             which = vanilla ? 2 : 1;
             if (vanilla)
                 p = m->second;
-        } else if (g_march_mods.size() && g_fog_probe_pipes.count(p)) {
+        } else if (g_march_mods.size() && g_march_pipes.count(p)) {
             which = 1; // ours, with X4's own pipeline not made
         }
         g_march_cb[cb] = which;
         auto pp = g_fog_prep_pipes.find(p);
         g_fog_prep_cb[cb] = pp == g_fog_prep_pipes.end() ? 0 : pp->second;
-    }
-    if (fog_probe_on()) {
-        std::lock_guard<std::mutex> lock(g_fog_probe_mu);
-        if (bp == VK_PIPELINE_BIND_POINT_COMPUTE)
-            g_fog_probe_cb[cb] = g_fog_probe_pipes.count(p) != 0;
-        else
-            g_fog_apply_cb[cb] = g_fog_apply_pipes.count(p) != 0;
     }
     if (bp == VK_PIPELINE_BIND_POINT_GRAPHICS && fade_tracking()) {
         std::lock_guard<std::mutex> lock(g_census_mu);

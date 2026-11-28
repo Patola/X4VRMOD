@@ -2360,35 +2360,22 @@ fxs='[  99900.012] layer   facing cpu ship final (X4'"'"'s camera at the first p
 { fbase; printf '%s\n' "$fxok" "$fxs"; } > /tmp/census-fx-ship.log
 want "cpu fix: the head-look check said" /tmp/census-fx-ship.log facing "cpu ship final (X4's camera at the first pass)"
 
-# The fog probe (after take 473).
-for f in '"fog probe %s: %u froxel module(s) patched, %u refused; %llu dispatch(es), "' \
-         '"fog probe: froxel dispatch %ux%ux%u, grid %.0fx%.0fx%.0f, range "' \
-         '"fog volume: X4'"'"'s volume_base (%zu bytes) replaced by ours — the probe'"'"'s "' \
-         '"fog cards %s: off — %llu draw(s) of X4'"'"'s nebula material %s (fading in "' \
+# Our nebula's lines the scorer reads (the march, X4's cards; the probe and the smoke went
+# before 1.0).
+for f in '"fog cards %s: off — %llu draw(s) of X4'"'"'s nebula material %s (fading in "' \
          '"fog cards %s: the fading materials drawn, by where they fade in and out "' \
-         '"fog cards %s: fixed — %llu draw(s) of X4'"'"'s nebula material turned to face "' \
          '"fog smoke: phase #%llu — %s (X4VR_FOG_AB=recentre)"' \
          '"fog cards %s: the stopgap where the material was unread — %llu draw(s) of "' \
          '"fog cards: a fade module'"'"'s material %s set %u binding %u, fade "' \
-         '"fog probe: X4'"'"'s light — sun (%.3g, %.3g, %.3g), ambient (%.3g, "' \
-         '"fog probe %s: the blend against the camera that built the volume — %llu "' \
-         '"fog probe %s: X4'"'"'s sun in the view against the world'"'"'s turned by the "' \
-         '"fog volume: X4'"'"'s volume_base (%zu bytes) replaced by ours — the smoke: "' \
-         '"fog smoke: X4'"'"'s volume_walk for %d medium(s) (%zu bytes) replaced by ours — "' \
-         '"fog smoke: phase #%llu — V, X4'"'"'s own cards, no smoke "' \
-         '"fog smoke: phase #%llu — %s, the smoke, nothing sharper than "' \
-         '"fog probe: X4'"'"'s grid is %.0fx%.0fx%.0f (was %.0fx%.0fx%.0f)"' \
          '"fog smoke %s: frame time by phase — %s"' \
          '"fog smoke %s: its knobs as last published — %s density %.2f, glow %.2f, "' \
          '"fog march %s: %llu dispatch(es) of our march (%ux%u rays, %u depths), %llu "' \
          '"fog march: X4'"'"'s volume_walk for %d medium(s) (%zu bytes) replaced by our "' \
          '"fog march: a pipeline with X4'"'"'s fog blend gets fragment module "' \
          '"fog march: its one-time setup goes in front of X4'"'"'s submission "' \
-         '"fog probe %s: where each blend'"'"'s volume was built — its own command "' \
-         '"fog smoke: WARNING — the walk'"'"'s pipeline layout has no set of the "' \
-         '"fog smoke: X4'"'"'s volume_walk (%zu bytes) left as X4'"'"'s — the smoke "'; do
-    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "fog probe: the layer still prints $f" \
-        || bad "fog probe: the layer's format moved: $f"
+         '"fog march: WARNING — the march'"'"'s pipeline layout has no set of the "'; do
+    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "fog: the layer still prints $f" \
+        || bad "fog: the layer's format moved: $f"
 done
 fpok='[  99900.020] layer   fog probe final: 1 froxel module(s) patched, 0 refused; 9000 dispatch(es), 9000 read (9000 camera-relative), 0 unreadable; last grid 160x90x128, range 0.1..5000.0 m'
 fpnone='[  99900.020] layer   fog probe final: 0 froxel module(s) patched, 0 refused; 0 dispatch(es), 0 read (0 camera-relative), 0 unreadable; last grid 0x0x0, range 0.0..0.0 m'

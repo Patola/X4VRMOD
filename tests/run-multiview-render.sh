@@ -1357,46 +1357,35 @@ for fs in sample_billboard:0 sample_billboard_fade:1; do
     fi
 done
 
-# The fog probe (after take 473): world-fixed puffs added to X4's froxel fog, at each
-# froxel's world position whether X4 renders camera-relative or not; the patched
-# module must validate.
-fout="$PATCHDIR/fogprobe.spv"
-out=$("$PATCHER" fog-probe-check "$BUILD/tests/sample_fog_probe.comp.spv" "$fout" 2>&1)
-if grep -qx PASS <<<"$out" && spirv-val "$fout" >/dev/null 2>&1; then
-    printf 'ok   %-38s %s\n' "fog probe: world-fixed puffs" "$(grep CHECKED <<<"$out")"
-else
-    printf 'FAIL %-38s %s\n' "fog probe: world-fixed puffs" "$(tr '\n' ' ' <<<"$out")"
-    fails=$((fails + 1))
-fi
 
-# Our fog in X4's froxel volume (after take 474): the module put in the place of X4's
-# volume_base must have the interface is_x4_volume_base checks X4's against -- and a
-# copy of it with one member moved must be refused.
-out=$("$PATCHER" volume-base "$ROOT/layer/fog_volume.comp.spv" 2>&1)
-"$PATCHER" volume-base-offset "$ROOT/layer/fog_volume.comp.spv" "$PATCHDIR/vb_bad.spv" V_volume_size 976 >/dev/null 2>&1
+# X4's froxel fog's first stage, known by its interface (is_x4_volume_base): the stand-in
+# has it, a copy with one member moved is refused -- and after take 495 the preparation's
+# three stages are known for skipping (x4_fog_prep_kind: base 1, point 2), the walk and the
+# blend are not.
+out=$("$PATCHER" volume-base "$BUILD/tests/sample_volume_base.comp.spv" 2>&1)
+"$PATCHER" volume-base-offset "$BUILD/tests/sample_volume_base.comp.spv" "$PATCHDIR/vb_bad.spv" V_volume_size 976 >/dev/null 2>&1
 bad_out=$("$PATCHER" volume-base "$PATCHDIR/vb_bad.spv" 2>&1)
-if grep -q '^IS=1' <<<"$out" && grep -q '^IS=0' <<<"$bad_out" && \
-    spirv-val --target-env vulkan1.0 "$ROOT/layer/fog_volume.comp.spv" >/dev/null 2>&1; then
-    printf 'ok   %-38s %s\n' "fog volume: X4's interface, exactly" "$(tr '\n' ' ' <<<"$bad_out")"
+pk="$("$PATCHER" fog-prep "$BUILD/tests/sample_volume_base.comp.spv")$("$PATCHER" fog-prep "$BUILD/tests/sample_volume_point.comp.spv")$("$PATCHER" fog-prep "$BUILD/tests/sample_volume_walk.comp.spv")$("$PATCHER" fog-prep "$BUILD/tests/sample_fog_apply.frag.spv")"
+if grep -q '^IS=1' <<<"$out" && grep -q '^IS=0' <<<"$bad_out" && [[ $pk == PREP=1PREP=2PREP=0PREP=0 ]]; then
+    printf 'ok   %-38s %s\n' "fog prep: X4's stages, exactly" "$(tr '\n' ' ' <<<"$bad_out")"
 else
-    printf 'FAIL %-38s %s | %s\n' "fog volume: X4's interface, exactly" "$out" "$bad_out"
+    printf 'FAIL %-38s %s | %s | %s\n' "fog prep: X4's stages, exactly" "$out" "$bad_out" "$pk"
     fails=$((fails + 1))
 fi
 
-# The smoke (after take 479): our walk goes in the place of X4's volume_walk only when X4's
-# module has the interface ours reads -- the stand-in has it; a copy with the output's index
-# or the light's colour moved is refused; and our two variants validate.
+# Our march goes in the place of X4's volume_walk only when X4's module has the interface
+# ours reads -- the stand-in has it; a copy with the output's index or the light's colour
+# moved is refused; and our march validates.
 wout=$("$PATCHER" volume-walk "$BUILD/tests/sample_volume_walk.comp.spv" 2>&1)
 "$PATCHER" volume-base-offset "$BUILD/tests/sample_volume_walk.comp.spv" "$PATCHDIR/vw1.spv" S_output_rt_idx 480 >/dev/null 2>&1
 "$PATCHER" volume-base-offset "$BUILD/tests/sample_volume_walk.comp.spv" "$PATCHDIR/vw2.spv" V_lightcolor1 800 >/dev/null 2>&1
 wbad1=$("$PATCHER" volume-walk "$PATCHDIR/vw1.spv" 2>&1)
 wbad2=$("$PATCHER" volume-walk "$PATCHDIR/vw2.spv" 2>&1)
 if grep -q '^IS=1 MEDIA=1' <<<"$wout" && grep -q '^IS=0' <<<"$wbad1" && grep -q '^IS=0' <<<"$wbad2" && \
-    spirv-val --target-env vulkan1.0 "$ROOT/layer/fog_walk1.comp.spv" >/dev/null 2>&1 && \
-    spirv-val --target-env vulkan1.0 "$ROOT/layer/fog_walk2.comp.spv" >/dev/null 2>&1; then
-    printf 'ok   %-38s %s\n' "fog smoke: X4's walk interface, exactly" "refused: $(sed 's/.*WHY=//' <<<"$wbad1"); $(sed 's/.*WHY=//' <<<"$wbad2")"
+    spirv-val --target-env vulkan1.0 "$ROOT/layer/fog_march.comp.spv" >/dev/null 2>&1; then
+    printf 'ok   %-38s %s\n' "fog march: X4's walk interface, exactly" "refused: $(sed 's/.*WHY=//' <<<"$wbad1"); $(sed 's/.*WHY=//' <<<"$wbad2")"
 else
-    printf 'FAIL %-38s %s | %s | %s\n' "fog smoke: X4's walk interface, exactly" "$wout" "$wbad1" "$wbad2"
+    printf 'FAIL %-38s %s | %s | %s\n' "fog march: X4's walk interface, exactly" "$wout" "$wbad1" "$wbad2"
     fails=$((fails + 1))
 fi
 
@@ -1429,17 +1418,17 @@ else
     fails=$((fails + 1))
 fi
 
-# After take 480 our walk reads the layer's block, written at set 31 and moved by the layer
-# to the device's set: one decoration moves, the module still validates and names the new
-# set; a module with nothing at 31 moves nothing.
-rt=$("$PATCHER" retarget-set "$ROOT/layer/fog_walk1.comp.spv" 31 7 "$PATCHDIR/fw7.spv" 2>&1)
-rt0=$("$PATCHER" retarget-set "$ROOT/layer/fog_volume.comp.spv" 31 7 "$PATCHDIR/fv7.spv" 2>&1)
-rtdis=$(spirv-dis "$PATCHDIR/fw7.spv" 2>/dev/null)
-if [[ $rt == MOVED=1 && $rt0 == MOVED=0 ]] && spirv-val --target-env vulkan1.0 "$PATCHDIR/fw7.spv" >/dev/null 2>&1 && \
+# Our march reads the layer's block, its volume and its noise, written at set 31 and moved by
+# the layer to the device's set: three decorations move, the module still validates and
+# names the new set; a module with nothing at 31 moves nothing.
+rt=$("$PATCHER" retarget-set "$ROOT/layer/fog_march.comp.spv" 31 7 "$PATCHDIR/fm7.spv" 2>&1)
+rt0=$("$PATCHER" retarget-set "$BUILD/tests/sample_volume_base.comp.spv" 31 7 "$PATCHDIR/fv7.spv" 2>&1)
+rtdis=$(spirv-dis "$PATCHDIR/fm7.spv" 2>/dev/null)
+if [[ $rt == MOVED=3 && $rt0 == MOVED=0 ]] && spirv-val --target-env vulkan1.0 "$PATCHDIR/fm7.spv" >/dev/null 2>&1 && \
     grep -q 'OpDecorate %pose DescriptorSet 7' <<<"$rtdis" && ! grep -q 'DescriptorSet 31' <<<"$rtdis"; then
-    printf 'ok   %-38s %s\n' "fog smoke: the layer's block moved to its set" "$rt; none in the probe: $rt0"
+    printf 'ok   %-38s %s\n' "fog march: the layer's sets moved to its set" "$rt; none in X4's: $rt0"
 else
-    printf 'FAIL %-38s %s | %s\n' "fog smoke: the layer's block moved to its set" "$rt" "$rt0"
+    printf 'FAIL %-38s %s | %s\n' "fog march: the layer's sets moved to its set" "$rt" "$rt0"
     fails=$((fails + 1))
 fi
 
