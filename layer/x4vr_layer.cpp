@@ -16159,6 +16159,11 @@ struct VrState {
     // pays the full five-second cap on every run. Measured headlessly at
     // 5.014 s with XR_RUNTIME_JSON pointed at nothing, before this existed.
     std::atomic<bool> session_settled{false};
+    // X4 is inside exit() with the session running (vr_stop_at_exit): nothing may call the
+    // runtime from here on, which the OpenXR loader's own exit handler closes. end_mu keeps
+    // that stop and vr_shutdown apart; either may come first.
+    std::atomic<bool> exiting{false};
+    std::mutex end_mu;
 
     std::mutex mu;
     uint64_t frames = 0, located = 0, begun = 0;
@@ -17399,6 +17404,10 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
         return false; // mono: nothing stereo to send, and #2 owns that gap
 
     std::lock_guard<std::mutex> lock(g_vrs.sc_mu);
+    // X4 is exiting and the runtime may be closed already (vr_stop_at_exit): read under the
+    // lock that stop takes, so no call into it starts after.
+    if (g_vrs.exiting.load(std::memory_order_acquire))
+        return false;
     // The loading panel's one upload is talking to the runtime: this frame isn't
     // copied, and the headset shows the panel anyway.
     if (g_vrs.load_busy.load(std::memory_order_acquire))
@@ -17593,6 +17602,8 @@ bool vr_begin_blit(VkSwapchainKHR x4sc) {
 void vr_finish_blit() {
     const x4vr::xr::InRuntime in_runtime; // as in vr_begin_blit
     std::lock_guard<std::mutex> lock(g_vrs.sc_mu);
+    if (g_vrs.exiting.load(std::memory_order_acquire))
+        return; // as in vr_begin_blit: X4 is exiting, the runtime may be gone
     const uint32_t tc = g_trace_copies.fetch_add(1, std::memory_order_relaxed);
     // The menu warp: the image about to be released carries the turn only if the
     // composite recorded it. Otherwise it was copied still, and declaring the
@@ -19687,6 +19698,60 @@ void vr_note_device(VkInstance vk, VkPhysicalDevice phys, VkDevice dev,
 // The thread does the whole of it -- resolve the handle, create the session,
 // then run the frame loop -- so that none of it happens on a thread the loader
 // is currently inside.
+// **X4 calling exit() with the session running (take 497L's first attempt, 2026-11-28).**
+// gamescope had died; libX11's handler for the lost connection called exit() from inside X4's
+// SDL_DestroyWindow, before X4 had destroyed its device, so vr_shutdown never ran. exit() ran
+// the OpenXR loader's own exit handler, which closed SteamVR's library, and the XR thread,
+// never told to stop, called xrEndFrame into the unmapped code: SIGSEGV, with X4 still inside
+// OPENSSL_cleanup. Exit handlers run in the reverse of their registration and this one is
+// registered once the session exists, so it runs before the loader's and the runtime's: it
+// shuts the present thread's way into the runtime (vr_begin_blit and vr_finish_blit look under
+// sc_mu, taken here once after) and stops the XR thread. It destroys nothing, the rule for
+// anything of ours at exit (tests/run-no-exit-destructors.sh): X4's other threads may still be
+// drawing, and the runtime sees the client go as it does after any crash. Every wait is
+// bounded, so a runtime hung in a call cannot hold up X4's exit. After a normal quit
+// vr_shutdown has joined the thread already, and this finds nothing to stop.
+// tests/run-xr-exit.sh reproduces the crash on Monado, and this keeps it from happening.
+static bool lock_within(std::unique_lock<std::mutex> &l, int ms) {
+    for (int i = 0; i < ms / 5; i++) {
+        if (l.try_lock())
+            return true;
+        struct timespec nap = {0, 5 * 1000 * 1000};
+        nanosleep(&nap, nullptr);
+    }
+    return l.try_lock();
+}
+
+void vr_stop_at_exit() {
+    std::unique_lock<std::mutex> end(g_vrs.end_mu, std::defer_lock);
+    if (!lock_within(end, 1000) || !g_vrs.thread.joinable())
+        return; // vr_shutdown is ending the session, or has
+    const double t0 = mono_now();
+    g_vrs.exiting.store(true, std::memory_order_release);
+    {
+        std::unique_lock<std::mutex> sc(g_vrs.sc_mu, std::defer_lock);
+        if (lock_within(sc, 1000))
+            sc.unlock(); // a present-thread call in flight has returned; none starts after
+    }
+    g_vrs.stop.store(true);
+    bool settled = false;
+    for (int i = 0; i < 400 && !(settled = g_vrs.session_settled.load(std::memory_order_acquire));
+         i++) {
+        struct timespec nap = {0, 5 * 1000 * 1000};
+        nanosleep(&nap, nullptr);
+    }
+    if (settled)
+        g_vrs.thread.join();
+    if (settled)
+        X4VR_LOG("vr: X4 is exiting with the session running (exit() before its device was "
+                 "destroyed) — the XR thread stopped in %.0f ms, and the present thread's way "
+                 "into the runtime shut, before the runtime closes",
+                 (mono_now() - t0) * 1e3);
+    else
+        X4VR_LOG("vr: X4 is exiting with the session running — the XR thread did NOT stop "
+                 "within 2 s (inside the runtime?), and may call it after it closes");
+}
+
 void vr_session_thread() {
     // Set on EVERY exit from this function, including the four silent early
     // returns below and normal shutdown after vr_thread(). A waiter that can
@@ -19775,6 +19840,12 @@ void vr_session_thread() {
                                "started, take 443), and the headset's recentre moves it. "
                                "X4VR_SPACE=stage puts back the play area");
     g_vrs.session_ok.store(true);
+    // Registered now that the session exists, after the loader's exit handler (made at
+    // xrCreateInstance) and whatever the runtime registered while making the session, so that
+    // at exit it runs before all of them.
+    if (atexit(vr_stop_at_exit) != 0)
+        X4VR_LOG("vr: the stop at exit could NOT be registered — an exit() with the session "
+                 "running may crash in the runtime, as take 497L's first attempt did");
     vr_thread();
 }
 
@@ -20007,6 +20078,14 @@ void vr_report(const char *when) {
 }
 
 void vr_shutdown() {
+    std::lock_guard<std::mutex> end(g_vrs.end_mu);
+    if (g_vrs.exiting.load(std::memory_order_acquire)) {
+        // X4 destroying its device from inside exit(), after vr_stop_at_exit stopped the XR
+        // thread: the runtime may be closed by now, so nothing of it is called.
+        vr_report("final");
+        g_sbs.cursor_report("final");
+        return;
+    }
     if (!g_vrs.started.load()) {
         vr_report("final");
         g_sbs.cursor_report("final");

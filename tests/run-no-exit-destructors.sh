@@ -12,9 +12,15 @@
 # later call then reads a freed table. The rule (common/x4vr_immortal.hpp):
 # nothing of ours is ever destroyed.
 #
+# One exit handler is ours on purpose, and it destroys nothing: vr_stop_at_exit, registered
+# with atexit() once a VR session exists, stops the XR thread before the OpenXR loader's exit
+# handler closes the runtime (take 497L's first attempt; tests/run-xr-exit.sh).
+#
 # Two checks, each with a control so it cannot pass by seeing nothing:
-#   1. static: no call or tail jump to __cxa_atexit in either .so (the control is a tiny
-#      library with one static std::map, which must count 1);
+#   1. static: no call or tail jump to __cxa_atexit in either .so but libc's own atexit()
+#      stub's (the control is a tiny library with one static std::map, which must count 1);
+#      and atexit() called from one place only, the layer's vr_session_thread, none in the
+#      injector (the control, a library calling it once, must count 1);
 #   2. runtime: tests/exit_teardown.cpp destroys Vulkan objects from a global's
 #      destructor through the layer -- as gamescope, and as X4 -- and must exit
 #      0 (the control runs it without the layer). X4VR_OLD_LAYER=<dir of a
@@ -31,7 +37,15 @@ BUILD="${X4VR_BUILD:-build}"
 fail=0
 ok()  { printf 'ok    %s\n' "$1"; }
 bad() { printf 'FAIL  %s\n' "$1"; fail=1; }
-count() { objdump -d "$1" | grep -cE '(call|jmp)[^<]*<__cxa_atexit'; }
+# __cxa_atexit called, outside libc's atexit() stub (which every atexit() call goes through).
+count() {
+    objdump -d "$1" | awk '/^[0-9a-f]+ <.*>:$/{fn=$2} /(call|jmp)[^<]*<__cxa_atexit/ && fn != "<atexit>:" {n++} END {print n+0}'
+}
+# The functions calling atexit(), one line each.
+atexit_callers() {
+    objdump -dC --no-show-raw-insn "$1" |
+        awk '/^[0-9a-f]+ <.*>:$/{fn=$0} /(call|jmp)[^<]*<atexit(@plt)?>/{print fn}'
+}
 
 if ! command -v objdump >/dev/null; then
     echo "SKIP  no objdump"
@@ -49,6 +63,24 @@ if c++ -O2 -fPIC -shared "$tmp/ctl.cpp" -o "$tmp/libctl.so" 2>/dev/null; then
 else
     bad "control: could not build the control library"
 fi
+printf '#include <cstdlib>\nstatic void h() {}\nint f() { return atexit(h); }\n' > "$tmp/ctl2.cpp"
+if c++ -O2 -fPIC -shared "$tmp/ctl2.cpp" -o "$tmp/libctl2.so" 2>/dev/null; then
+    n=$(atexit_callers "$tmp/libctl2.so" | wc -l)
+    if [ "$n" -eq 1 ]; then ok "control: a library calling atexit() once counts 1 caller"
+    else bad "control: a library calling atexit() once counted $n — the count cannot see"; fi
+else
+    bad "control: could not build the atexit() control library"
+fi
+callers=$(atexit_callers "$BUILD/layer/libVkLayer_X4VR_core.so")
+if [ "$(wc -l <<<"$callers")" -eq 1 ] && grep -q 'vr_session_thread()>:$' <<<"$callers"; then
+    ok "libVkLayer_X4VR_core.so: atexit() from vr_session_thread only (the stop at exit)"
+else
+    bad "libVkLayer_X4VR_core.so: atexit() called from somewhere else, by:"
+    sed 's/^/        /' <<<"$callers" | cut -c1-150
+fi
+callers=$(atexit_callers "$BUILD/injector/libx4vr_inject.so")
+if [ -z "$callers" ]; then ok "libx4vr_inject.so: no atexit()"
+else bad "libx4vr_inject.so: atexit() called, by:"; sed 's/^/        /' <<<"$callers" | cut -c1-150; fi
 for so in "$BUILD/layer/libVkLayer_X4VR_core.so" "$BUILD/injector/libx4vr_inject.so"; do
     if [ ! -f "$so" ]; then bad "$so not built"; continue; fi
     n=$(count "$so")
@@ -56,7 +88,7 @@ for so in "$BUILD/layer/libVkLayer_X4VR_core.so" "$BUILD/injector/libx4vr_inject
     else
         bad "$(basename "$so"): $n exit-time destructor(s) registered, by:"
         objdump -dC --no-show-raw-insn "$so" |
-            awk '/^[0-9a-f]+ <.*>:$/{fn=$0} /(call|jmp)[^<]*<__cxa_atexit/{print fn}' |
+            awk '/^[0-9a-f]+ <.*>:$/{fn=$0} /(call|jmp)[^<]*<__cxa_atexit/ && fn !~ / <atexit>:$/{print fn}' |
             sort | uniq -c | cut -c1-150 | sed 's/^/        /'
     fi
 done

@@ -36,7 +36,7 @@ for t in "$BUILD"/tests/x4vr_test_*; do
             x4vr_test_exit_teardown | x4vr_test_multiview_* | \
             x4vr_test_readback_speed | x4vr_test_spirv_patch | x4vr_test_wgate_patch | \
             x4vr_test_xr_probe | x4vr_test_xr_bundled | x4vr_test_march_smoke | \
-            x4vr_test_gpu_timer) continue ;;
+            x4vr_test_gpu_timer | x4vr_test_xr_exit) continue ;;
     esac
     run "${t##*/}" timeout 120 "$t"
 done
@@ -56,6 +56,8 @@ for s in census-scorer config-fork content-fork deploy-extensions dither-scorer 
     xr-bundled-loader; do
     run "$s" timeout 600 bash "tests/run-$s.sh"
 done
+# On the machine's own GPU, against Monado's null compositor: skips without monado-service.
+run xr-exit timeout 300 bash tests/run-xr-exit.sh
 
 lvp=$(ls /usr/share/vulkan/icd.d/lvp_icd*.json 2>/dev/null | head -1)
 if [ -n "$lvp" ]; then

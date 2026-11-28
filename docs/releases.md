@@ -28,6 +28,11 @@ on the remote beside their `take-NNN-name` twins.
   1 ms inside dense clouds), against about 0.2 ms for the work of X4's own volumetric fog they
   replace. (rc11 said frames in nebulae came no slower than with X4's own clouds: true in some
   tests and not in others, so these are the measured costs instead.)
+* **X4 no longer crashes on its way out when its window is lost with the headset running.**
+  Once, on a laptop under SteamVR, gamescope stopped while X4 was starting; X4 then exited at
+  once, without closing its graphics, and the mod's VR thread went on calling the runtime
+  after the runtime had been closed, so X4 crashed as it exited. The mod now stops that thread
+  as X4's exit begins. A normal quit is unchanged.
 
 ## v1.0.0-rc11 — 2026-11-27 — Eleventh release candidate: nebulae fixed in space
 
