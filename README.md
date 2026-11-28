@@ -37,7 +37,7 @@ Unofficial, not affiliated with Egosoft, open source (GPL-3.0): https://github.c
 
 ### Installing and playing
 
-* **Easy to install, update and remove.** Packages for Arch, Ubuntu 24.04 and 26.04, Debian 13 and Fedora, plus a zip for anything else. Run the launcher and select the game's directory (if it's Steam, it's autodetected), then one button installs or updates the mod. Uninstalling lists what it will remove, then removes exactly that (the Vulkan layer and the X4 extension included), and can delete the mod's VR settings too. Your saves are never touched.
+* **Easy to install, update and remove.** On the AUR for Arch, packages for Arch, Ubuntu 24.04 and 26.04, Debian 13 and Fedora, plus a zip for anything else. Run the launcher and select the game's directory (if it's Steam, it's autodetected), then one button installs or updates the mod. Uninstalling lists what it will remove, then removes exactly that (the Vulkan layer and the X4 extension included), and can delete the mod's VR settings too. Your saves are never touched.
 * **A launcher that checks everything first**: X4, Steam, gamescope, the VR runtime and headset, the GPU and its memory, the mod itself. A list of pending actions says what's missing, and Play turns green when everything is in place. It warns about overlays and frame generators that would get in the way, and when an eye size won't fit your graphics card's memory. It comes with a short illustrated manual.
 * **VR kept apart from your flat game.** In VR, X4 gets its own settings and controls, and your flat settings are never touched; both play the same savegames. Start VR from the launcher, from Steam's launch options or from a terminal, and the launcher's Flatscreen box runs plain X4.
 * **The launcher in English, Brazilian Portuguese, French, Russian and German**, including the help; these are the languages X4 has voice acting in. All of X4's 14 languages are planned for the future (but we'll need testers).
@@ -61,11 +61,28 @@ As it carries a small extension, X4 marks saves played with this mod as modified
 
 ## Install
 
-Download a package or the zip from the [releases page](https://github.com/Patola/X4VRMOD/releases):
-Arch, Ubuntu 24.04, Ubuntu 26.04, Debian 13 and Fedora each have their own, named for the system,
-and the zip is for anything else. Then start `x4vrmod-launcher`, which shows what's ready and
-what isn't, and installs the mod with one button. For the zip, unpack it and start the launcher
-from that folder.
+**Arch and its derivatives:** the [`x4vrmod`](https://aur.archlinux.org/packages/x4vrmod) package
+on the AUR, built from this repository's release tag. With an AUR helper:
+
+```sh
+yay -S x4vrmod        # or: paru -S x4vrmod
+```
+
+or by hand:
+
+```sh
+git clone https://aur.archlinux.org/x4vrmod.git && cd x4vrmod && makepkg -si
+```
+
+As with any AUR package, read the PKGBUILD before building it; updates then come with your
+system's, through the helper.
+
+**Everywhere else:** download a package or the zip from the
+[releases page](https://github.com/Patola/X4VRMOD/releases): Arch, Ubuntu 24.04, Ubuntu 26.04,
+Debian 13 and Fedora each have their own, named for the system, and the zip is for anything else.
+
+Then start `x4vrmod-launcher`, which shows what's ready and what isn't, and installs the mod with
+one button. For the zip, unpack it and start the launcher from that folder.
 
 ## Playing
 
@@ -361,7 +378,7 @@ The engineering record — every take, prediction, and wrong turn — is
 
 * So some people could call this a "fake VR" mod because it doesn't use the **tracked controllers** and **Virtual Reality Inverse Kinematics (VRIK)** to infer the whole body, right? Right... FOR NOW. As this mod implements its own renderer, it is entire in the realm of possibility to add these, with floating panels, virtual controls, tactile hand interactions and complete body freedom. And indeed, it's issue 1 (Feature Request) on our issue tracker, with illustrated descriptions of what is planned: https://github.com/Patola/X4VRMOD/issues/1. But don't hold your breath: I expect this to be a very long endeavour, likely to take one year or more. When it's done, it will be a toggleable option: you will always have the option to play it on your controllers or keyboard and mouse.
 * Use of **frame generation** + **anti-lag** is being considered. Anti-lag is less effective in VR though.
-* Following this announcement, will also try and get this mod on the repository of most distributions, starting by the **AUR** from Arch.
+* Getting this mod into the repositories of most distributions: it's on the **AUR** for Arch since 1.0, and **Fedora**, **Debian** and **Ubuntu** are next.
 
 **Disclaimer**: Claude Code was used for code assistance, and also for helping creating the first draft of this post (which I altered substantially). Gemini was used for the X4VRMOD logo and artwork.
 
