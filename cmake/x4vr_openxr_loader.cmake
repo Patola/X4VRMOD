@@ -42,8 +42,12 @@ if(X4VR_BUNDLE_OPENXR_LOADER AND (TARGET OpenXR::headers OR OPENXR_HEADER_DIR))
             -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
             -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
             -DCMAKE_INSTALL_LIBDIR=lib
+            # Where the loader looks for runtime manifests besides /etc/xdg: /etc, as in a
+            # system's loader, not this build's install folder.
+            -DCMAKE_INSTALL_SYSCONFDIR=/etc
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-            "-DCMAKE_SHARED_LINKER_FLAGS=-static-libstdc++ -static-libgcc"
+            # The build's own LDFLAGS kept (a package's hardening: full RELRO, namcap).
+            "-DCMAKE_SHARED_LINKER_FLAGS=$ENV{LDFLAGS} -static-libstdc++ -static-libgcc"
             -DCMAKE_DISABLE_FIND_PACKAGE_JsonCpp=ON
             -DBUILD_WITH_SYSTEM_JSONCPP=OFF
             -DDYNAMIC_LOADER=ON

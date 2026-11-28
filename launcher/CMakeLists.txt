@@ -13,10 +13,15 @@ add_library(x4vrmod_core STATIC
     ${X4VR_VERSION_FILE})
 add_dependencies(x4vrmod_core x4vr_version)
 target_include_directories(x4vrmod_core PUBLIC core)
-target_compile_definitions(x4vrmod_core PRIVATE
-    X4VRMOD_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-    X4VRMOD_BUILD_DIR="${CMAKE_BINARY_DIR}"
-    X4VRMOD_PREFIX="${CMAKE_INSTALL_PREFIX}")
+target_compile_definitions(x4vrmod_core PRIVATE X4VRMOD_PREFIX="${CMAKE_INSTALL_PREFIX}")
+# Started from this build tree, the launcher runs the mod from it (the "build tree" layout). A
+# package turns it off: it never runs from there, and then no build path is left in its binaries.
+option(X4VR_DEV_LAYOUT "The launcher, started from this build tree, runs the mod from it" ON)
+if(X4VR_DEV_LAYOUT)
+    target_compile_definitions(x4vrmod_core PRIVATE
+        X4VRMOD_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        X4VRMOD_BUILD_DIR="${CMAKE_BINARY_DIR}")
+endif()
 target_link_libraries(x4vrmod_core PUBLIC ${CMAKE_DL_LIBS})
 # OpenXR: headers at build time, loader dlopen'd at run time, as in the layer.
 if(TARGET OpenXR::headers OR OPENXR_HEADER_DIR)

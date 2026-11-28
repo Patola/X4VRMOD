@@ -45,6 +45,7 @@ Layout detect_layout(const std::string &home) {
         l.locale_dir = zip + "/locale";
         return l;
     }
+#ifdef X4VRMOD_BUILD_DIR // X4VR_DEV_LAYOUT: off in packages
     if (here == X4VRMOD_BUILD_DIR "/launcher" || here == X4VRMOD_BUILD_DIR "/tests") {
         l.kind = LayoutKind::Dev;
         l.data_dir = X4VRMOD_SOURCE_DIR;
@@ -58,6 +59,7 @@ Layout detect_layout(const std::string &home) {
         l.locale_dir = X4VRMOD_BUILD_DIR "/locale";
         return l;
     }
+#endif
     l.kind = LayoutKind::Package;
     l.data_dir = X4VRMOD_PREFIX "/share/x4vrmod";
     l.extension_dir = l.data_dir + "/extension/x4vrmod";
