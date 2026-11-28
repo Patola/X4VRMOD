@@ -53,7 +53,7 @@ Unofficial, not affiliated with Egosoft, open source (GPL-3.0): https://github.c
 * **X4: Foundations 9.00**, Steam or GOG, running natively on Arch, Ubuntu, Debian, Fedora or another distro.
 * A **Vulkan-capable GPU**. The launcher checks what the mod needs from it, and its help has starting points by graphics card.
 * **gamescope**.
-* A headset on **WiVRn** or **SteamVR** (ALVR might also work). Played on a Quest 3 (WiVRn, Steam Link) and a Steam Frame (WiVRn, SteamVR); testers have played it on a Reverb G2 through Monado.
+* A headset on **WiVRn** or **SteamVR** (ALVR might also work). Played on a Quest 3 (WiVRn, Steam Link) and a Steam Frame (WiVRn, SteamVR); testers have played it on a Quest 2 (WiVRn) and a Reverb G2 (Monado).
 
 **Not supported:** running X4 through Proton, and Steam installed as a Flatpak: its sandbox can't reach the mod, and it makes VR harder for every game. Flatpak isn't planned for now, and may come if players ask for it.
 
@@ -350,7 +350,6 @@ The engineering record — every take, prediction, and wrong turn — is
 | The launcher and its help in English, Brazilian Portuguese, French, Russian and German | first draft, corrections welcome | **`v1.0.0-rc1`** |
 | The headset shows the mod's picture and "X4 is loading" until X4 draws | done | **`v1.0.0-rc2`** |
 | The launcher warns about frame generators and overlays that would load into X4 | done | **`v1.0.0-rc2`** |
-| Frame pacing at 2816² per eye (a 90 Hz display is starved) | open | — |
 | Nebulae fixed in space: the mod's own clouds in depth, as X4's turned with the head (`X4VR_NEBULA`) | done | **`v1.0.0-rc11`** |
 | **The first stable release** | **release** | **`v1.0.0`** |
 | The start menu as the whole scene (menu at its size in front, the 3D scene all around) | optional, future — not scheduled | — |
