@@ -20,7 +20,19 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
-## Unreleased
+## v1.0.0 — 2026-11-28 — The first stable release
+
+The first stable release, after eleven release candidates. Packages call it `1.0.0`, which
+installs over every release candidate as an upgrade.
+
+Take the package named for your system: Arch, Ubuntu 24.04, Ubuntu 26.04, Debian 13 or Fedora,
+or the zip for anything else.
+
+X4: Foundations in VR from inside its own engine: true stereo with each eye's lighting, 6DOF head
+tracking in the cockpit and on foot, the whole UI usable and lined up with the pointer, the
+external and cinematic views, X4's upscalers in both eyes, the mod's own volumetric nebulae, and a
+launcher in five languages that installs the mod, checks everything before you play and makes the
+bug report. The [README](https://github.com/Patola/X4VRMOD#readme) lists it all. Since rc11:
 
 * **The mod's clouds cost less.** With them, X4 no longer prepares its own volumetric fog,
   which they replace: about 0.16 ms of the graphics card's time a frame saved on an RX 7900 XTX,
@@ -33,6 +45,10 @@ on the remote beside their `take-NNN-name` twins.
   once, without closing its graphics, and the mod's VR thread went on calling the runtime
   after the runtime had been closed, so X4 crashed as it exited. The mod now stops that thread
   as X4's exit begins. A normal quit is unchanged.
+
+**Known:** with DLSS on, X4 9.00 can crash while quitting, with or without the mod (X4's own, as
+in rc6). On a Reverb G2 through SteamVR, double vision was reported (issue #3); the changes since
+rc10 may fix it, which isn't confirmed yet.
 
 ## v1.0.0-rc11 — 2026-11-27 — Eleventh release candidate: nebulae fixed in space
 

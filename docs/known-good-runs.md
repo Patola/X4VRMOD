@@ -1468,3 +1468,18 @@ same at each (X4's grid 117x117x64, 176x176x128, 352x352x128). Through the launc
 ```
 X4VR_TAKE=495 X4VR_LOG=/tmp/x4vr-take495.log X4VR_H=2816 X4VR_UPSCALE=none build/launcher/x4vrmod run
 ```
+
+**Takes 497 (desktop: RX 7900 XTX, WiVRn) and 497L (laptop: RTX 3070 8 GB, SteamVR), 2816, no
+upscaler, the 1.0 candidate after the clean-up (060e1c5 with d3d260c's comments; the laptop the
+d3d260c package):** an extended play through many sectors, the map, a save and a load, a spacewalk
+on each. Both PASS. The desktop ran at 9.71 ms a frame in play (103 fps); our clouds took 0.42 ms
+of GPU time at the median, X4's fog preparation skipped behind them. The laptop ran at 38.3 ms,
+SteamVR holding X4 to 30 Hz, its cooling pad at its lowest for about two thirds of the run: likely
+thermal throttling, to look into after 1.0. Its in-game cloud time (4.7 ms at the median) counts
+other processes' GPU work too; alone, on the same GPU, the clouds take 1.3 ms at the median. The
+laptop's first attempt crashed on its way out after gamescope stopped; 1.0.0 adds the fix
+(53e266a), tested on Monado's null compositor by tests/run-xr-exit.sh, not in a take.
+
+```
+X4VR_TAKE=497 X4VR_LOG=/tmp/x4vr-take497.log X4VR_H=2816 X4VR_UPSCALE=none build/launcher/x4vrmod run
+```
