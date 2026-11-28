@@ -1469,6 +1469,27 @@ int main() {
               "inverse_error: column-major storage gives the same answer");
     }
 
+    // The march's knobs survive the per-frame rotation write (take 485: pose_set_euler
+    // cleared them, so a run without the A/B had no fog); the identity is the march as built.
+    // Moved here from the billboard test, gone with the billboards before 1.0.
+    {
+        x4vr::PoseBlock pb = x4vr::pose_identity();
+        bool ident = true;
+        for (int k = 0; k < 4; k++)
+            ident = ident && pb.fog[k] == 1.0f && pb.fog2[k] == 0.0f;
+        check(ident, "pose block: the fog knobs start as the march as built");
+        const float f[4] = {0.f, 0.7f, 1.f, 0.6667f}, f2[4] = {600.f, 1.f, 37.5f, 0.03f};
+        for (int k = 0; k < 4; k++) {
+            pb.fog[k] = f[k];
+            pb.fog2[k] = f2[k];
+        }
+        x4vr::pose_set_euler(pb, 12.f, -7.f, 3.f);
+        bool kept = true;
+        for (int k = 0; k < 4; k++)
+            kept = kept && pb.fog[k] == f[k] && pb.fog2[k] == f2[k];
+        check(kept, "pose block: the fog knobs survive the per-frame rotation write");
+    }
+
     printf(g_fail ? "\n%d case(s) FAILED\n" : "\nall cases passed\n", g_fail);
     return g_fail ? 1 : 0;
 }

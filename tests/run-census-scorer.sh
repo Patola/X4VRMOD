@@ -2215,11 +2215,9 @@ want "memlog: the failed allocation named" /tmp/census-ml-ok.log memlog "FAILED:
 want "memlog: asked, no line -> FAIL" /tmp/census-ml-base.log "FAIL|  - " "X4VR_MEMLOG=1 but no mem: line"
 absent "memlog: not asked -> silent" "$BASE" memlog
 
-# X4's billboards face the ship, not the head (2026-11-26).
-for f in '"facing %s: %s — %u vertex module(s) turn X4'"'"'s billboards to the ship, %u input "' '"facing: phase #%llu — %s (X4VR_FACING_AB=recentre)"'; do
-    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "facing: the layer still prints $f" \
-        || bad "facing: the layer's format moved: $f"
-done
+# X4's billboards face the ship, not the head (2026-11-26). The billboard experiments
+# (takes 465-472) left the layer before 1.0; the scorer still reads their lines in old
+# takes' logs, which the cases below check.
 fcon='[  99900.000] layer   facing final: ON — 12 vertex module(s) turn X4'"'"'s billboards to the ship, 30 input read(s) turned, 0 partial left'
 fnone='[  99900.000] layer   facing final: ON — 0 vertex module(s) turn X4'"'"'s billboards to the ship, 0 input read(s) turned, 0 partial left'
 fpa='[  99800.000] layer   facing: phase #1 — B, the billboards face the ship (X4VR_FACING_AB=recentre)'
@@ -2249,12 +2247,6 @@ for neg in "/tmp/census-fc-none.log:FAIL .*lack IN_VERTEXLOCATION_POSITION" \
 done
 
 # X4's fog blobs face the ship (after take 466): the froxel pass, and three arms.
-for f in '"facing fog %s: %u froxel module(s) turn X4'"'"'s fog blobs to the ship (%u "' \
-         '"the fix, and K, where every fog blob and billboard the patches "' \
-         '"K, X4'"'"'s fog blobs and billboards removed — DIAGNOSTIC"'; do
-    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "facing fog: the layer still prints $f" \
-        || bad "facing fog: the layer's format moved: $f"
-done
 farm='[  99700.500] inject  headlook write: ARMED on camera 0x1 (mode 0)'
 ffok='[  99900.001] layer   facing fog final: 1 froxel module(s) turn X4'"'"'s fog blobs to the ship (2 product(s)), 0 refused'
 ffnone='[  99900.001] layer   facing fog final: 0 froxel module(s) turn X4'"'"'s fog blobs to the ship (0 product(s)), 0 refused'
@@ -2276,12 +2268,6 @@ want "facing: collapse build, two arms -> FAIL" /tmp/census-fc-ab2k.log "FAIL|  
 absent "facing: a two-arm collapse build (466) -> no three-arm FAIL" /tmp/census-fc-ab466.log "FAIL .*the three arms"
 
 # The census of X4's near/far-faded effects (after take 467).
-for f in '"facing census %s: %zu vertex module(s) and %zu pipeline(s) of X4'"'"'s "' \
-         '"facing census %s: %llu draw(s) of X4'"'"'s near/far-faded effects read at submit: %llu "' \
-         '"facing census sample (%s): %s"'; do
-    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "census: the layer still prints $f" \
-        || bad "census: the layer's format moved: $f"
-done
 cpl='[  99900.003] layer   facing census final: 72 vertex module(s) and 40 pipeline(s) of X4'"'"'s near/far-faded effects'
 cdl='[  99900.004] layer   facing census final: 500 draw(s) of X4'"'"'s near/far-faded effects read at submit: 480 valid (WVP = VP*W), 20 not matching, 0 unreadable, 0 with no camera; turned as the camera 0, rolled about the view axis 430, otherwise 50 | normal off the view axis, deg: <0.1 430, <1 0, <5 10, <20 20, more 20 | normal off the card'"'"'s direction, deg: <0.1 1, <1 2, <5 3, <20 100, more 374'
 cdz='[  99900.004] layer   facing census final: 0 draw(s) of X4'"'"'s near/far-faded effects read at submit: 0 valid (WVP = VP*W), 0 not matching, 0 unreadable, 0 with no camera; turned as the camera 0, rolled about the view axis 0, otherwise 0 | normal off the view axis, deg: <0.1 0, <1 0, <5 0, <20 0, more 0 | normal off the card'"'"'s direction, deg: <0.1 0, <1 0, <5 0, <20 0, more 0'
@@ -2302,12 +2288,6 @@ want "census: collapse ran, census silent -> FAIL" /tmp/census-cs-none.log "FAIL
 absent "census: a build before the census (467) -> no census FAIL" /tmp/census-fc-abk.log "FAIL .*facing census"
 
 # The comparison (after take 468): X4's own, S to the ship, E to the eye; signatures.
-for f in '"E, the billboards face the eye"' '"own, S (cards turned to the ship) and E (to the eye)"' \
-         '"facing census signatures %s: in flight, %llu draw(s) under %llu signature(s) "' \
-         '"facing census kept (%s): %llu draw(s), head-look yaw %.1f..%.1f pitch "'; do
-    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "compare: the layer still prints $f" \
-        || bad "compare: the layer's format moved: $f"
-done
 flkx='[  99900.002] layer   facing look final: 10 headset frame(s) with the head-look undone, 2 with X4'"'"'s camera angles not valid (identity); DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4'"'"'s own, S (cards turned to the ship) and E (to the eye); the census reads their matrices'
 fps='[  99860.000] layer   facing: phase #2 — S, the billboards face the ship (X4VR_FACING_AB=recentre)'
 fpe='[  99870.000] layer   facing: phase #3 — E, the billboards face the eye (X4VR_FACING_AB=recentre)'
@@ -2324,11 +2304,6 @@ absent "compare: three arms -> no FAIL" /tmp/census-cx-ok.log "FAIL .*the compar
 want "compare: two arms -> FAIL" /tmp/census-cx-two.log "FAIL|  - " "the comparison, and the three arms"
 
 # The fix on the CPU (after take 469).
-for f in '"facing cpu %s: %s — %llu draw(s) of X4'"'"'s cards turned to the eye; %llu seen "' \
-         '"before their turn was learned, %llu refused, %llu not X4'"'"'s (WVP != VP*W), %llu "'; do
-    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "cpu fix: the layer still prints $f" \
-        || bad "cpu fix: the layer's format moved: $f"
-done
 fxok='[  99900.008] layer   facing cpu final: A/B by recentre — 80000 draw(s) of X4'"'"'s cards turned to the eye; 900 seen before their turn was learned, 0 refused, 3 not X4'"'"'s (WVP != VP*W), 40 out of flight, 0 past the table; 2400 turn(s) learned of 2700 kept'
 fxzero='[  99900.008] layer   facing cpu final: A/B by recentre — 0 draw(s) of X4'"'"'s cards turned to the eye; 900 seen before their turn was learned, 0 refused, 3 not X4'"'"'s (WVP != VP*W), 40 out of flight, 0 past the table; 0 turn(s) learned of 2700 kept'
 fpb2='[  99860.000] layer   facing: phase #2 — B, the billboards face the ship (X4VR_FACING_AB=recentre)'
@@ -2340,16 +2315,6 @@ absent "cpu fix: cards turned -> no FAIL" /tmp/census-fx-ok.log "FAIL .*facing c
 absent "cpu fix: GPU patches not asked -> no vertex FAIL" /tmp/census-fx-ok.log "FAIL .*lack IN_VERTEXLOCATION_POSITION"
 { fbase; printf '%s\n' "$fxzero"; } > /tmp/census-fx-zero.log
 want "cpu fix: in flight, a fixing arm, none turned -> FAIL" /tmp/census-fx-zero.log "FAIL|  - " "no card was turned (none learned"
-for f in '"facing cpu drift %s (%s): each card in the world against its first draw in "' \
-         '"facing cpu turns %s: %llu draw(s) turned to the eye, %llu to the ship"' \
-         '"H, billboards face the eye, tilted cards the ship"' \
-         '"facing cpu ship %s (%s): X4'"'"'s camera with the head-look undone, against the "' \
-         '"facing cpu look %s: %llu draw(s) turned by X4'"'"'s camera at the frame'"'"'s first pass, "' \
-         '"facing cpu cost %s: %llu submit(s) with X4'"'"'s cards, mean %.1f us, max %.1f us, "' \
-         '"facing cpu %s: K removed %llu draw(s) of learned cards — DIAGNOSTIC"'; do
-    grep -qF -- "$f" layer/x4vr_layer.cpp && ok "cpu fix: the layer still prints $f" \
-        || bad "cpu fix: the layer's format moved: $f"
-done
 fxd='[  99900.009] layer   facing cpu drift final (the fix): each card in the world against its first draw in the stretch, by head-look moved — <2 deg: 10 draw(s), turn 0.01 (max 0.02)'
 fxt='[  99900.011] layer   facing cpu turns final: 500 draw(s) turned to the eye, 300 to the ship'
 fxc='[  99900.010] layer   facing cpu cost final: 9000 submit(s) with X4'"'"'s cards, mean 12.0 us, max 80.0 us, total 108.0 ms'

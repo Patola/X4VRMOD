@@ -45,7 +45,6 @@
 #include "../common/x4vr_dumpspec.hpp"
 #include "../common/x4vr_png.hpp"
 #include "../common/x4vr_sbs.hpp"
-#include "../common/x4vr_billboard.hpp"
 #include "fog_shaders.hpp"
 #include "../common/x4vr_spirv.hpp"
 #include "../common/x4vr_guard.hpp"
@@ -2256,53 +2255,21 @@ std::unordered_set<VkPipeline> &g_march_pipes = x4vr::immortal<std::unordered_se
 // Under g_track.mu: the frame times of each phase of the smoke's A/B (V, A, B), ms.
 std::array<std::vector<float>, 3> &g_fog_arm_ms = x4vr::immortal<std::array<std::vector<float>, 3>>();
 
-// **The census** (with X4VR_FACING_DEBUG=collapse, after take 467): X4's own matrices for
-// the draws of its near/far-faded effects (its fog cards among them), read at submit --
-// what the GPU is about to read -- and counted only where X4's world-view-projection is
-// its view-projection times its world matrix. Takes 466-467: the cards turn with the
-// head (Patola: each "rotates in place", flat), yet neither test of "turned as the
-// camera" took them; this says what X4's turn of them is.
-bool facing_collapse(); // beside the other facing switches
-bool facing_compare();
-// The census is heavy (take 471: with it, the card work was 240 us a submit), so only
-// with the collapse diagnostic.
-bool facing_census() { return facing_collapse(); }
-bool facing_enabled(); // beside the other facing switches
-bool facing_ab();
 // X4's nebula cards, known by their material (after take 482), removed with our clouds:
 // whether or not our march runs (X4's Volumetric Fog Off: no clouds at all, after take
 // 494). X4's own, cards and all, with X4VR_NEBULA=vanilla.
 bool fog_cards_off() { return nebula_volumetric(); }
-// The tracking of X4's near/far-faded draws: for the census, the fix on the CPU, or the
-// cards' removal.
-bool fade_tracking() { return facing_census() || facing_enabled() || fog_cards_off(); }
-// The GPU patches (cards in the vertex stage, fog blobs in the froxel pass), only with
-// X4VR_FACING_GPU=1: takes 465-469, they missed the third of X4's cards that it turns
-// with the camera by a tilt of their own, which no single frame can tell. The fix is
-// on the CPU now (face_eye, below).
-bool facing_gpu() {
-    static const bool on = x4vr::env_on("X4VR_FACING_GPU", false);
-    return on;
-}
-// Set per headset frame: this frame's arm turns X4's cards (a fixing arm, in flight).
-std::atomic<bool> g_fix_active{false};
-// The removal arm on the CPU (X4VR_FACING_DEBUG=collapse's K, the GPU patches off):
-// every learned card scaled to nothing, so a take learns whether the CPU's writes reach
-// the clouds it sees (after take 470). And the stretch, so the drift check below
-// measures within one.
-std::atomic<bool> g_fix_kill{false};
-// How the fixing arm turns X4's cards: 1 to the eye, 2 to the ship, 3 billboards (facing
-// the view up to a roll) to the eye and the cards X4 tilts off it to the ship.
-std::atomic<int> g_fix_mode{1};
-std::atomic<uint64_t> g_fix_phase{0};
-// The head-look X4 was given, for the census's signatures (set by pose_drive_residual).
-std::atomic<float> g_census_yaw{0.f}, g_census_pitch{0.f};
-std::atomic<bool> g_census_look_valid{false};
-std::mutex g_census_mu; // the modules, pipelines and per-recording flag below
+// The tracking of X4's near/far-faded draws, for the cards' removal.
+bool fade_tracking() { return fog_cards_off(); }
+// X4's camera angles as head-look set them, for learning which draws X4 turns with its
+// camera (pose_drive_residual sets them).
+std::atomic<float> g_cards_yaw{0.f}, g_cards_pitch{0.f};
+std::atomic<bool> g_cards_look_valid{false};
+std::mutex g_cards_mu; // the modules, pipelines and per-recording flag below
 std::unordered_set<VkShaderModule> &g_fade_modules =
     x4vr::immortal<std::unordered_set<VkShaderModule>>();
 std::unordered_set<VkPipeline> &g_fade_pipes = x4vr::immortal<std::unordered_set<VkPipeline>>();
-std::unordered_map<VkCommandBuffer, bool> &g_census_fade =
+std::unordered_map<VkCommandBuffer, bool> &g_cards_fade =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, bool>>();
 // The recording thread's last graphics bind, so a draw needs no lock to know.
 thread_local VkCommandBuffer tl_fade_cb = VK_NULL_HANDLE;
@@ -2310,214 +2277,59 @@ thread_local bool tl_fade = false;
 // **Which material a fade draw is** (after take 482: the cards' removal took X4's radar
 // too, and Patola asked to filter "by category", not by distance): where each fade
 // module keeps its material's fade distances (x4vr::spv::fade_block), its pipelines',
-// and the recording's current one (under g_census_mu; the recording thread's in
+// and the recording's current one (under g_cards_mu; the recording thread's in
 // tl_fade_block). off[0] == UINT32_MAX: not known.
 std::unordered_map<VkShaderModule, x4vr::spv::FadeBlock> &g_fade_block_mod =
     x4vr::immortal<std::unordered_map<VkShaderModule, x4vr::spv::FadeBlock>>();
 std::unordered_map<VkPipeline, x4vr::spv::FadeBlock> &g_fade_block_pipe =
     x4vr::immortal<std::unordered_map<VkPipeline, x4vr::spv::FadeBlock>>();
-std::unordered_map<VkCommandBuffer, x4vr::spv::FadeBlock> &g_census_fblock =
+std::unordered_map<VkCommandBuffer, x4vr::spv::FadeBlock> &g_cards_fblock =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, x4vr::spv::FadeBlock>>();
 thread_local x4vr::spv::FadeBlock tl_fade_block;
 std::atomic<uint32_t> g_fade_blocks_found{0}, g_fade_blocks_missing{0};
 // Under g_track.mu: each recording's descriptor sets bound at indices 0..7, to find a
 // draw's material block.
-std::unordered_map<VkCommandBuffer, std::array<VkDescriptorSet, 8>> &g_census_sets =
+std::unordered_map<VkCommandBuffer, std::array<VkDescriptorSet, 8>> &g_cards_sets =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, std::array<VkDescriptorSet, 8>>>();
 // Under g_track.mu: each recording's current object slot, and its fade draws to read --
 // with the material's block and where in it the fade distances are (near_start,
 // far_end), when known.
-struct CensusDraw {
+struct CardDraw {
     Tracking::ObjSlot obj;
     ViewSlot cam;
     Tracking::ObjSlot mat{};
     uint32_t moff[2] = {UINT32_MAX, UINT32_MAX};
 };
-std::unordered_map<VkCommandBuffer, Tracking::ObjSlot> &g_census_obj =
+std::unordered_map<VkCommandBuffer, Tracking::ObjSlot> &g_cards_obj =
     x4vr::immortal<std::unordered_map<VkCommandBuffer, Tracking::ObjSlot>>();
-std::unordered_map<VkCommandBuffer, std::vector<CensusDraw>> &g_census_pending =
-    x4vr::immortal<std::unordered_map<VkCommandBuffer, std::vector<CensusDraw>>>();
-struct Census {
-    uint64_t draws = 0, valid = 0, mismatch = 0, unread = 0, nocam = 0;
-    uint64_t cls[3] = {0, 0, 0};    // turned as the camera, rolled about the view axis, other
-    uint64_t normal[5] = {}, toward[5] = {}; // deg bins: <0.1 <1 <5 <20 more
-    std::vector<std::string> samples[3];
-    // Signatures (after take 468): a draw's Q, rounded, with the head-look it was seen
-    // under. A card X4 turns with the camera keeps its Q while the head turns; nothing
-    // fixed in the world can. In flight only.
-    struct Sig {
-        uint64_t n = 0;
-        float ymin = 1e9f, ymax = -1e9f, pmin = 1e9f, pmax = -1e9f, dmin = 1e30f, dmax = 0.f;
-        float q[9] = {}, norm[3] = {};
-        int cls = 0;
-    };
-    std::unordered_map<uint64_t, Sig> sigs;
-    uint64_t unsigned_draws = 0; // past the table's cap
-};
-Census &g_census = x4vr::immortal<Census>();
-
-static int census_bin(double deg) {
-    return deg < 0.1 ? 0 : deg < 1.0 ? 1 : deg < 5.0 ? 2 : deg < 20.0 ? 3 : 4;
-}
-// One draw, from X4's mapped constants: o the object block, c the camera block.
-static void census_classify(const float *o, const float *c) {
-    const float *wvp = o, *w = o + 16, *v = c, *vp = c + 7 * 16;
-    double err = 0.0, mag = 0.0;
-    for (int col = 0; col < 4; col++)
-        for (int row = 0; row < 4; row++) {
-            double acc = 0.0;
-            for (int k = 0; k < 4; k++)
-                acc += (double)vp[k * 4 + row] * w[col * 4 + k];
-            err = std::max(err, std::fabs(acc - wvp[col * 4 + row]));
-            mag = std::max(mag, std::fabs((double)wvp[col * 4 + row]));
-        }
-    if (!(mag > 0.0) || err > 2e-2 * mag) {
-        g_census.mismatch++;
-        return;
-    }
-    g_census.valid++;
-    double q[3][3], n[3]; // q[col][row] = (mat3(V) * mat3(W)), each column normalised
-    for (int j = 0; j < 3; j++) {
-        double len = 0.0;
-        for (int i = 0; i < 3; i++) {
-            double acc = 0.0;
-            for (int k = 0; k < 3; k++)
-                acc += (double)v[k * 4 + i] * w[j * 4 + k];
-            q[j][i] = acc;
-            len += acc * acc;
-        }
-        n[j] = std::sqrt(len);
-        for (int i = 0; i < 3; i++)
-            q[j][i] = n[j] > 0.0 ? q[j][i] / n[j] : 0.0;
-    }
-    double offd = 0.0, offz = 0.0;
-    for (int j = 0; j < 3; j++)
-        for (int i = 0; i < 3; i++)
-            if (i != j) {
-                offd = std::max(offd, std::fabs(q[j][i]));
-                if (i == 2 || j == 2)
-                    offz = std::max(offz, std::fabs(q[j][i]));
-            }
-    const int k = offd < 1e-3 ? 0 : offz < 1e-3 ? 1 : 2;
-    g_census.cls[k]++;
-    const double kDeg = 57.29577951308232;
-    const double nz = std::acos(std::min(1.0, std::fabs(q[2][2]))) * kDeg;
-    // The card's direction from the eye: V W (0,0,0,1).
-    double p[3], pl = 0.0;
-    for (int i = 0; i < 3; i++) {
-        double acc = v[12 + i];
-        for (int kk = 0; kk < 3; kk++)
-            acc += (double)v[kk * 4 + i] * w[12 + kk];
-        p[i] = acc;
-        pl += acc * acc;
-    }
-    pl = std::sqrt(pl);
-    double dotp = 0.0;
-    for (int i = 0; i < 3; i++)
-        dotp += q[2][i] * (pl > 0.0 ? p[i] / pl : 0.0);
-    const double tw = std::acos(std::min(1.0, std::fabs(dotp))) * kDeg;
-    g_census.normal[census_bin(nz)]++;
-    g_census.toward[census_bin(tw)]++;
-    if (g_census_look_valid.load(std::memory_order_relaxed)) {
-        uint64_t h = 1469598103934665603ull;
-        auto mix = [&h](int64_t v) {
-            for (int b = 0; b < 8; b++) {
-                h ^= (uint64_t)(v >> (8 * b)) & 0xffu;
-                h *= 1099511628211ull;
-            }
-        };
-        for (int j = 0; j < 3; j++) {
-            for (int i = 0; i < 3; i++)
-                mix((int64_t)std::llround(q[j][i] * 200.0));
-            mix((int64_t)std::llround(std::log(std::max(n[j], 1e-9)) * 100.0));
-        }
-        auto it = g_census.sigs.find(h);
-        if (it == g_census.sigs.end() && g_census.sigs.size() >= 50000) {
-            g_census.unsigned_draws++;
-        } else {
-            Census::Sig &sg = g_census.sigs[h];
-            if (!sg.n) {
-                for (int j = 0; j < 3; j++) {
-                    for (int i = 0; i < 3; i++)
-                        sg.q[j * 3 + i] = (float)q[j][i];
-                    sg.norm[j] = (float)n[j];
-                }
-                sg.cls = k;
-            }
-            sg.n++;
-            const float y = g_census_yaw.load(std::memory_order_relaxed),
-                        pt = g_census_pitch.load(std::memory_order_relaxed);
-            sg.ymin = std::min(sg.ymin, y);
-            sg.ymax = std::max(sg.ymax, y);
-            sg.pmin = std::min(sg.pmin, pt);
-            sg.pmax = std::max(sg.pmax, pt);
-            sg.dmin = std::min(sg.dmin, (float)pl);
-            sg.dmax = std::max(sg.dmax, (float)pl);
-        }
-    }
-    if (g_census.samples[k].size() < 3) {
-        char b[320];
-        snprintf(b, sizeof b,
-                 "Q/|col| rows [%+.3f %+.3f %+.3f | %+.3f %+.3f %+.3f | %+.3f %+.3f %+.3f], col norms "
-                 "%.1f %.1f %.1f, normal %.2f deg off the view axis, %.2f deg off the card's "
-                 "direction, roll %.1f deg, at %.0f m",
-                 q[0][0], q[1][0], q[2][0], q[0][1], q[1][1], q[2][1], q[0][2], q[1][2], q[2][2], n[0],
-                 n[1], n[2], nz, tw, std::atan2(q[0][1], q[0][0]) * kDeg, pl);
-        g_census.samples[k].push_back(b);
-    }
-}
-// **The fix, on the CPU** (after take 469). A card X4 turns with its camera keeps
-// Q = V*W while the head-look moves; a card fixed in the world, or to the ship, cannot.
-// So each draw's Q, rounded, is learned once it has been seen unchanged over 1.5 deg of
-// head-look, and from then on, in a fixing arm, its world matrix is turned to the eye
-// (x4vr::billboard::face_eye) in X4's own constants before the GPU reads them. A card
-// first seen with the head still is X4's own until the head moves.
+std::unordered_map<VkCommandBuffer, std::vector<CardDraw>> &g_cards_pending =
+    x4vr::immortal<std::unordered_map<VkCommandBuffer, std::vector<CardDraw>>>();
+// **Which draws X4 turns with its camera** (after take 469), for the stopgap below: each
+// draw's Q = mat3(V) * mat3(W), rounded, is learned once it has been seen unchanged over
+// 1.5 deg of head-look -- nothing fixed in the world keeps its Q while the head turns.
 struct FixLearn {
     float yaw = 0.f, pitch = 0.f;
     uint64_t last = 0;
     bool learned = false;
 };
-// The drift check (after take 470; per card since take 471, where one signature covered
-// every card of a kind and the check compared different clouds): each card, by its kind
-// and its direction and distance from the eye, as drawn -- its turn in the world -- at
-// its first draw in the stretch, with the head-look then. X4's own should drift by the
-// head-look; the fix by nothing.
-struct DriftRef {
-    float w[9];
-    float yaw, pitch;
-};
-std::unordered_map<uint64_t, DriftRef> &g_fix_drift =
-    x4vr::immortal<std::unordered_map<uint64_t, DriftRef>>();
-uint64_t g_fix_drift_phase = ~0ull;
 std::unordered_map<uint64_t, FixLearn> &g_fix_learn =
     x4vr::immortal<std::unordered_map<uint64_t, FixLearn>>();
 struct FixStats {
-    uint64_t rewritten = 0, unlearned = 0, refused = 0, mismatch = 0, noflight = 0, full = 0,
-             killed = 0, cards_removed = 0, cards_kept_near = 0, cards_kept_far = 0,
-             cards_kept_large = 0;
-    // After take 482: removed by their material (nebula), left as another material, and
-    // the material unreadable (then removed by distance -- cards_removed_by_distance --
-    // as a stopgap, or kept by it). The fade distances seen, with their draws.
+    // Draws not X4's (WVP != VP * W), out of flight, seen before their turn was learned, past
+    // the learning table.
+    uint64_t mismatch = 0, noflight = 0, unlearned = 0, full = 0;
+    // Removed by their material (nebula), left as another material, and the material
+    // unreadable (then removed by distance as a stopgap, or kept by it); the fade distances
+    // seen, with their draws.
+    uint64_t cards_removed = 0, cards_kept_near = 0, cards_kept_far = 0, cards_kept_large = 0;
     uint64_t cards_by_material = 0, cards_other_material = 0, cards_unread_material = 0,
              cards_by_distance = 0;
-    // X4VR_FOG_CARDS=fix: turned to face the eye, and refused (the view's turn no rotation,
-    // or the card on the up line).
-    uint64_t cards_fixed = 0, cards_fix_refused = 0;
     struct Mat {
         float near_start, far_end;
         uint64_t n;
     };
     Mat mats[12] = {};
     int nmats = 0;
-    // Drift by how the stretch turns them (0 X4's own, 1 to the eye, 2 to the ship, 3 the
-    // hybrid) and head-look moved since the reference (<2, <10, <30, more deg): draws,
-    // turn drift sum and max.
-    uint64_t dn[4][4] = {};
-    double dturn[4][4] = {}, dturn_max[4][4] = {};
-    uint64_t to_eye = 0, to_ship = 0;
-    // Whose head-look turned them: X4's camera at the frame's first pass (camstamp), or
-    // the headset's newest (take 472 used only the second: the fix left ~30% of the turn).
-    uint64_t look_frame = 0, look_newest = 0;
     // The cost: time in the submit hook's card work.
     uint64_t calls = 0;
     double ns = 0.0, ns_max = 0.0;
@@ -2565,102 +2377,6 @@ static uint64_t fade_signature(const float *o, const float *c) {
     }
     return h;
 }
-// The head-look this frame was drawn with: X4's camera as it stood at the frame's first
-// render pass (camstamp, X4VR_DECLARE_RENDERED_ROT=2's), else the headset's newest.
-static bool frame_look(float *yaw, float *pitch) {
-    const uint32_t f = g_camstamp.frame.load(std::memory_order_relaxed);
-    if (g_camstamp.seq.load(std::memory_order_acquire) &&
-        g_camstamp.stamped.load(std::memory_order_relaxed) == f) {
-        *yaw = g_camstamp.yaw.load(std::memory_order_relaxed);
-        *pitch = g_camstamp.pitch.load(std::memory_order_relaxed);
-        return true;
-    }
-    *yaw = g_census_yaw.load(std::memory_order_relaxed);
-    *pitch = g_census_pitch.load(std::memory_order_relaxed);
-    return false;
-}
-
-// **The head-look check** (after take 472): V^T * L is the ship's camera in the world --
-// X4's camera with the head-look undone -- and with the ship still it must not move
-// whatever the head does. For each way of reading the head-look, its drift against the
-// stretch's first frame, by how far the head-look moved: the way that holds still is
-// the one X4 draws with. 0 the headset's newest, 1 X4's camera at the first pass, 2 the
-// same with pitch applied before yaw, 3 with the pitch's sign flipped, 4 the yaw's.
-struct LookCheck {
-    static constexpr int kWays = 5;
-    bool have[kWays] = {};
-    uint64_t phase = ~0ull;
-    float ref[kWays][9] = {}, ref_yaw = 0.f, ref_pitch = 0.f;
-    uint64_t n[kWays][4] = {};
-    double sum[kWays][4] = {}, max[kWays][4] = {};
-};
-LookCheck g_lookcheck;
-static void look_matrix(float yaw, float pitch, int way, float L[9]) {
-    // H, the head-look in the ship's camera axes: Ry(-yaw) Rx(-pitch) (look_rows'
-    // convention), or the variant; L = H^T.
-    const double d = 0.017453292519943295;
-    const double y = (way == 4 ? yaw : -yaw) * d, p = (way == 3 ? pitch : -pitch) * d;
-    const double cy = std::cos(y), sy = std::sin(y), cp = std::cos(p), sp = std::sin(p);
-    const double ry[3][3] = {{cy, 0, sy}, {0, 1, 0}, {-sy, 0, cy}}; // [row][col]
-    const double rx[3][3] = {{1, 0, 0}, {0, cp, -sp}, {0, sp, cp}};
-    double h[3][3];
-    for (int i = 0; i < 3; i++)
-        for (int j = 0; j < 3; j++) {
-            double acc = 0.0;
-            for (int k = 0; k < 3; k++)
-                acc += way == 2 ? rx[i][k] * ry[k][j] : ry[i][k] * rx[k][j];
-            h[i][j] = acc;
-        }
-    for (int c = 0; c < 3; c++)
-        for (int rr = 0; rr < 3; rr++)
-            L[c * 3 + rr] = (float)h[c][rr]; // L = H^T, column-major: L[c][r] = H[c][r]^T... = H[c][rr]
-}
-static void look_check(const float *cb) {
-    float fy = 0.f, fp = 0.f;
-    const bool fr = frame_look(&fy, &fp);
-    if (!fr || !g_census_look_valid.load(std::memory_order_relaxed))
-        return;
-    const float ny = g_census_yaw.load(std::memory_order_relaxed),
-                np = g_census_pitch.load(std::memory_order_relaxed);
-    LookCheck &k = g_lookcheck;
-    const uint64_t phase = g_fix_phase.load(std::memory_order_relaxed);
-    if (phase != k.phase) {
-        k.phase = phase;
-        for (bool &h : k.have)
-            h = false;
-    }
-    for (int w = 0; w < LookCheck::kWays; w++) {
-        float L[9];
-        look_matrix(w ? fy : ny, w ? fp : np, w, L);
-        float m[9]; // V^T L, column-major
-        for (int c = 0; c < 3; c++)
-            for (int rr = 0; rr < 3; rr++) {
-                double acc = 0.0;
-                for (int q = 0; q < 3; q++)
-                    acc += (double)cb[rr * 4 + q] * L[c * 3 + q];
-                m[c * 3 + rr] = (float)acc;
-            }
-        if (!k.have[w]) {
-            k.have[w] = true;
-            std::memcpy(k.ref[w], m, sizeof m);
-            if (w == 1) {
-                k.ref_yaw = fy;
-                k.ref_pitch = fp;
-            }
-            continue;
-        }
-        double tr = 0.0;
-        for (int i = 0; i < 9; i++)
-            tr += (double)k.ref[w][i] * m[i];
-        const double ang = std::acos(std::fmax(-1.0, std::fmin(1.0, (tr - 1.0) / 2.0))) * 57.2957795;
-        const double dh = std::max(std::fabs(fy - k.ref_yaw), std::fabs(fp - k.ref_pitch));
-        const int bin = dh < 2.0 ? 0 : dh < 10.0 ? 1 : dh < 30.0 ? 2 : 3;
-        k.n[w][bin]++;
-        k.sum[w][bin] += ang;
-        k.max[w][bin] = std::max(k.max[w][bin], ang);
-    }
-}
-
 // o_dst: X4's mapped object block; o: this draw's copy of its members 0 and 1 (32
 // floats); c: its camera block's copy (M_view at 0, M_viewprojection at 112). X4's
 // constants are slow for the CPU to read (take 471-472: 164-240 us a submit), so each
@@ -2681,41 +2397,36 @@ static void remove_draw(float *o_dst, float *o, const float *c,
     std::memcpy(o_dst, o, 32 * sizeof(float));
     done.insert(o_dst);
 }
-// `mat`: 1 X4's nebula material, 0 another, -1 not read.
-static void fix_draw(float *o_dst, float *o, const float *c, int mode,
-                     std::unordered_set<const float *> &done, int mat) {
+// One fade draw at submit. `mat`: 1 X4's nebula material, 0 another, -1 not read. X4's
+// nebula cards go, by their material: every draw of it, however far; nothing of any other
+// material (X4's radar, light glows, engine flares...). In an A/B's V phase X4's own stay.
+static void card_draw(float *o_dst, float *o, const float *c,
+                      std::unordered_set<const float *> &done, int mat) {
     if (done.count(o_dst))
-        return; // drawn twice from one slot: turned once
+        return; // drawn twice from one slot: handled once
     if (!fade_consistent(o, c)) {
         g_fix_stats.mismatch++;
         return;
     }
-    // The cards off, by their material: every draw of X4's nebula material, whether or not
-    // its turn was learned and however far; nothing of any other material (X4's radar,
-    // light glows, engine flares...). In the smoke's A/B, X4's cards stay in its V phase.
-    // Whether or not our march runs (Patola, after take 494): with X4's volumetric fog off
-    // in its settings, X4 runs no fog walk and so ours doesn't run either, and its cards are
-    // removed all the same -- Off means no nebula clouds at all, the cheapest and clearest,
-    // which is why a player picks it. X4's own, cards and all, are Advanced's vanilla.
-    const bool cards_off =
-        fog_cards_off() && !(fog_ab() && g_fog_arm.load(std::memory_order_relaxed) == 0);
-    if (cards_off && mat == 1) {
+    if (!fog_cards_off() || (fog_ab() && g_fog_arm.load(std::memory_order_relaxed) == 0))
+        return;
+    if (mat == 1) {
         g_fix_stats.cards_by_material++;
         remove_draw(o_dst, o, c, done);
         g_fix_stats.cards_removed++;
         return;
     }
-    if (cards_off)
-        (mat == 0 ? g_fix_stats.cards_other_material : g_fix_stats.cards_unread_material)++;
-    if (!g_census_look_valid.load(std::memory_order_relaxed)) {
+    (mat == 0 ? g_fix_stats.cards_other_material : g_fix_stats.cards_unread_material)++;
+    if (mat == 0)
+        return;
+    // A STOPGAP where the material could not be read: the camera-turned draws at a card's
+    // distance and size. Only a draw X4 turns with its camera, learned as above.
+    if (!g_cards_look_valid.load(std::memory_order_relaxed)) {
         g_fix_stats.noflight++;
         return;
     }
-    // Learning reads the headset's newest (any change will do); the turn, the frame's.
-    const float ly = g_census_yaw.load(std::memory_order_relaxed),
-                lp = g_census_pitch.load(std::memory_order_relaxed);
-    float yaw = 0.f, pitch = 0.f;
-    (frame_look(&yaw, &pitch) ? g_fix_stats.look_frame : g_fix_stats.look_newest)++;
+    const float ly = g_cards_yaw.load(std::memory_order_relaxed),
+                lp = g_cards_pitch.load(std::memory_order_relaxed);
     const uint64_t h = fade_signature(o, c);
     auto it = g_fix_learn.find(h);
     if (it == g_fix_learn.end()) {
@@ -2733,135 +2444,41 @@ static void fix_draw(float *o_dst, float *o, const float *c, int mode,
         g_fix_stats.unlearned++;
         return;
     }
-    bool remove = g_fix_kill.load(std::memory_order_relaxed);
-    // A STOPGAP where the material could not be read: the camera-turned draws at a card's
-    // distance and size (removing only; =fix leaves what it can't read).
-    if (cards_off && mat < 0 && !remove) {
-        // Only what can be one of X4's nebula cards (after take 482, where the radar's
-        // ellipse and axes went with them): X4 turns its radar with the camera too, and
-        // draws it as its own scene from about 43 km (take 469's census: draws kept under
-        // head-look at 42-44 km, an ellipse 24500 m across, axes 220 by 3400 m). The cards
-        // were seen 0.5-6 km away at scale 1 or 3.9, and fade out by 3 km; the radar's
-        // parts sit by the camera (under 50 m), beyond 6.5 km, or larger than 100 m.
-        double dist2 = 0.0, scale = 0.0;
-        for (int row = 0; row < 3; row++) {
-            double pv = c[12 + row];
-            for (int k = 0; k < 3; k++)
-                pv += (double)c[k * 4 + row] * o[16 + 12 + k];
-            dist2 += pv * pv;
-        }
-        for (int col = 0; col < 3; col++) {
-            double l = 0.0;
-            for (int row = 0; row < 3; row++)
-                l += (double)o[16 + col * 4 + row] * o[16 + col * 4 + row];
-            scale = std::max(scale, std::sqrt(l));
-        }
-        if (dist2 <= 50.0 * 50.0)
-            g_fix_stats.cards_kept_near++;
-        else if (dist2 >= 6500.0 * 6500.0)
-            g_fix_stats.cards_kept_far++;
-        else if (scale >= 100.0)
-            g_fix_stats.cards_kept_large++;
-        else {
-            remove = true;
-            g_fix_stats.cards_by_distance++;
-        }
+    // Only what can be one of X4's nebula cards (after take 482, where the radar's ellipse
+    // and axes went with them): X4 turns its radar with the camera too, and draws it as its
+    // own scene from about 43 km (take 469: draws kept under head-look at 42-44 km, an
+    // ellipse 24500 m across, axes 220 by 3400 m). The cards were seen 0.5-6 km away at
+    // scale 1 or 3.9, and fade out by 3 km; the radar's parts sit by the camera (under
+    // 50 m), beyond 6.5 km, or larger than 100 m.
+    double dist2 = 0.0, scale = 0.0;
+    for (int row = 0; row < 3; row++) {
+        double pv = c[12 + row];
+        for (int k = 0; k < 3; k++)
+            pv += (double)c[k * 4 + row] * o[16 + 12 + k];
+        dist2 += pv * pv;
     }
-    if (remove) {
-        // K, or the cards off by the stopgap.
-        remove_draw(o_dst, o, c, done);
-        (g_fix_kill.load(std::memory_order_relaxed) ? g_fix_stats.killed
-                                                    : g_fix_stats.cards_removed)++;
-        return;
-    }
-    // The card's kind, direction and distance from the eye, for the drift check: its
-    // translation is X4's and stays.
-    uint64_t card = h;
-    {
-        double pv[3], pw[3] = {0, 0, 0}, l = 0.0;
-        for (int row = 0; row < 3; row++) {
-            pv[row] = c[12 + row];
-            for (int k = 0; k < 3; k++)
-                pv[row] += (double)c[k * 4 + row] * o[16 + 12 + k];
-        }
-        for (int row = 0; row < 3; row++)
-            for (int k = 0; k < 3; k++)
-                pw[row] += (double)c[row * 4 + k] * pv[k];
-        for (double v : pw)
-            l += v * v;
-        l = std::sqrt(l);
-        auto mix = [&card](int64_t v) {
-            for (int b = 0; b < 8; b++) {
-                card ^= (uint64_t)(v >> (8 * b)) & 0xffu;
-                card *= 1099511628211ull;
-            }
-        };
-        for (int row = 0; row < 3; row++)
-            mix((int64_t)std::llround(l > 0.0 ? pw[row] / l * 400.0 : 0.0));
-        mix((int64_t)std::llround(std::log(std::max(l, 1e-6)) * 20.0));
-    }
-    if (mode) {
-        const bool eye = mode == 1 || (mode == 3 && x4vr::billboard::faces_view(c, o + 16));
-        bool ok;
-        if (eye) {
-            float up[3];
-            x4vr::billboard::ship_up(yaw, pitch, up);
-            ok = x4vr::billboard::face_eye(c, c + 7 * 16, o + 16, o, up);
-        } else {
-            float L[9];
-            x4vr::billboard::look_rows(yaw, pitch, L);
-            ok = x4vr::billboard::face_ship(c, c + 7 * 16, o + 16, o, L);
-        }
-        if (!ok) {
-            g_fix_stats.refused++;
-            return;
-        }
-        std::memcpy(o_dst, o, 32 * sizeof(float));
-        done.insert(o_dst);
-        g_fix_stats.rewritten++;
-        (eye ? g_fix_stats.to_eye : g_fix_stats.to_ship)++;
-    }
-    // The drift check, on the card as it will be drawn.
-    const int arm = mode;
-    float wn[9];
     for (int col = 0; col < 3; col++) {
         double l = 0.0;
         for (int row = 0; row < 3; row++)
             l += (double)o[16 + col * 4 + row] * o[16 + col * 4 + row];
-        l = std::sqrt(l);
-        for (int row = 0; row < 3; row++)
-            wn[col * 3 + row] = l > 0.0 ? (float)(o[16 + col * 4 + row] / l) : 0.f;
+        scale = std::max(scale, std::sqrt(l));
     }
-    const uint64_t phase = g_fix_phase.load(std::memory_order_relaxed);
-    if (phase != g_fix_drift_phase) {
-        g_fix_drift.clear();
-        g_fix_drift_phase = phase;
+    if (dist2 <= 50.0 * 50.0) {
+        g_fix_stats.cards_kept_near++;
+    } else if (dist2 >= 6500.0 * 6500.0) {
+        g_fix_stats.cards_kept_far++;
+    } else if (scale >= 100.0) {
+        g_fix_stats.cards_kept_large++;
+    } else {
+        g_fix_stats.cards_by_distance++;
+        remove_draw(o_dst, o, c, done);
+        g_fix_stats.cards_removed++;
     }
-    auto dr = g_fix_drift.find(card);
-    if (dr == g_fix_drift.end()) {
-        if (g_fix_drift.size() < 100000) {
-            DriftRef ref;
-            std::memcpy(ref.w, wn, sizeof wn);
-            ref.yaw = yaw;
-            ref.pitch = pitch;
-            g_fix_drift.emplace(card, ref);
-        }
-        return;
-    }
-    const double dh = std::max(std::fabs(yaw - dr->second.yaw), std::fabs(pitch - dr->second.pitch));
-    const int bin = dh < 2.0 ? 0 : dh < 10.0 ? 1 : dh < 30.0 ? 2 : 3;
-    double tr = 0.0;
-    for (int i = 0; i < 9; i++)
-        tr += (double)dr->second.w[i] * wn[i];
-    const double turn = std::acos(std::fmax(-1.0, std::fmin(1.0, (tr - 1.0) / 2.0))) * 57.2957795;
-    g_fix_stats.dn[arm][bin]++;
-    g_fix_stats.dturn[arm][bin] += turn;
-    g_fix_stats.dturn_max[arm][bin] = std::max(g_fix_stats.dturn_max[arm][bin], turn);
 }
 
-// At submit, under g_track.mu: every fade draw the submitted recordings made -- the
-// census reads them as X4 wrote them, then the fix turns the learned cards.
-static void census_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) {
+// At submit, under g_track.mu: every fade draw the submitted recordings made, read as X4
+// wrote them -- what the GPU is about to read -- and X4's nebula cards removed.
+static void cards_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) {
     std::lock_guard<std::mutex> lock(g_track.mu);
     const auto t0 = std::chrono::steady_clock::now();
     struct Timed {
@@ -2876,199 +2493,74 @@ static void census_at_submit(uint32_t submitCount, const VkSubmitInfo *submits) 
             g_fix_stats.ns_max = std::max(g_fix_stats.ns_max, ns);
         }
     } timed{t0};
-    const bool census = facing_census(), fixing = facing_enabled() || fog_cards_off();
-    const int mode = fixing && g_fix_active.load(std::memory_order_relaxed)
-                         ? g_fix_mode.load(std::memory_order_relaxed)
-                         : 0;
     std::unordered_set<const float *> done;
     struct CamCopy {
         float f[128];
     };
     std::unordered_map<const float *, CamCopy> cams;
-    bool checked = false;
-    if (fixing && (++g_fix_submits & 1023) == 0)
+    if ((++g_fix_submits & 1023) == 0)
         for (auto it = g_fix_learn.begin(); it != g_fix_learn.end();)
             it = !it->second.learned && it->second.last + 4096 < g_fix_submits
                      ? g_fix_learn.erase(it)
                      : std::next(it);
     for (uint32_t i = 0; i < submitCount; i++)
         for (uint32_t j = 0; j < submits[i].commandBufferCount; j++) {
-            auto it = g_census_pending.find(submits[i].pCommandBuffers[j]);
-            if (it == g_census_pending.end())
+            auto it = g_cards_pending.find(submits[i].pCommandBuffers[j]);
+            if (it == g_cards_pending.end())
                 continue;
-            for (const CensusDraw &d : it->second) {
+            for (const CardDraw &d : it->second) {
                 float *o = obj_slot_host_ptr(d.obj);
                 const float *c = d.cam.buffer ? slot_host_ptr(d.cam) : nullptr;
-                if (census) {
-                    g_census.draws++;
-                    if (!d.cam.buffer)
-                        g_census.nocam++;
-                    else if (!o || !c)
-                        g_census.unread++;
-                    else
-                        census_classify(o, c);
+                if (!o || !c)
+                    continue;
+                auto cc = cams.find(c);
+                if (cc == cams.end()) {
+                    CamCopy cp;
+                    std::memcpy(cp.f, c, 16 * sizeof(float));
+                    std::memcpy(cp.f + 112, c + 112, 16 * sizeof(float));
+                    cc = cams.emplace(c, cp).first;
                 }
-                if (fixing && o && c) {
-                    auto cc = cams.find(c);
-                    if (cc == cams.end()) {
-                        CamCopy cp;
-                        std::memcpy(cp.f, c, 16 * sizeof(float));
-                        std::memcpy(cp.f + 112, c + 112, 16 * sizeof(float));
-                        cc = cams.emplace(c, cp).first;
-                        if (!checked) {
-                            checked = true;
-                            look_check(cc->second.f);
-                        }
+                // The draw's material, by its fade distances.
+                int mat = -1;
+                if (d.mat.buffer && d.moff[0] != UINT32_MAX && d.moff[1] != UINT32_MAX &&
+                    d.moff[0] + 4 <= d.mat.range && d.moff[1] + 4 <= d.mat.range)
+                    if (const float *m = obj_slot_host_ptr(d.mat)) {
+                        float ns, fe;
+                        std::memcpy(&ns, (const char *)m + d.moff[0], 4);
+                        std::memcpy(&fe, (const char *)m + d.moff[1], 4);
+                        mat = x4vr::spv::is_nebula_fade(ns, fe) ? 1 : 0;
+                        FixStats &fs = g_fix_stats;
+                        int k = 0;
+                        while (k < fs.nmats &&
+                               (fs.mats[k].near_start != ns || fs.mats[k].far_end != fe))
+                            k++;
+                        if (k < fs.nmats)
+                            fs.mats[k].n++;
+                        else if (fs.nmats < 12)
+                            fs.mats[fs.nmats++] = {ns, fe, 1};
                     }
-                    // The draw's material, by its fade distances.
-                    int mat = -1;
-                    if (d.mat.buffer && d.moff[0] != UINT32_MAX && d.moff[1] != UINT32_MAX &&
-                        d.moff[0] + 4 <= d.mat.range && d.moff[1] + 4 <= d.mat.range)
-                        if (const float *m = obj_slot_host_ptr(d.mat)) {
-                            float ns, fe;
-                            std::memcpy(&ns, (const char *)m + d.moff[0], 4);
-                            std::memcpy(&fe, (const char *)m + d.moff[1], 4);
-                            mat = x4vr::spv::is_nebula_fade(ns, fe) ? 1 : 0;
-                            FixStats &fs = g_fix_stats;
-                            int k = 0;
-                            while (k < fs.nmats &&
-                                   (fs.mats[k].near_start != ns || fs.mats[k].far_end != fe))
-                                k++;
-                            if (k < fs.nmats)
-                                fs.mats[k].n++;
-                            else if (fs.nmats < 12)
-                                fs.mats[fs.nmats++] = {ns, fe, 1};
-                        }
-                    float ol[32];
-                    std::memcpy(ol, o, sizeof ol);
-                    fix_draw(o, ol, cc->second.f, mode, done, mat);
-                }
+                float ol[32];
+                std::memcpy(ol, o, sizeof ol);
+                card_draw(o, ol, cc->second.f, done, mat);
             }
             it->second.clear();
         }
 }
+
+// The cards' work at submit: what it costs, and how many turns it has learned.
 static void fix_report(const char *when) {
     std::lock_guard<std::mutex> lock(g_track.mu);
     size_t learned = 0;
     for (const auto &[h, e] : g_fix_learn)
         learned += e.learned;
-    X4VR_LOG("facing cpu %s: %s — %llu draw(s) of X4's cards turned to the eye; %llu seen "
-             "before their turn was learned, %llu refused, %llu not X4's (WVP != VP*W), %llu "
-             "out of flight, %llu past the table; %zu turn(s) learned of %zu kept",
-             when, facing_ab() ? "A/B by recentre" : "ON",
-             (unsigned long long)g_fix_stats.rewritten, (unsigned long long)g_fix_stats.unlearned,
-             (unsigned long long)g_fix_stats.refused, (unsigned long long)g_fix_stats.mismatch,
-             (unsigned long long)g_fix_stats.noflight, (unsigned long long)g_fix_stats.full,
-             learned, g_fix_learn.size());
     const FixStats &f = g_fix_stats;
-    if (f.killed)
-        X4VR_LOG("facing cpu %s: K removed %llu draw(s) of learned cards — DIAGNOSTIC", when,
-                 (unsigned long long)f.killed);
-    static const char *const kBin[4] = {"<2", "2-10", "10-30", "30+"};
-    static const char *const kArm[4] = {"X4's own", "to the eye", "to the ship", "the hybrid"};
-    for (int arm = 0; arm < 4; arm++) {
-        if (arm && !(f.dn[arm][0] + f.dn[arm][1] + f.dn[arm][2] + f.dn[arm][3]))
-            continue;
-        std::string row;
-        for (int b = 0; b < 4; b++) {
-            char t[160];
-            const double n = (double)std::max<uint64_t>(f.dn[arm][b], 1);
-            snprintf(t, sizeof t, "%s%s deg: %llu draw(s), turn %.2f (max %.2f)", b ? "; " : "",
-                     kBin[b], (unsigned long long)f.dn[arm][b], f.dturn[arm][b] / n,
-                     f.dturn_max[arm][b]);
-            row += t;
-        }
-        X4VR_LOG("facing cpu drift %s (%s): each card in the world against its first draw in "
-                 "the stretch, by head-look moved — %s",
-                 when, kArm[arm], row.c_str());
-    }
-    X4VR_LOG("facing cpu look %s: %llu draw(s) turned by X4's camera at the frame's first pass, "
-             "%llu by the headset's newest",
-             when, (unsigned long long)f.look_frame, (unsigned long long)f.look_newest);
-    static const char *const kWay[LookCheck::kWays] = {
-        "the headset's newest", "X4's camera at the first pass", "the same, pitch before yaw",
-        "the same, pitch's sign flipped", "the same, yaw's sign flipped"};
-    for (int w = 0; w < LookCheck::kWays; w++) {
-        std::string row;
-        for (int b = 0; b < 4; b++) {
-            char t[120];
-            const double n = (double)std::max<uint64_t>(g_lookcheck.n[w][b], 1);
-            snprintf(t, sizeof t, "%s%s deg: %llu frame(s), %.2f (max %.2f)", b ? "; " : "",
-                     kBin[b], (unsigned long long)g_lookcheck.n[w][b], g_lookcheck.sum[w][b] / n,
-                     g_lookcheck.max[w][b]);
-            row += t;
-        }
-        X4VR_LOG("facing cpu ship %s (%s): X4's camera with the head-look undone, against the "
-                 "stretch's first frame, by head-look moved — %s",
-                 when, kWay[w], row.c_str());
-    }
-    X4VR_LOG("facing cpu turns %s: %llu draw(s) turned to the eye, %llu to the ship", when,
-             (unsigned long long)f.to_eye, (unsigned long long)f.to_ship);
-    X4VR_LOG("facing cpu cost %s: %llu submit(s) with X4's cards, mean %.1f us, max %.1f us, "
-             "total %.1f ms",
+    X4VR_LOG("fog cards %s: the work at submit — %llu submit(s) with X4's faded draws, mean "
+             "%.1f us, max %.1f us, total %.1f ms; %zu turn(s) learned of %zu kept, %llu draw(s) "
+             "not X4's (WVP != VP*W), %llu out of flight, %llu past the table",
              when, (unsigned long long)f.calls, f.calls ? f.ns / f.calls / 1000.0 : 0.0,
-             f.ns_max / 1000.0, f.ns / 1e6);
-}
-static void census_report(const char *when) {
-    std::lock_guard<std::mutex> lock(g_track.mu);
-    const Census &c = g_census;
-    X4VR_LOG("facing census %s: %llu draw(s) of X4's near/far-faded effects read at submit: %llu "
-             "valid (WVP = VP*W), %llu not matching, %llu unreadable, %llu with no camera; turned "
-             "as the camera %llu, rolled about the view axis %llu, otherwise %llu | normal off the "
-             "view axis, deg: <0.1 %llu, <1 %llu, <5 %llu, <20 %llu, more %llu | normal off the "
-             "card's direction, deg: <0.1 %llu, <1 %llu, <5 %llu, <20 %llu, more %llu",
-             when, (unsigned long long)c.draws, (unsigned long long)c.valid,
-             (unsigned long long)c.mismatch, (unsigned long long)c.unread,
-             (unsigned long long)c.nocam, (unsigned long long)c.cls[0],
-             (unsigned long long)c.cls[1], (unsigned long long)c.cls[2],
-             (unsigned long long)c.normal[0], (unsigned long long)c.normal[1],
-             (unsigned long long)c.normal[2], (unsigned long long)c.normal[3],
-             (unsigned long long)c.normal[4], (unsigned long long)c.toward[0],
-             (unsigned long long)c.toward[1], (unsigned long long)c.toward[2],
-             (unsigned long long)c.toward[3], (unsigned long long)c.toward[4]);
-    static const char *const kCls[3] = {"turned as the camera", "rolled about the view axis",
-                                        "otherwise"};
-    for (int k = 0; k < 3; k++)
-        for (const std::string &smp : c.samples[k])
-            X4VR_LOG("facing census sample (%s): %s", kCls[k], smp.c_str());
-    // Signatures kept while the head-look moved 3 deg or more: turned with the camera.
-    uint64_t kept_draws[3] = {0, 0, 0}, kept_sigs[3] = {0, 0, 0}, other_draws = 0,
-             other_sigs = 0;
-    std::vector<const Census::Sig *> kept;
-    for (const auto &[h, sg] : c.sigs) {
-        const bool k = sg.ymax - sg.ymin >= 3.f || sg.pmax - sg.pmin >= 3.f;
-        if (k) {
-            kept_draws[sg.cls] += sg.n;
-            kept_sigs[sg.cls]++;
-            kept.push_back(&sg);
-        } else {
-            other_draws += sg.n;
-            other_sigs++;
-        }
-    }
-    X4VR_LOG("facing census signatures %s: in flight, %llu draw(s) under %llu signature(s) "
-             "kept while the head-look moved 3 deg or more (turned with the camera): turned "
-             "as the camera %llu in %llu, rolled about the view axis %llu in %llu, otherwise "
-             "%llu in %llu; %llu draw(s) under %llu signature(s) not kept; %llu past the table",
-             when,
-             (unsigned long long)(kept_draws[0] + kept_draws[1] + kept_draws[2]),
-             (unsigned long long)(kept_sigs[0] + kept_sigs[1] + kept_sigs[2]),
-             (unsigned long long)kept_draws[0], (unsigned long long)kept_sigs[0],
-             (unsigned long long)kept_draws[1], (unsigned long long)kept_sigs[1],
-             (unsigned long long)kept_draws[2], (unsigned long long)kept_sigs[2],
-             (unsigned long long)other_draws, (unsigned long long)other_sigs,
-             (unsigned long long)c.unsigned_draws);
-    std::sort(kept.begin(), kept.end(),
-              [](const Census::Sig *a, const Census::Sig *b) { return a->n > b->n; });
-    for (size_t i = 0; i < kept.size() && i < 12; i++) {
-        const Census::Sig &sg = *kept[i];
-        X4VR_LOG("facing census kept (%s): %llu draw(s), head-look yaw %.1f..%.1f pitch "
-                 "%.1f..%.1f, at %.0f..%.0f m: Q/|col| rows [%+.3f %+.3f %+.3f | %+.3f %+.3f "
-                 "%+.3f | %+.3f %+.3f %+.3f], col norms %.1f %.1f %.1f",
-                 kCls[sg.cls], (unsigned long long)sg.n, sg.ymin, sg.ymax, sg.pmin, sg.pmax,
-                 sg.dmin, sg.dmax, sg.q[0], sg.q[3], sg.q[6], sg.q[1], sg.q[4], sg.q[7], sg.q[2],
-                 sg.q[5], sg.q[8], sg.norm[0], sg.norm[1], sg.norm[2]);
-    }
+             f.ns_max / 1000.0, f.ns / 1e6, learned, g_fix_learn.size(),
+             (unsigned long long)f.mismatch, (unsigned long long)f.noflight,
+             (unsigned long long)f.full);
 }
 
 void credit_draw(VkCommandBuffer cb) {
@@ -3100,37 +2592,37 @@ void credit_draw(VkCommandBuffer cb) {
         auto cc = g_cb_canvas.find(cb);
         on_canvas = cc != g_cb_canvas.end() && cc->second;
     }
-    bool census_fade = false;
+    bool card_fade = false;
     x4vr::spv::FadeBlock fblock;
     if (fade_tracking()) {
         // The recording thread binds and draws: its own last bind answers without a lock.
         if (tl_fade_cb == cb) {
-            census_fade = tl_fade;
+            card_fade = tl_fade;
             fblock = tl_fade_block;
         } else {
-            std::lock_guard<std::mutex> lock(g_census_mu);
-            auto f = g_census_fade.find(cb);
-            census_fade = f != g_census_fade.end() && f->second;
-            auto b = g_census_fblock.find(cb);
-            if (b != g_census_fblock.end())
+            std::lock_guard<std::mutex> lock(g_cards_mu);
+            auto f = g_cards_fade.find(cb);
+            card_fade = f != g_cards_fade.end() && f->second;
+            auto b = g_cards_fblock.find(cb);
+            if (b != g_cards_fblock.end())
                 fblock = b->second;
         }
     }
     std::lock_guard<std::mutex> lock(g_track.mu);
-    if (census_fade) {
-        auto ob = g_census_obj.find(cb);
+    if (card_fade) {
+        auto ob = g_cards_obj.find(cb);
         auto vb = g_track.bound.find(cb);
-        auto &pend = g_census_pending[cb];
+        auto &pend = g_cards_pending[cb];
         // Every card of a pass must reach the fix; the cap only bounds a recording
         // that is never submitted.
-        if (ob != g_census_obj.end() && pend.size() < 4096) {
-            CensusDraw cd{ob->second, vb != g_track.bound.end() && !vb->second.empty()
+        if (ob != g_cards_obj.end() && pend.size() < 4096) {
+            CardDraw cd{ob->second, vb != g_track.bound.end() && !vb->second.empty()
                                           ? vb->second.front()
                                           : ViewSlot{VK_NULL_HANDLE, 0}};
             // The material's block, from the set bound at its index.
             if (fblock.off[0] != UINT32_MAX && fblock.off[3] != UINT32_MAX && fblock.set < 8) {
-                auto sb = g_census_sets.find(cb);
-                if (sb != g_census_sets.end() && sb->second[fblock.set] != VK_NULL_HANDLE) {
+                auto sb = g_cards_sets.find(cb);
+                if (sb != g_cards_sets.end() && sb->second[fblock.set] != VK_NULL_HANDLE) {
                     auto os = g_track.obj_sets.find(sb->second[fblock.set]);
                     if (os != g_track.obj_sets.end()) {
                         auto bs = os->second.find(fblock.binding);
@@ -3214,7 +2706,7 @@ void frame_timing(uint64_t frame) {
                      (float)(now.tv_nsec - prev.tv_nsec) / 1.0e6f);
         // In flight only (after take 483: loading the save landed in a phase and doubled
         // its median).
-        if (fog_ab() && g_census_look_valid.load(std::memory_order_relaxed)) {
+        if (fog_ab() && g_cards_look_valid.load(std::memory_order_relaxed)) {
             auto &arm = g_fog_arm_ms[g_fog_arm.load(std::memory_order_relaxed) % 3];
             if (arm.size() < 500000)
                 arm.push_back(ms.back());
@@ -3967,7 +3459,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindDescriptorSets(
         }
     }
     if (fade_tracking() && bindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS) {
-        auto &bs = g_census_sets[cb];
+        auto &bs = g_cards_sets[cb];
         for (uint32_t i = 0; i < setCount; i++)
             if (firstSet + i < 8)
                 bs[firstSet + i] = sets[i];
@@ -3981,7 +3473,7 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindDescriptorSets(
                 continue;
             auto ob = it->second.find(kObjectBinding);
             if (ob != it->second.end())
-                g_census_obj[cb] = ob->second;
+                g_cards_obj[cb] = ob->second;
         }
     auto &bound = g_track.bound[cb];
     for (uint32_t i = 0; i < setCount; i++) {
@@ -5281,54 +4773,7 @@ void canvas_report(const char *when) {
 // This is the take-173 failure once more: two unrelated features on one gate,
 // with no log line saying so. The comment three functions down says exactly
 // that about X4VR_BINDLESS_PATCH silently disabling X4VR_PROJ_INVPROJ.
-// X4's billboards and fog blobs face the ship, not the head (patch_vertex_facing_body,
-// patch_fog_points_facing, 2026-11-26). OFF by default: takes 465-467 ran both, the
-// nebula still turned with the head, so they fix nothing yet seen; X4VR_FACING=1 turns
-// them on, X4VR_FACING_AB=recentre alternates by the mod's forward latches (the panel's
-// and each recentre's), B being the fix.
-bool facing_enabled() {
-    static const bool on = x4vr::env_on("X4VR_FACING", false);
-    return on;
-}
-bool facing_ab() {
-    static const bool ab = [] {
-        const char *e = getenv("X4VR_FACING_AB");
-        return e && !strcmp(e, "recentre");
-    }();
-    return ab;
-}
 static uint64_t forward_latches(); // defined beside the latch
-std::atomic<uint32_t> g_facing_modules{0}, g_facing_inputs{0}, g_facing_partial{0};
-// X4VR_FACING_DEBUG=collapse, DIAGNOSTIC: a third arm, K, in which the look slot is zero,
-// so every card the billboard patch finds collapses to its centre and every fog blob the
-// froxel patch finds is put out of reach: they vanish, whatever head-look does. With
-// X4VR_FACING_AB=recentre the arms cycle A, B, K by recentre (take 466: the cards'
-// collapse removed X4's menus but no nebula; the froxel blobs are the next suspect).
-// Which clouds vanish is which clouds are those.
-bool facing_collapse() {
-    static const bool on = [] {
-        const char *e = getenv("X4VR_FACING_DEBUG");
-        return e && !strcmp(e, "collapse");
-    }();
-    return on;
-}
-// X4VR_FACING_DEBUG=compare, DIAGNOSTIC (after take 468, where the removal took the
-// nebulae every time and the fix, cards turned to the ship's forward, left them weaker
-// and still following): with X4VR_FACING_AB=recentre the arms cycle X4's own, S (turned
-// to the ship) and E (turned to the eye); the census runs too.
-bool facing_compare() {
-    static const bool on = [] {
-        const char *e = getenv("X4VR_FACING_DEBUG");
-        return e && !strcmp(e, "compare");
-    }();
-    return on;
-}
-// Headset frames whose look slot was the head-look undone, and those left at identity
-// because X4's camera angles weren't valid.
-std::atomic<uint64_t> g_facing_driven{0}, g_facing_idle{0};
-// X4's fog blobs (patch_fog_points_facing, after take 466): froxel modules created with
-// each blob's frame turned, the products turned, and modules naming M_offset refused.
-std::atomic<uint32_t> g_facing_fog_modules{0}, g_facing_fog_products{0}, g_facing_fog_refused{0};
 
 
 void shader_knob_report(const char *when) {
@@ -5337,27 +4782,6 @@ void shader_knob_report(const char *when) {
     X4VR_LOG("fog %s: volumetric composite forced to passthrough in %llu "
              "module(s) (offline: 8 of 409 match the fog signature)",
              when, (unsigned long long)g_fog_disabled.load());
-    // The billboards (2026-11-26). Zero here with the pose channel up means X4's
-    // modules don't carry the names the patch looks for: the clouds still turn.
-    X4VR_LOG("facing %s: %s — %u vertex module(s) turn X4's billboards to the ship, %u input "
-             "read(s) turned, %u partial left",
-             when, facing_enabled() ? (facing_ab() ? "A/B by recentre" : "ON") : "OFF (X4VR_FACING=1 turns it on)",
-             g_facing_modules.load(), g_facing_inputs.load(), g_facing_partial.load());
-    X4VR_LOG("facing look %s: %llu headset frame(s) with the head-look undone, %llu with X4's "
-             "camera angles not valid (identity)%s",
-             when, (unsigned long long)g_facing_driven.load(),
-             (unsigned long long)g_facing_idle.load(),
-             facing_collapse() ? "; DIAGNOSTIC X4VR_FACING_DEBUG=collapse: phases cycle X4's own, "
-                                 "the fix, and K, where every fog blob and billboard the patches "
-                                 "find is removed, and every draw of X4's near/far-faded effects; "
-                                 "the census reads their matrices"
-             : facing_compare() ? (facing_gpu()
-                                       ? "; DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4's "
-                                         "own, S (cards turned to the ship) and E (to the eye)"
-                                       : "; DIAGNOSTIC X4VR_FACING_DEBUG=compare: phases cycle X4's "
-                                         "own, S (cards turned to the ship) and H (billboards to "
-                                         "the eye, tilted cards to the ship)")
-                                : "");
     if (fog_march_on()) {
         if (fog_march_on())
             X4VR_LOG("fog march %s: %llu dispatch(es) of our march (%ux%u rays, %u depths), %llu "
@@ -5448,13 +4872,7 @@ void shader_knob_report(const char *when) {
             X4VR_LOG("fog smoke %s: frame time by phase — %s", when, row.c_str());
         }
     }
-    // Zero with the pose channel up: X4 created no froxel fog pass, or its module no
-    // longer has M_offset and I_point_num by name.
-    X4VR_LOG("facing fog %s: %u froxel module(s) turn X4's fog blobs to the ship (%u "
-             "product(s)), %u refused",
-             when, g_facing_fog_modules.load(), g_facing_fog_products.load(),
-             g_facing_fog_refused.load());
-    if (facing_enabled() || fog_cards_off())
+    if (fog_cards_off())
         fix_report(when);
     if (fog_cards_off()) {
         std::lock_guard<std::mutex> lock(g_track.mu);
@@ -5486,15 +4904,6 @@ void shader_knob_report(const char *when) {
                  when, (unsigned long long)fs.cards_by_distance,
                  (unsigned long long)fs.cards_kept_near, (unsigned long long)fs.cards_kept_far,
                  (unsigned long long)fs.cards_kept_large, (unsigned long long)fs.unlearned);
-    }
-    if (facing_census()) {
-        {
-            std::lock_guard<std::mutex> lock(g_census_mu);
-            X4VR_LOG("facing census %s: %zu vertex module(s) and %zu pipeline(s) of X4's "
-                     "near/far-faded effects",
-                     when, g_fade_modules.size(), g_fade_pipes.size());
-        }
-        census_report(when);
     }
     // The FSR fix (take 380), same rule: a log without this line predates the
     // fix, and "armed" with 0 patched means X4 created no FSR pass (no FSR
@@ -7984,37 +7393,6 @@ VkResult create_shader_module_inner(
         } else {
             did = x4vr::spv::patch_vertex_pose_clip(pc, pose_set_index(), 0);
         }
-        // The billboards: a vertex module with X4's names gets it, whatever the pose
-        // patch above did; it reads the same set, and only cards turned as the camera
-        // is are changed. Rides the patched variant, as the pose does: not in the
-        // shadow or UI passes.
-        x4vr::spv::FacingReport frep;
-        const bool facing = facing_enabled() && facing_gpu() &&
-                            x4vr::spv::patch_vertex_facing_body(pc, kCameraSet, kCameraBinding,
-                                                                 kObjectSet, kObjectBinding,
-                                                                 pose_set_index(), 0, &frep);
-        // The first refusals of modules that position by the object block, by reason:
-        // a reason in every one would mean X4's modules lack a name the patch reads.
-        // Not those without the camera block or the object matrix: a billboard needs
-        // both, and take 463's only refusal lines named that harmless case.
-        if (facing_enabled() && facing_gpu() && !facing && strcmp(frep.why, "no vertex entry") != 0 &&
-            strcmp(frep.why, "no M_world in the object block") != 0 &&
-            strcmp(frep.why, "no M_view in the camera block") != 0) {
-            static uint32_t said = 0;
-            if (++said <= 3)
-                X4VR_LOG("facing: a vertex module with X4's object matrix was refused: %s",
-                         frep.why);
-        }
-        if (facing) {
-            const uint32_t n = ++g_facing_modules;
-            g_facing_inputs += frep.inputs;
-            g_facing_partial += frep.partial;
-            if (n <= 3 || (n % 100) == 0)
-                X4VR_LOG("facing: %u vertex module(s) turn X4's billboards to the ship, not the "
-                         "head (this one: %u input read(s) turned, %u partial left)",
-                         n, frep.inputs, frep.partial);
-        }
-        did = did || facing;
         if (did) {
             static uint32_t n = 0;
             n++;
@@ -8870,22 +8248,6 @@ std::vector<uint32_t> fsr_patch_module(const VkShaderModuleCreateInfo *ci) {
     return code;
 }
 
-// X4's froxel fog pass (volume_point.comp), created with each fog blob's frame turned by
-// the head-look undone (patch_fog_points_facing, after take 466). Empty to create the
-// module as X4 wrote it. Only a module naming M_offset is tried: one of ~400.
-std::vector<uint32_t> fogpoint_patch_facing(const VkShaderModuleCreateInfo *ci);
-
-
-std::vector<uint32_t> fogpoint_patch_module(const VkShaderModuleCreateInfo *ci) {
-    std::vector<uint32_t> code;
-    if (!g_active || !ci || ci->codeSize < 20)
-        return code;
-    // Take 474: puffs added in volume_point.comp reached only the tiles X4 dispatches
-    // around its own fog points, and showed nowhere; the probe is now the whole first
-    // stage, volume_base, replaced (fog_volume_module).
-    return fogpoint_patch_facing(ci);
-}
-
 // **Our march in X4's volume_walk's place** (X4VR_NEBULA=volumetric): its module for X4's
 // walk, empty to create the module as X4 wrote it.
 thread_local bool tl_fog_vol = false;
@@ -8942,37 +8304,6 @@ std::vector<uint32_t> fog_volume_module(const VkShaderModuleCreateInfo *ci) {
     }
 }
 
-std::vector<uint32_t> fogpoint_patch_facing(const VkShaderModuleCreateInfo *ci) {
-    std::vector<uint32_t> code;
-    if (!g_active || !facing_enabled() || !facing_gpu() || !pose_active() || !ci ||
-        ci->codeSize < 20)
-        return code;
-    static const char kName[] = "M_offset";
-    if (!memmem(ci->pCode, ci->codeSize, kName, sizeof kName - 1))
-        return code;
-    code.resize(ci->codeSize / 4);
-    memcpy(code.data(), ci->pCode, ci->codeSize);
-    x4vr::spv::FogPointReport rep;
-    if (!x4vr::spv::patch_fog_points_facing(code, pose_set_index(), kPoseBinding, &rep)) {
-        if (strcmp(rep.why, "no block with M_offset and I_point_num") != 0) {
-            const uint32_t n = ++g_facing_fog_refused;
-            if (n <= 3)
-                X4VR_LOG("facing fog: a module naming M_offset (%zu bytes) REFUSED: %s — "
-                         "its fog blobs still turn with the head",
-                         (size_t)ci->codeSize, rep.why);
-        }
-        code.clear();
-        return code;
-    }
-    const uint32_t n = ++g_facing_fog_modules;
-    g_facing_fog_products += rep.products;
-    if (n <= 3)
-        X4VR_LOG("facing fog: X4's froxel fog pass (%zu bytes) patched — %u product(s) of a "
-                 "blob's frame turned to the ship%s",
-                 (size_t)ci->codeSize, rep.products,
-                 facing_ab() ? " (A/B by recentre)" : "");
-    return code;
-}
 
 // The z group count for a dispatch: 2 for an eye-sized dispatch of a patched
 // FSR pipeline (its 16x16 tiles cover the eye), as asked otherwise. Smaller
@@ -9644,15 +8975,13 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
     count_module_stage(ci);
     bool frag_patched = false;
     tl_march_blend = false;
-    // X4's FSR pass, created with per-eye table access (take 380); X4's froxel fog
-    // pass, with its fog blobs turned to the ship (after take 466).
+    // X4's FSR pass, created with per-eye table access (take 380); X4's fog walk, with our
+    // march in its place (X4VR_NEBULA=volumetric).
     std::vector<uint32_t> fsr_code = fsr_patch_module(ci);
     const bool is_fsr = !fsr_code.empty();
     if (fsr_code.empty())
         fsr_code = fog_volume_module(ci);
     const bool is_fog_vol = tl_fog_vol && !fsr_code.empty();
-    if (fsr_code.empty())
-        fsr_code = fogpoint_patch_module(ci);
     VkShaderModuleCreateInfo fsr_ci{};
     if (!fsr_code.empty()) {
         fsr_ci = *ci;
@@ -9723,7 +9052,8 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
         record_module(ci, *out);
         complog_module(ci, *out);
         ffx_note_module(ci, *out);
-        // The census: a vertex module of X4's near/far-faded effects.
+        // The cards: a vertex module of X4's near/far-faded effects (its nebula cards among
+        // them), for their removal by material.
         static const char kFade[] = "U_camera_fade_range_near_start";
         if (fade_tracking() && ci->codeSize >= 20 &&
             memmem(ci->pCode, ci->codeSize, kFade, sizeof kFade - 1)) {
@@ -9749,7 +9079,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateShaderModule(
                              "distances at bytes %u and %u%s%s (%u found, %u not)",
                              have ? "is at" : "was NOT found:", fb.set, fb.binding, fb.off[0],
                              fb.off[3], have ? "" : " — ", have ? "" : fb.why, nf, nm);
-                std::lock_guard<std::mutex> lock(g_census_mu);
+                std::lock_guard<std::mutex> lock(g_cards_mu);
                 if (have)
                     g_fade_block_mod[*out] = fb;
                 g_fade_modules.insert(*out);
@@ -10313,51 +9643,10 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
         // every temporal pass along the head's motion.
         x4vr::pose_roll_frame(g_pose.value);
         x4vr::pose_set_euler(g_pose.value, cy, cp, 0.0f);
-        // X4's camera angles, which head-look set, undone for its billboards. Only
-        // with a valid read of them; and in an A/B's A phases, X4's own.
-        bool face = cmd_valid && facing_enabled();
-        (cmd_valid ? g_facing_driven : g_facing_idle)++;
-        g_census_yaw.store(cmd_yaw, std::memory_order_relaxed);
-        g_census_pitch.store(cmd_pitch, std::memory_order_relaxed);
-        g_census_look_valid.store(cmd_valid, std::memory_order_relaxed);
-        // The arm: 0 A, X4's own; 1 B, the fix (cards turned to the ship); 2 K, the
-        // collapse diagnostic (every fog blob and billboard the patches find removed);
-        // 3 S and 4 E, the comparison's cards turned to the ship and to the eye.
-        // Without the A/B, B; with the collapse alone, K.
-        int arm = facing_collapse() ? 2 : 1;
-        if (facing_enabled() && facing_ab()) {
-            // Blind: which phase is which arm is drawn at random, once a run, and
-            // only the log knows. With a diagnostic, three arms in turn.
-            static const uint64_t draw = ((uint64_t)std::chrono::steady_clock::now()
-                                              .time_since_epoch().count() >> 10) % 6;
-            const uint64_t phase = forward_latches();
-            const bool three = facing_collapse() || facing_compare();
-            const int a = (int)((phase + draw) % (three ? 3u : 2u));
-            static const int kCollapse[3] = {0, 1, 2}, kCompare[3] = {0, 3, 4};
-            // Without the GPU patches the comparison is the CPU's: S, every card to the
-            // ship; H, billboards to the eye and tilted cards to the ship (after take 471).
-            arm = facing_collapse() ? kCollapse[a] : facing_compare() ? kCompare[a] : a;
-            static uint64_t said = ~0ull;
-            if (said != phase) {
-                said = phase;
-                static const char *const kArm[5] = {
-                    "A, the billboards turn with the head, as X4 draws them",
-                    "B, the billboards face the ship",
-                    "K, X4's fog blobs and billboards removed — DIAGNOSTIC",
-                    "S, the billboards face the ship",
-                    facing_gpu() ? "E, the billboards face the eye"
-                                 : "H, billboards face the eye, tilted cards the ship"};
-                X4VR_LOG("facing: phase #%llu — %s (X4VR_FACING_AB=recentre)",
-                         (unsigned long long)phase, kArm[arm]);
-            }
-        }
-        face = face && (arm == 1 || arm == 3 || arm == 4);
-        g_fix_active.store(face, std::memory_order_relaxed);
-        g_fix_mode.store(arm == 3 ? 2 : arm == 4 ? 3 : 1, std::memory_order_relaxed);
-        g_fix_kill.store(facing_enabled() && !facing_gpu() && arm == 2 && cmd_valid,
-                         std::memory_order_relaxed);
-        if (facing_enabled() && facing_ab())
-            g_fix_phase.store(forward_latches(), std::memory_order_relaxed);
+        // X4's camera angles, which head-look set: the cards' learning reads them.
+        g_cards_yaw.store(cmd_yaw, std::memory_order_relaxed);
+        g_cards_pitch.store(cmd_pitch, std::memory_order_relaxed);
+        g_cards_look_valid.store(cmd_valid, std::memory_order_relaxed);
         // The march's phases (X4VR_FOG_AB=recentre, after take 480): in turn from one drawn at
         // random, once a run.
         if (fog_ab()) {
@@ -10396,10 +9685,9 @@ void pose_drive_residual(float head_yaw, float head_pitch, float cmd_yaw,
             g_pose.value.fog2[2] =
                 std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count();
         }
-        x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, face, arm == 4);
-        // K only in flight (X4's camera angles valid): a start menu stays a menu.
-        if (facing_enabled() && arm == 2 && cmd_valid)
-            std::memset(g_pose.value.look, 0, sizeof g_pose.value.look);
+        // The look slot: identity (it turned X4's billboards in the experiments of takes
+        // 465-472, gone before 1.0); nothing reads it now.
+        x4vr::pose_set_look(g_pose.value, cmd_yaw, cmd_pitch, false, false);
         g_pose.res_yaw = cy;
         g_pose.res_pitch = cp;
         // **Task #77, and it is NOT the same rotation as the line above.**
@@ -11203,7 +10491,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
     }
     if (runtime_call("vkCreateGraphicsPipelines"))
         return d->CreateGraphicsPipelines(device, cache, count, ci, ac, out);
-    const VkGraphicsPipelineCreateInfo *const ci_app = ci; // X4's own, for the census
+    const VkGraphicsPipelineCreateInfo *const ci_app = ci; // X4's own, for the cards' tracking
 
     // Task #59: every pipeline gets the layout that declares our set, or none
     // of its modules may be patched. `subs` keeps the rewritten create-infos
@@ -11519,7 +10807,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateGraphicsPipelines(
         if (r != VK_SUCCESS)
             return;
         if (fade_tracking()) {
-            std::lock_guard<std::mutex> cl(g_census_mu);
+            std::lock_guard<std::mutex> cl(g_cards_mu);
             for (uint32_t i = 0; i < count; i++)
                 for (uint32_t k = 0; out[i] != VK_NULL_HANDLE && k < ci_app[i].stageCount; k++)
                     if (ci_app[i].pStages[k].stage == VK_SHADER_STAGE_VERTEX_BIT &&
@@ -12840,7 +12128,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_QueueSubmit(VkQueue queue,
         probe_collect(d, queue, false);
     after_rp_headless_frame();
     if (fade_tracking())
-        census_at_submit(submitCount, submits);
+        cards_at_submit(submitCount, submits);
     patch_view_before_submit();
     // Task #59: publish this frame's pose into the region each submitted
     // command buffer was given. Submit time is the latest moment that is still
@@ -15819,14 +15107,14 @@ VKAPI_ATTR void VKAPI_CALL x4vr_CmdBindPipeline(VkCommandBuffer cb,
         g_fog_prep_cb[cb] = pp == g_fog_prep_pipes.end() ? 0 : pp->second;
     }
     if (bp == VK_PIPELINE_BIND_POINT_GRAPHICS && fade_tracking()) {
-        std::lock_guard<std::mutex> lock(g_census_mu);
+        std::lock_guard<std::mutex> lock(g_cards_mu);
         const bool f = g_fade_pipes.count(p) != 0;
-        g_census_fade[cb] = f;
+        g_cards_fade[cb] = f;
         tl_fade_cb = cb;
         tl_fade = f;
         auto b = g_fade_block_pipe.find(p);
         tl_fade_block = b != g_fade_block_pipe.end() ? b->second : x4vr::spv::FadeBlock{};
-        g_census_fblock[cb] = tl_fade_block;
+        g_cards_fblock[cb] = tl_fade_block;
     }
     // Task #82, before anything else so an early return cannot skip it.
     if (bp == VK_PIPELINE_BIND_POINT_GRAPHICS) {

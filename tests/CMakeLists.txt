@@ -154,12 +154,9 @@ configure_file(sample_twin.frag.spv sample_twin.frag.spv COPYONLY)
 configure_file(sample_twin_base.frag.spv sample_twin_base.frag.spv COPYONLY)
 configure_file(sample_alias_binding.frag.spv sample_alias_binding.frag.spv COPYONLY)
 configure_file(sample_camera_block.vert.spv sample_camera_block.vert.spv COPYONLY)
-configure_file(sample_billboard.vert.spv sample_billboard.vert.spv COPYONLY)
-configure_file(sample_billboard_fade.vert.spv sample_billboard_fade.vert.spv COPYONLY)
 configure_file(sample_fade_block.vert.spv sample_fade_block.vert.spv COPYONLY)
 configure_file(sample_fog_apply.frag.spv sample_fog_apply.frag.spv COPYONLY)
 configure_file(sample_tonemap_lut.frag.spv sample_tonemap_lut.frag.spv COPYONLY)
-configure_file(sample_fog_points.vert.spv sample_fog_points.vert.spv COPYONLY)
 configure_file(sample_volume_base.comp.spv sample_volume_base.comp.spv COPYONLY)
 configure_file(sample_volume_walk.comp.spv sample_volume_walk.comp.spv COPYONLY)
 configure_file(sample_volume_point.comp.spv sample_volume_point.comp.spv COPYONLY)
@@ -232,9 +229,6 @@ add_executable(x4vr_test_lua_scan lua_scan.cpp)
 add_executable(x4vr_test_guard_budget guard_budget.cpp)
 add_executable(x4vr_test_declared_field declared_field.cpp)
 
-# X4's billboards turned to the eye on the CPU (after take 469): x4vr_billboard.hpp's
-# rewrite against what X4 draws looking straight at the card. Self-checking.
-add_executable(x4vr_test_billboard_rewrite billboard_rewrite.cpp)
 
 # The IsHUDActive teardown guard's decoder (X4's exit crash was ours). Checks
 # the refusals and, when X4 is installed, the real prologue. Self-checking.
