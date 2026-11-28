@@ -537,6 +537,16 @@ vck0='[  999989.000] inject  headlook: view is now the cockpit — steering'
 hup0='[  999989.100] inject  headlook: HUD is now up (IsInPanelMode=0) — steering'
 plant /tmp/census-hud-midrun.log "$vck0" "$hup0" "$drv" "$idn"
 want "identity with no announcement -> FAIL says mid-run" /tmp/census-hud-midrun.log FAIL "mid-run: the gate dropped out"
+# Take 496: a save loaded mid-run -- head-look's write refused while X4's look-around
+# parameters load, then armed again: identity in between is the load, not a dropout.
+lrf='[  999990.000] inject  headlook write: REFUSED — X4'"'"'s look-around parameters are not loaded yet (load-time defaults)'
+larm='[  999996.000] inject  headlook write: ARMED on camera 0x1 (mode 0) — X4 reads maxpitch 1.3090'
+plant /tmp/census-load.log "$vck0" "$hup0" "$drv" "$lrf" "$idn" "$larm"
+if python3 tools/score_run.py /tmp/census-load.log 2>&1 | grep -q "^FAIL  the pose fell back"; then
+    bad "identity while a save loads -> still FAILs"
+else
+    ok "identity while a save loads -> excused"
+fi
 # Take 335: off the pilot seat the write stands down by design; identity
 # there is correct. And a NULL HUD at LOAD (before any driven pose) is not
 # teardown -- that run's FAIL said "at TEARDOWN" for frames 2 minutes later.

@@ -1902,6 +1902,20 @@ def main(path):
                 seat_open = None
         if seat_open is not None:
             idle_win.append((seat_open, float("inf")))
+        # Take 496: a save loaded mid-run. X4 seats the player while its look-around
+        # parameters are still being loaded, and head-look's write says so ("not loaded yet")
+        # until it arms on the new camera: identity there is the load, not the gate dropping
+        # out in flight.
+        load_open = None
+        for ln in lines:
+            m = re.search(r"\[\s*(\d+\.\d+)\]", ln)
+            if not m:
+                continue
+            if "headlook write: REFUSED — X4's look-around parameters are not loaded yet" in ln:
+                load_open = float(m.group(1)) if load_open is None else load_open
+            elif "headlook write: ARMED" in ln and load_open is not None:
+                idle_win.append((load_open, float(m.group(1))))
+                load_open = None
 
         def _in_idle(ln):
             m = re.search(r"\[\s*(\d+\.\d+)\]", ln)
