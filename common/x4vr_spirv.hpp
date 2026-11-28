@@ -76,7 +76,7 @@ enum : uint32_t {
     OpAccessChain = 65,
     OpDecorate = 71,
     OpMemberDecorate = 72,
-    OpVectorShuffle = 79, // patch_vertex_facing_body
+    OpVectorShuffle = 79,
     OpCompositeConstruct = 80,
     // For patch_fragment_force_block_uint. Four words like OpLoad -- op, result
     // type, result id, operand -- so substituting one for the other keeps the

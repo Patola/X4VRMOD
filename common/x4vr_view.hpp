@@ -448,8 +448,10 @@ struct PoseBlock {
     // (x right, y up, z forward): its rows are the camera's right, up and forward
     // in the ship's axes, as x4vr_camwrite.hpp writes them into X4. A card whose
     // turn equals the camera's is turned by it to face the ship's forward, as X4
-    // would draw it with the head straight (patch_vertex_facing_body). Identity
-    // leaves every card as X4 turned it.
+    // would draw it with the head straight. Identity leaves every card as X4 turned it.
+    // **Unused since 1.0:** the vertex patch that read it (takes 465-472) didn't fix what
+    // was seen and left with the billboard experiments; the slot stays, at identity, so
+    // the block's layout (fog at 288, read by the march) doesn't move.
     float look[16];
     // **The march's knobs** (layer/fog_march.comp, after take 480): x scales its density
     // (0: no smoke), y its glow, z its size (after take 481) -- in the march its extinction
@@ -467,7 +469,7 @@ static_assert(sizeof(PoseBlock) == 320, "std140: three mat4 at 0, 64, 128, vec4s
                                         "208, a mat4 at 224, vec4s at 288 and 304");
 // Where head_fwd sits, for the SPIR-V patch's second member.
 constexpr uint32_t kPoseHeadFwdOffset = 208;
-// Where look sits, for patch_vertex_facing_body.
+// Where look sits (read by nothing since the billboard experiments left, before 1.0).
 constexpr uint32_t kPoseLookOffset = 224;
 // Where fog sits, for layer/fog_march.comp (which writes the number itself).
 constexpr uint32_t kPoseFogOffset = 288;

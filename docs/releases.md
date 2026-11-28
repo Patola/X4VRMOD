@@ -20,6 +20,15 @@ v0.9.0–v0.9.5 stayed local; they were first published together with v0.9.6
 (2026-10-30). The three old `v0.<n>-name` tags were already public and stay
 on the remote beside their `take-NNN-name` twins.
 
+## Unreleased
+
+* **The mod's clouds cost less.** With them, X4 no longer prepares its own volumetric fog,
+  which they replace: about 0.16 ms of the graphics card's time a frame saved on an RX 7900 XTX,
+  with no difference to see. In play the mod's clouds take about 0.4 ms of it a frame (around
+  1 ms inside dense clouds), against about 0.2 ms for the work of X4's own volumetric fog they
+  replace. (rc11 said frames in nebulae came no slower than with X4's own clouds: true in some
+  tests and not in others, so these are the measured costs instead.)
+
 ## v1.0.0-rc11 — 2026-11-27 — Eleventh release candidate: nebulae fixed in space
 
 The eleventh release candidate for 1.0. Packages call it `1.0.0~rc11` (Arch: `1.0.0rc11`), which

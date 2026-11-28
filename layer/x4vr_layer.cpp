@@ -9375,7 +9375,7 @@ bool pose_init(DeviceData *d, VkDevice dev) {
         return false;
     }
 
-    // The march's objects (X4VR_FOG_PROBE=march): made with the channel and carried by
+    // The march's objects (X4VR_NEBULA=volumetric): made with the channel and carried by
     // its sets at bindings 1-3, or the sets carry the block alone.
     bool march = false;
     if (fog_march_on()) {
@@ -20612,7 +20612,7 @@ VKAPI_ATTR VkResult VKAPI_CALL x4vr_CreateDevice(
         if (auto gpmp = (PFN_vkGetPhysicalDeviceMemoryProperties)gipa(
                 inst, "vkGetPhysicalDeviceMemoryProperties"))
             gpmp(phys, &d.memprops);
-        // The march's objects (X4VR_FOG_PROBE=march): its entry points, and which queue
+        // The march's objects (X4VR_NEBULA=volumetric): its entry points, and which queue
         // families can take its one-time setup.
         if (g_active && fog_march_on()) {
             x4vr::MarchFns mf;
